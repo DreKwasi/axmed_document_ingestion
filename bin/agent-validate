@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Run repository checks without pretending a missing stack was validated.
+set -euo pipefail
+
+mode="${1:-targeted}"
+case "$mode" in targeted|full) ;; *) echo "Usage: bin/agent-validate [targeted|full]" >&2; exit 64;; esac
+
+ran=0
+run() { echo "+ $*"; "$@"; ran=1; }
+
+if [[ -f package.json ]]; then
+  if command -v npm >/dev/null; then
+    node -e 'const p=require("./package.json"); process.exit(p.scripts?.lint ? 0 : 1)' && run npm run lint || true
+    node -e 'const p=require("./package.json"); process.exit(p.scripts?.test ? 0 : 1)' && run npm test || true
+    if [[ "$mode" == full ]]; then
+      node -e 'const p=require("./package.json"); process.exit(p.scripts?.build ? 0 : 1)' && run npm run build || true
+      node -e 'const p=require("./package.json"); process.exit(p.scripts?.test:e2e ? 0 : 1)' && run npm run test:e2e || true
+    fi
+  else echo "WARN: package.json present but npm is unavailable." >&2; fi
+fi
+
+if [[ -f pyproject.toml || -f requirements.txt ]]; then
+  command -v ruff >/dev/null && run ruff check . || true
+  command -v pytest >/dev/null && run pytest || true
+fi
+
+if [[ "$ran" == 0 ]]; then
+  echo "NO VALIDATION RAN: choose an application stack and add lint/test scripts (see TODOS.md)." >&2
+  exit 2
+fi

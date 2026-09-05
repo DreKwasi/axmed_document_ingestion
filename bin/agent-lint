@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Apply deterministic fixes first; optionally delegate unresolved mechanical cleanup.
+set -euo pipefail
+
+fix=false
+[[ "${1:-}" == "--fix" ]] && fix=true
+ran=0
+status=0
+run_lint() { "$@" || status=1; ran=1; }
+
+if [[ -f package.json ]] && command -v npm >/dev/null && node -e 'const p=require("./package.json"); process.exit(p.scripts?.lint ? 0 : 1)'; then
+  if $fix; then run_lint npm run lint -- --fix; else run_lint npm run lint; fi
+fi
+if [[ -f pyproject.toml || -f requirements.txt ]] && command -v ruff >/dev/null; then
+  if $fix; then run_lint ruff check . --fix; else run_lint ruff check .; fi
+fi
+
+if [[ "$ran" == 0 ]]; then
+  echo "NO LINTER CONFIGURED: add a stack formatter/linter; no files were changed." >&2
+  exit 2
+fi
+
+# A team may configure a non-interactive, low-cost repair command explicitly.
+# It receives no secrets from this script and must leave a clean working tree checkable.
+if [[ "$status" != 0 ]] && $fix && [[ -n "${AGENT_FIX_COMMAND:-}" ]]; then
+  echo "Deterministic lint remains failing; invoking configured repair command." >&2
+  bash -lc "$AGENT_FIX_COMMAND"
+  exec bin/agent-lint
+fi
+exit "$status"

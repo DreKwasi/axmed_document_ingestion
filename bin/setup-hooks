@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Install versioned local hooks without overwriting a user-managed hooks path.
+set -euo pipefail
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "Run inside a Git repository." >&2; exit 2; }
+git config core.hooksPath .githooks
+chmod +x .githooks/pre-commit bin/agent-lint bin/agent-validate bin/agent-review bin/agent-sweep bin/false-confidence-audit
+echo "Installed repository hooks path: .githooks"

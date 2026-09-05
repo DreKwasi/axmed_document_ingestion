@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Higher-level hygiene scan across recent work; reports gaps for agent follow-up.
+set -euo pipefail
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "SKIP: Git repository not initialized; sweep has no commit history."; exit 0
+fi
+if ! git rev-parse --verify HEAD >/dev/null 2>&1; then
+  echo "SKIP: repository has no commits yet; run the first sweep after bootstrap is committed."; exit 0
+fi
+
+range="${1:-HEAD~10..HEAD}"
+git rev-parse "$range" >/dev/null 2>&1 || range="HEAD"
+echo "Sweeping $range"
+git log --oneline "$range"
+for required in AGENTS.md AGENT_WORKFLOW.md TODOS.md docs/agent-feedback.md docs/system/testing.md; do
+  [[ -f "$required" ]] || { echo "MISSING: $required" >&2; exit 1; }
+done
+if git diff --name-only "$range" | rg -q '(^|/)(src|app|lib|pages|components)/' && ! git diff --name-only "$range" | rg -q '(test|spec|docs/system/test-catalog)'; then
+  echo "WARN: application code changed without an obvious test or test-catalog change." >&2
+fi
+echo "Sweep complete. Review warnings, then record conclusions in the active worksheet."

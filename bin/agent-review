@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Dispatch a review request to a configured independent provider, or print a durable local checklist.
+set -euo pipefail
+stage="${1:-}"
+case "$stage" in research|plan|implementation|wrap-up) ;; *) echo "Usage: bin/agent-review {research|plan|implementation|wrap-up}" >&2; exit 64;; esac
+
+if [[ -n "${AGENT_REVIEW_COMMAND:-}" ]]; then
+  echo "Dispatching configured independent review for stage: $stage"
+  AGENT_REVIEW_STAGE="$stage" bash -lc "$AGENT_REVIEW_COMMAND"
+  exit 0
+fi
+
+echo "No independent review provider configured. Complete isolated persona passes and record results in the worksheet:"
+case "$stage" in
+  research) echo "systems maintainer: constraints/docs; security-domain: trust boundaries; quality: evidence gaps";;
+  plan) echo "systems: scope/dependencies; quality: acceptance/tests; performance/security: risk and rollback";;
+  implementation) echo "quality: behavior/test strength; code quality: complexity/AI smells; security/performance/UX: relevant diffs";;
+  wrap-up) echo "all personas: evidence versus claims, docs, unresolved risk, handoff completeness";;
+esac
+echo "Set AGENT_REVIEW_COMMAND to an approved external CLI wrapper for cross-provider reviews."

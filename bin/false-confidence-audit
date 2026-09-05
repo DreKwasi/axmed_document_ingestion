@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Creates a focused audit checklist; mutation tooling is added with the chosen stack.
+set -euo pipefail
+target="${1:-all relevant tests}"
+echo "False-confidence audit target: $target"
+echo "1. Identify the production behavior each test claims to protect."
+echo "2. Safely mutate/remove that behavior and confirm each test fails."
+echo "3. Check mocks, assertions, and fixtures against docs/system/false-confidence-audits.md."
+echo "4. Repair weak tests, run them, and update docs/system/test-catalog.md."
+echo "Record the exact mutation and result in the active worksheet."

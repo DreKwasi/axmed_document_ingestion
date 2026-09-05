@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Correct simple violations before a commit, then enforce a clean lint result.
+# Exit code 2 means no stack linter exists yet; allow bootstrap/configuration commits.
+lint_status=0
+bin/agent-lint --fix || lint_status=$?
+if [[ "$lint_status" != 0 && "$lint_status" != 2 ]]; then exit "$lint_status"; fi
+if [[ "$lint_status" == 2 ]]; then
+  echo "WARN: no linter configured; bootstrap commit allowed." >&2
+  exit 0
+fi
+bin/agent-lint
