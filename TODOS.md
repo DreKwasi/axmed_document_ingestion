@@ -9,11 +9,10 @@
 
 ## Ready
 
-- [ ] **DI-01: Schema-learning JSON vertical slice** — build the FastAPI/Vue/SQLite walking skeleton, canonical contract, corpus manifest, safe upload, recorded semantic mapping, human confirmation, and trusted warm-schema reuse. Acceptance: all Slice 1 checks in `docs/plans/implementation-plan.md`. Docs: architecture, testing, test catalog, security/privacy policy.
+- [ ] **DI-02: Commercial rules and review decisions** — add deterministic calculations, validation, provenance, correction revisions, approval, and rejection. Acceptance: Slice 2.
 
 ## Blocked
 
-- [ ] **DI-02: Commercial rules and review decisions** — add deterministic calculations, validation, provenance, correction revisions, approval, and rejection. Blocked by: DI-01. Acceptance: Slice 2.
 - [ ] **DI-03: Durable processing and SSE** — add Huey, safe persisted events, reconnectable SSE, bounded retries, and diagnostics. Blocked by: DI-02. Acceptance: Slice 3.
 - [ ] **DI-04: Email correction extraction** — parse the Novara EML, redact before semantic extraction, and preserve price supersession evidence. Blocked by: DI-02, DI-03. Acceptance: Slice 4.
 - [ ] **DI-05: Native PDF extraction** — timebox LiteParse behind the parser port, then parse Farmaceutica and Mekong. Blocked by: DI-02, DI-03. Acceptance: Slice 5.
@@ -25,3 +24,7 @@
 ## Operational follow-ups
 
 - [ ] **Configure independent review providers** — set `AGENT_REVIEW_COMMAND` and, if desired, `AGENT_FIX_COMMAND` in the developer environment. Docs: agent review, tooling.
+
+## Completed
+
+- [x] **DI-01: Schema-learning JSON vertical slice** — FastAPI/Vue/SQLite intake, canonical contract, safe JSON validation, versioned recorded mapping, human confirmation, version-scoped trusted reuse, conflict state, migrations, and persisted eval baseline. Evidence: `docs/worksheets/di-01-schema-learning-json.md`, commit `d5c1796`, tag `worksheet/di-01-schema-learning-json`.

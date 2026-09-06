@@ -64,4 +64,5 @@
 
 ## Final commit and tag
 
-Pending independent review and final validation.
+`d5c1796` — `feat: add schema-learning document intake slice`  
+`worksheet/di-01-schema-learning-json`
