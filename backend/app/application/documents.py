@@ -35,6 +35,7 @@ from app.infrastructure.models import (
     ModelInvocationRecord,
     OcrJobRecord,
     PdfExtractionRecord,
+    QuotationFieldValueRecord,
     QuotationLineItemAdjustmentRecord,
     QuotationLineItemInnRecord,
     QuotationLineItemMarketRecord,
@@ -342,18 +343,21 @@ def _upsert_quotation(session: Session, document: DocumentRecord, quotation: Can
         stored.revision += 1
         _sync_field_evidence(session, document.id, stored, CanonicalQuotation.model_validate_json(payload_json))
         _sync_normalized_line_items(session, stored.id, CanonicalQuotation.model_validate_json(payload_json))
+        _sync_field_values(session, document.id, stored, CanonicalQuotation.model_validate_json(payload_json))
         return stored
     stored = QuotationRecord(document_id=document.id, payload_json=payload_json)
     session.add(stored)
     session.flush()
     _sync_field_evidence(session, document.id, stored, CanonicalQuotation.model_validate_json(payload_json))
     _sync_normalized_line_items(session, stored.id, CanonicalQuotation.model_validate_json(payload_json))
+    _sync_field_values(session, document.id, stored, CanonicalQuotation.model_validate_json(payload_json))
     return stored
 
 
 def _sync_normalized_line_items(session: Session, quotation_id: str, canonical: CanonicalQuotation) -> None:
     """Replace the relational line-item projection while retaining the quotation snapshot."""
 
+    session.execute(delete(QuotationFieldValueRecord).where(QuotationFieldValueRecord.quotation_id == quotation_id))
     line_item_ids = session.scalars(
         select(QuotationLineItemRecord.id).where(QuotationLineItemRecord.quotation_id == quotation_id)
     ).all()
@@ -636,6 +640,107 @@ def _sync_field_evidence(
         )
 
 
+def _flatten_extracted_values(value: Any, path: str) -> list[tuple[str, Any]]:
+    if isinstance(value, dict):
+        flattened: list[tuple[str, Any]] = []
+        for key, child in value.items():
+            flattened.extend(_flatten_extracted_values(child, f"{path}.{key}" if path else key))
+        return flattened
+    if isinstance(value, list):
+        if not value:
+            return []
+        flattened = []
+        for index, child in enumerate(value):
+            flattened.extend(_flatten_extracted_values(child, f"{path}[{index}]"))
+        return flattened
+    return [(path, value)] if value is not None else []
+
+
+def _sync_field_values(
+    session: Session,
+    document_id: str,
+    quotation: QuotationRecord,
+    canonical: CanonicalQuotation,
+    *,
+    corrected_fields: set[str] | None = None,
+) -> None:
+    """Persist every non-null extracted leaf with review state, confidence, and provenance."""
+
+    session.execute(delete(QuotationFieldValueRecord).where(QuotationFieldValueRecord.quotation_id == quotation.id))
+    line_items = session.scalars(
+        select(QuotationLineItemRecord)
+        .where(QuotationLineItemRecord.quotation_id == quotation.id)
+        .order_by(QuotationLineItemRecord.position)
+    ).all()
+    line_item_ids = {row.position: row.id for row in line_items}
+    payload = canonical.model_dump(mode="json", exclude_none=True)
+    evidence: list[tuple[str, Any]] = [(item.canonical_field, item) for item in canonical.evidence]
+    evidence.extend(
+        (f"line_items[{index}].{item.canonical_field}", item)
+        for index, line in enumerate(canonical.line_items)
+        for item in line.evidence
+    )
+    corrected_fields = corrected_fields or set()
+    for field_path, value in _flatten_extracted_values(payload, ""):
+        field_path = field_path.removeprefix(".")
+        if (
+            field_path == "evidence"
+            or ".evidence" in field_path
+            or field_path == "review_issues"
+            or field_path.startswith("review_issues[")
+        ):
+            continue
+        matching_evidence = next(
+            (
+                item
+                for evidence_path, item in sorted(evidence, key=lambda pair: len(pair[0]), reverse=True)
+                if item.extraction_method == "human_corrected"
+                and (
+                    field_path == evidence_path
+                    or field_path.startswith(f"{evidence_path}.")
+                    or field_path.startswith(f"{evidence_path}[")
+                )
+            ),
+            None,
+        )
+        if matching_evidence is None:
+            matching_evidence = next(
+                (
+                    item
+                    for evidence_path, item in sorted(evidence, key=lambda pair: len(pair[0]), reverse=True)
+                    if field_path == evidence_path
+                    or field_path.startswith(f"{evidence_path}.")
+                    or field_path.startswith(f"{evidence_path}[")
+                ),
+                None,
+            )
+        line_item_position = None
+        if field_path.startswith("line_items["):
+            line_item_position = int(field_path.split("[", 1)[1].split("]", 1)[0])
+        session.add(
+            QuotationFieldValueRecord(
+                document_id=document_id,
+                quotation_id=quotation.id,
+                line_item_id=line_item_ids.get(line_item_position) if line_item_position is not None else None,
+                canonical_field=field_path,
+                value_json=json.dumps(value, default=str, sort_keys=True),
+                review_status="corrected" if field_path in corrected_fields else "unreviewed",
+                confidence=Decimal(str(matching_evidence.confidence)) if matching_evidence else Decimal("0.00"),
+                extraction_method=matching_evidence.extraction_method if matching_evidence else "unattributed",
+                source_path=matching_evidence.source_path if matching_evidence else None,
+                source_location=matching_evidence.source_location if matching_evidence else None,
+            )
+        )
+
+
+def _set_field_review_status(session: Session, quotation_id: str, status: str) -> None:
+    session.execute(
+        update(QuotationFieldValueRecord)
+        .where(QuotationFieldValueRecord.quotation_id == quotation_id)
+        .values(review_status=status)
+    )
+
+
 def apply_review_action(session: Session, document_id: str, action: str, command: dict[str, Any]) -> DocumentRecord:
     document = session.get(DocumentRecord, document_id)
     quotation = session.scalar(select(QuotationRecord).where(QuotationRecord.document_id == document_id))
@@ -656,6 +761,7 @@ def apply_review_action(session: Session, document_id: str, action: str, command
     prior_revision = quotation.revision
     patches = command.get("patches", [])
     audit_patches: list[dict[str, Any]] = []
+    corrected_field_paths: set[str] = set()
     if action == "corrected":
         for patch in patches:
             segments = patch["path"].split(".")
@@ -677,6 +783,7 @@ def apply_review_action(session: Session, document_id: str, action: str, command
             except ValueError as error:
                 raise ReviewValidationError(str(error)) from error
             current[segments[-1]] = value
+            corrected_field_paths.add(f"line_items[{line_index}].{field.canonical_field}")
             line_evidence = payload["line_items"][line_index]["evidence"]
             prior_evidence: dict[str, Any] = next(
                 (evidence for evidence in line_evidence if evidence["canonical_field"] == field.canonical_field),
@@ -723,6 +830,15 @@ def apply_review_action(session: Session, document_id: str, action: str, command
         session.flush()
         _sync_field_evidence(session, document_id, quotation, canonical)
         _sync_normalized_line_items(session, quotation.id, canonical)
+        _sync_field_values(
+            session,
+            document_id,
+            quotation,
+            canonical,
+            corrected_fields=corrected_field_paths,
+        )
+    else:
+        _set_field_review_status(session, quotation.id, next_review_status)
     review = ReviewRecord(
         document_id=document_id,
         request_id=request_id,
@@ -988,9 +1104,26 @@ def serialize_document(session: Session, document: DocumentRecord) -> dict[str, 
             for index, line_item in enumerate(normalized_items):
                 if index < len(snapshot_items):
                     line_item["evidence"] = snapshot_items[index].get("evidence", [])
-            quotation_payload["line_items"] = normalized_items
+        quotation_payload["line_items"] = normalized_items
         quotation_payload["revision"] = quotation.revision
         quotation_payload["review_status"] = quotation.review_status
+        field_values = session.scalars(
+            select(QuotationFieldValueRecord)
+            .where(QuotationFieldValueRecord.quotation_id == quotation.id)
+            .order_by(QuotationFieldValueRecord.canonical_field)
+        ).all()
+        quotation_payload["field_reviews"] = [
+            {
+                "field_path": field_value.canonical_field,
+                "value": json.loads(field_value.value_json),
+                "review_status": field_value.review_status,
+                "confidence": str(field_value.confidence),
+                "extraction_method": field_value.extraction_method,
+                "source_path": field_value.source_path,
+                "source_location": field_value.source_location,
+            }
+            for field_value in field_values
+        ]
     mapping = None
     if document.source_system and document.schema_fingerprint:
         mapping = _find_mapping(

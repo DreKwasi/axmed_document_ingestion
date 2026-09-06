@@ -316,6 +316,26 @@ class FieldEvidenceRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class QuotationFieldValueRecord(Base):
+    """One persisted extracted value with its human-review state and confidence."""
+
+    __tablename__ = "quotation_field_values"
+    __table_args__ = (UniqueConstraint("quotation_id", "canonical_field", name="uq_quotation_field_value"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    document_id: Mapped[str] = mapped_column(ForeignKey("documents.id"), index=True)
+    quotation_id: Mapped[str] = mapped_column(ForeignKey("quotations.id"), index=True)
+    line_item_id: Mapped[str | None] = mapped_column(ForeignKey("quotation_line_items.id"), nullable=True, index=True)
+    canonical_field: Mapped[str] = mapped_column(String(500))
+    value_json: Mapped[str] = mapped_column(Text)
+    review_status: Mapped[str] = mapped_column(String(40), default="unreviewed", index=True)
+    confidence: Mapped[Decimal] = mapped_column(Numeric(5, 4), nullable=False)
+    extraction_method: Mapped[str] = mapped_column(String(80))
+    source_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    source_location: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class SchemaMappingRecord(Base):
     __tablename__ = "schema_mappings"
     __table_args__ = (

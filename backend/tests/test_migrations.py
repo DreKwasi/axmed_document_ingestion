@@ -39,7 +39,7 @@ def test_startup_applies_checked_in_alembic_migration(tmp_path: Path):
         batches_schema = database.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'batches'"
         ).fetchone()
-    assert revision == ("20260906_13",)
+    assert revision == ("20260906_14",)
     assert mapping_schema is not None
     assert "UNIQUE (source_system, source_schema_version, schema_fingerprint)" in mapping_schema[0]
     assert batches_schema is not None
@@ -65,7 +65,7 @@ def test_startup_upgrades_a_pre_alembic_slice_one_database(tmp_path: Path):
         review_learning = database.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'review_learning'"
         ).fetchone()
-    assert revision == ("20260906_13",)
+    assert revision == ("20260906_14",)
     assert review_learning is not None
 
 
@@ -91,7 +91,7 @@ def test_startup_repairs_an_interrupted_review_learning_migration(tmp_path: Path
         review_learning = database.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'review_learning'"
         ).fetchone()
-    assert revision == ("20260906_13",)
+    assert revision == ("20260906_14",)
     assert review_learning is not None
 
 
@@ -136,5 +136,11 @@ def test_normalized_line_item_migration_backfills_existing_quotation(tmp_path: P
             "WHERE line_item_id = (SELECT id FROM quotation_line_items WHERE quotation_id = ?)",
             (quotation_id,),
         ).fetchone()
+        field_value = database.execute(
+            "SELECT canonical_field, value_json, review_status, confidence "
+            "FROM quotation_field_values WHERE quotation_id = ? AND canonical_field = ?",
+            (quotation_id, "line_items[0].quantity.quoted_quantity"),
+        ).fetchone()
     assert row == ("Example", 6000000, "tablet")
     assert inn == ("Example INN",)
+    assert field_value == ("line_items[0].quantity.quoted_quantity", '"6000000"', "unreviewed", 0)
