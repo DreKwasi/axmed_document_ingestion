@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Enforce max 4 files per commit (contextual commits policy).
+staged_count=$(git diff --cached --name-only --diff-filter=ACDMRT | wc -l | tr -d ' ')
+if [[ "$staged_count" -gt 4 ]]; then
+  echo "ERROR: Too many files staged ($staged_count > 4)." >&2
+  echo "Policy: commit no more than 4 files per commit; split into contextual commits." >&2
+  git diff --cached --name-only | sed 's/^/  - /' >&2
+  exit 1
+fi
+
 # Correct simple violations before a commit, then enforce a clean lint result.
 # Exit code 2 means no stack linter exists yet; allow bootstrap/configuration commits.
 lint_status=0
