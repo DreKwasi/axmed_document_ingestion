@@ -39,6 +39,15 @@ export type Quotation = {
   supplier: { name?: string | null; country?: string | null };
   commercial_terms: { currency?: string | null; incoterm?: string | null; incoterm_named_place?: string | null };
   line_items: LineItem[];
+  field_reviews?: Array<{
+    field_path: string;
+    value: unknown;
+    review_status: string;
+    confidence: string;
+    extraction_method: string;
+    source_path?: string | null;
+    source_location?: string | null;
+  }>;
   revision: number;
   review_status: string;
   review_issues: Array<{ field_path: string; code: string; message: string; severity: string }>;

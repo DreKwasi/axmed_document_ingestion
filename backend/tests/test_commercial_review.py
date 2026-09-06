@@ -1,4 +1,8 @@
 import json
+from decimal import Decimal
+
+from app.domain.commercial_rules import apply_commercial_rules
+from app.domain.contracts import CanonicalQuotation, LineItem, Pricing, QuotedPrice
 
 
 def upload_json(client, filename: str, content: bytes):
@@ -22,6 +26,32 @@ def test_confirmed_offer_preserves_pack_price_and_adds_a_derived_unit_price(clie
         "calculation": "3.15 / 90",
         "derived": True,
     }
+
+
+def test_pack_price_preserves_a_specific_source_uom():
+    quotation = CanonicalQuotation(
+        line_items=[
+            LineItem(
+                pricing=Pricing(
+                    pack_price=Decimal("1.55"),
+                    quoted_price=QuotedPrice(amount=Decimal("1.55"), uom="box"),
+                )
+            )
+        ]
+    )
+
+    result = apply_commercial_rules(quotation)
+
+    assert result.line_items[0].pricing.quoted_price.uom == "box"
+
+
+def test_pack_price_does_not_invent_a_generic_uom_when_source_basis_is_unknown():
+    quotation = CanonicalQuotation(line_items=[LineItem(pricing=Pricing(pack_price=Decimal("1.55")))])
+
+    result = apply_commercial_rules(quotation)
+
+    assert result.line_items[0].pricing.quoted_price.amount == Decimal("1.55")
+    assert result.line_items[0].pricing.quoted_price.uom is None
 
 
 def test_correction_creates_a_new_unapproved_revision_and_preserves_audit(client, sanova_bytes):
@@ -53,6 +83,14 @@ def test_correction_creates_a_new_unapproved_revision_and_preserves_audit(client
     correction_evidence = corrected["quotation"]["line_items"][0]["evidence"][-1]
     assert correction_evidence["extraction_method"] == "human_corrected"
     assert correction_evidence["source_path"] == "review:review-correction-1"
+    corrected_field = next(
+        field
+        for field in corrected["quotation"]["field_reviews"]
+        if field["field_path"] == "line_items[0].pricing.pack_price"
+    )
+    assert corrected_field["value"] == "4.00"
+    assert corrected_field["review_status"] == "corrected"
+    assert float(corrected_field["confidence"]) == 1.0
     assert len(corrected["learning"]) == 1
     assert corrected["learning"][0]["status"] == "queued"
 
@@ -97,6 +135,8 @@ def test_review_commands_are_idempotent_and_reject_stale_revisions(client, sanov
 
     assert first.status_code == 200
     assert first.json()["quotation"]["review_status"] == "approved"
+    assert first.json()["quotation"]["field_reviews"]
+    assert {field["review_status"] for field in first.json()["quotation"]["field_reviews"]} == {"approved"}
     assert replay.status_code == 200
     assert replay.json()["quotation"]["revision"] == revision + 1
     assert stale.status_code == 409
