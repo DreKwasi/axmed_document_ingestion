@@ -35,7 +35,7 @@ Inventory the PRD/corpus, verify volatile stack assumptions against current prim
 
 ## Tests, app run, and validation
 
-Planning-only change. No app exists to run. Markdown and repository state will be inspected; plan review runs through the configured review workflow.
+Planning-only change. No app exists to run. `git diff --check` passed; `bin/agent-sweep` completed after the plan/corpus commits; and `bin/agent-validate full` correctly exited 2 because no application tooling exists yet. A separate-model plan review and Modal benchmark review were completed; the local wrap-up review fallback was also run.
 
 ## Review findings and resolutions
 
@@ -52,8 +52,10 @@ Planning-only change. No app exists to run. Markdown and repository state will b
 
 ## Handoff / remaining work
 
-Publish approved slices into `TODOS.md`, then start Slice 1. Request live Modal deployment authorization only after Slice 6's service/client are ready.
+Start ready task DI-01. The local repository contains all project artifacts, but has no GitHub `origin`; `gh auth status` shows no authenticated GitHub host. Authenticate and create/connect a private remote before pushing. Request live Modal deployment authorization only after Slice 6's service/client are ready.
 
 ## Final commit and tag
 
-Plan/corpus/benchmark revision and task publication pending commit.
+- `604ecc3` — PRD and synthetic corpus.
+- `1386844` — approved plan, queue, and Modal benchmark reference.
+- This handoff record is committed separately and tagged `worksheet/plan-document-intelligence-final`.
