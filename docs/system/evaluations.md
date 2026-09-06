@@ -10,14 +10,20 @@
 
 ## Implemented baseline
 
-`evals/golden_dataset.json` defines a versioned rubric and cases. `evaluation_cases`, `evaluation_runs`, and `evaluation_results` persist the definition, execution mode, scores, and error analysis in SQLite. The Vue **Evaluation lab** reads that data and triggers the deterministic recorded evaluation endpoint. This is Level 1 model evaluation: it asks whether the system performs its specified extraction and safety behavior, without claiming product engagement or downstream impact measurement.
+`backend/evals/golden_dataset.json` defines a versioned rubric and cases. `evaluation_cases`, `evaluation_runs`, and `evaluation_results` persist the definition, execution mode, scores, and error analysis in SQLite. The Vue **Evaluation lab** reads that data and triggers recorded evaluation without a provider, or the live PDF pipeline when Gemini is configured. Live summaries derive their case count from the selected dataset cases. This is Level 1 model evaluation: it asks whether the system performs its specified extraction and safety behavior, without claiming product engagement or downstream impact measurement.
 
 The Sanova case checks a full cold-to-warm contract: an unfamiliar schema receives a recorded semantic mapping; a reviewer-confirmed mapping is then reapplied to a same-shape payload with one changed value. It records cold/warm calls, tokens, estimated cost, duration, and business-value parity outside the intended changed value. The recorded fixture is a deterministic stand-in for normal CI, never proof of live-model quality.
+
+The Farmaceutica Andina and Mekong PDF cases reference source fixtures and source-verified expected canonical JSON under `backend/evals/`. With Gemini configured, an evaluation run executes the live native-PDF pipeline (parse, redact, structured extraction, deterministic commercial rules) and persists field-level diffs in SQLite. Without credentials, those cases are explicitly marked `not_run`; they never count as passing recorded tests.
 
 ## Growth plan
 
 Grow to a 30–50 case minimum viable evaluation set before delivery. Cover native JSON, changed schemas, email correction precedence, native PDF quality, OCR degradation/null correctness, price tiers, combination strengths, PII redaction, malformed structured output, and prompt-injection-like document content. For each case record source, expected output, comparison strategy, rubric threshold, reviewer, and known limitations.
 
-Run deterministic evaluations in CI. Run live provider evaluations separately, label them with provider/model/prompt/version/environment, persist only safe metrics and redacted artifacts, and route failures into error analysis and new golden cases. Add red-team cases whenever a real failure mode is observed. Treat evaluation as continuous: a change to model, prompt, document corpus, configuration, or resolver requires a recorded re-run rather than relying on a previous score.
+Run deterministic evaluations in CI. Run live provider evaluations separately. Each live PDF result stores provider, model, canonical prompt version, environment, duration, safe field-level failure analysis, and redacted artifacts only. Route failures into error analysis and new golden cases. Add red-team cases whenever a real failure mode is observed. Treat evaluation as continuous: a change to model, prompt, document corpus, configuration, or resolver requires a recorded re-run rather than relying on a previous score.
 
 The deployed OCR service has a separately reproducible warm-performance measurement. See `docs/worksheets/di-06-modal-ocr.md`; it is operational evidence, not a replacement for the SQLite-backed behavioral evaluation corpus.
+
+## Running evaluations
+
+Run `backend/bin/run-evals` from the repository root (or `./bin/run-evals` from `backend/`). It loads `backend/.env`, runs `tests/test_evaluations.py`, applies migrations, and persists the recorded SQLite run. It does not call a model. Pass `--live` only when a configured provider should run the live PDF cases. Pass `--ocr` to run the configured OCR service against approved OCR anchors; this invokes no extraction model.

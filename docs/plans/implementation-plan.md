@@ -36,7 +36,7 @@ The delivery scope includes every supplied format (JSON, email, native PDF, and 
 
 ### Repository and runtime
 
-- Monorepo with `backend/`, `frontend/`, `evals/`, `sample_documents/`, and `data/` (ignored runtime state).
+- Monorepo with `backend/` (including `backend/evals/`), `frontend/`, `sample_documents/`, and `data/` (ignored runtime state).
 - Python 3.12 managed by `uv`; FastAPI, Pydantic v2, SQLAlchemy 2, Alembic, Huey/`SqliteHuey`, pytest, Ruff, and mypy.
 - Vue 3, Vite, and TypeScript with Vitest, Vue Testing Library, and Playwright.
 - `app.db` for application state and `tasks.db` for Huey. Enable WAL and keep worker writes short.

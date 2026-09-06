@@ -642,6 +642,8 @@ Two apparently identical medicine prices aren't necessarily commercially compara
 }
 ```
 
+`dosage_form` is the core comparable form (for example, `tablet`, `syrup`, or `suspension`). Preserve qualifying details such as `film-coated`, `chewable`, and `pressurised inhalation` in `packaging.presentation`.
+
 ---
 
 # 19. Structured strength
@@ -692,6 +694,7 @@ Concentration:
 ```json
 {
   "description": null,
+  "presentation": null,
   "primary_pack": null,
   "units_per_pack": null,
   "unit_label": null,
@@ -1820,7 +1823,7 @@ axmed-document-intelligence/
 │
 ├── frontend/
 │
-├── evals/
+├── backend/evals/
 │   ├── fixtures/
 │   ├── ground_truth/
 │   └── reports/
