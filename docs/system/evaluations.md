@@ -10,7 +10,7 @@
 
 ## Implemented baseline
 
-`evals/golden_dataset.json` defines a versioned rubric and cases. `evaluation_cases`, `evaluation_runs`, and `evaluation_results` persist the definition, execution mode, scores, and error analysis in SQLite. The Vue **Evaluation lab** reads that data and triggers the deterministic recorded evaluation endpoint.
+`evals/golden_dataset.json` defines a versioned rubric and cases. `evaluation_cases`, `evaluation_runs`, and `evaluation_results` persist the definition, execution mode, scores, and error analysis in SQLite. The Vue **Evaluation lab** reads that data and triggers the deterministic recorded evaluation endpoint. This is Level 1 model evaluation: it asks whether the system performs its specified extraction and safety behavior, without claiming product engagement or downstream impact measurement.
 
 The Sanova case checks a full cold-to-warm contract: an unfamiliar schema receives a recorded semantic mapping; a reviewer-confirmed mapping is then reapplied to a same-shape payload with one changed value. It records cold/warm calls, tokens, estimated cost, duration, and business-value parity outside the intended changed value. The recorded fixture is a deterministic stand-in for normal CI, never proof of live-model quality.
 
@@ -18,4 +18,6 @@ The Sanova case checks a full cold-to-warm contract: an unfamiliar schema receiv
 
 Grow to a 30–50 case minimum viable evaluation set before delivery. Cover native JSON, changed schemas, email correction precedence, native PDF quality, OCR degradation/null correctness, price tiers, combination strengths, PII redaction, malformed structured output, and prompt-injection-like document content. For each case record source, expected output, comparison strategy, rubric threshold, reviewer, and known limitations.
 
-Run deterministic evaluations in CI. Run live provider evaluations separately, label them with provider/model/prompt/version/environment, persist only safe metrics and redacted artifacts, and route failures into error analysis and new golden cases. Add red-team cases whenever a real failure mode is observed.
+Run deterministic evaluations in CI. Run live provider evaluations separately, label them with provider/model/prompt/version/environment, persist only safe metrics and redacted artifacts, and route failures into error analysis and new golden cases. Add red-team cases whenever a real failure mode is observed. Treat evaluation as continuous: a change to model, prompt, document corpus, configuration, or resolver requires a recorded re-run rather than relying on a previous score.
+
+The deployed OCR service has a separately reproducible warm-performance measurement. See `docs/worksheets/di-06-modal-ocr.md`; it is operational evidence, not a replacement for the SQLite-backed behavioral evaluation corpus.

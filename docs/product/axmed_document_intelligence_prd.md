@@ -986,7 +986,7 @@ Human reviewers should be able to see this difference.
 
 # 31. JSON schema recognition
 
-JSON should use a progressive field-mapping system inspired by the same general principle Axmed describes for Haystack: simple and known cases should be handled cheaply and deterministically, while ambiguous cases should receive progressively stronger interpretation.
+JSON should use a progressive field-mapping system: simple and known cases should be handled cheaply and deterministically, while ambiguous cases should receive progressively stronger interpretation.
 
 Fuzzy similarity should not be treated as authoritative. It is only used to generate plausible candidates for unresolved fields.
 
@@ -1016,7 +1016,7 @@ Persist successful mappings
 
 The key principle is:
 
-~~~
+```text
 Known mapping
 → deterministic reuse
 
@@ -1031,7 +1031,7 @@ Ambiguous/new field
 
 Low-confidence result
 → human review
-~~~
+```
 
 This keeps the LLM focused on semantic ambiguity rather than repeatedly rediscovering mappings the system already understands.
 
@@ -1079,11 +1079,42 @@ Fuzzy matching should not automatically accept a canonical mapping on first enco
 
 Use a lightweight technique such as RapidFuzz only to narrow the candidate space for fields that have not already been resolved by exact matches, known schema mappings, or the small global alias set.
 
-For example, a source field like `min_order_packs` may nominate `quantity.minimum_order_quantity`, `packaging.units_per_pack`, and `quantity.quoted_quantity` as candidates. The fuzzy score is not proof.
+For example:
 
-The LLM receives the source field, sample value, nearby fields, supplier/schema context, and top candidate mappings, then chooses the most plausible canonical target. If the result remains uncertain, the field is flagged for human review.
+```text
+source field:
+min_order_packs
 
-The project should not rely on a hard rule such as “score above 92 means accept” unless evaluation shows it is safe for a narrowly defined field class.
+possible canonical candidates:
+1. quantity.minimum_order_quantity
+2. packaging.units_per_pack
+3. quantity.quoted_quantity
+```
+
+The fuzzy score is not treated as proof.
+
+Instead, the LLM receives:
+
+```text
+source field
+sample value
+nearby fields
+supplier/schema context
+top candidate mappings
+```
+
+and chooses the most plausible canonical target.
+
+If the result remains uncertain, the field is flagged for human review.
+
+The project should not rely on a hard rule such as:
+
+```text
+score > 92
+→ accept
+```
+
+unless later evaluation shows that a threshold is safe for a narrowly defined field class.
 
 ---
 
@@ -1877,35 +1908,31 @@ SQLite + Huey gives us the local architecture we want.
 
 **No medicine-catalogue RAG layer.**
 
-Axmed's Haystack uses a RAG-like approach because it has a canonical medicine catalogue to match customer data against. This take-home does not require us to build or replicate that catalogue.
+This take-home does not require building a medicine catalogue or matching extracted products against one.
 
-Without a trusted reference corpus, catalogue retrieval would solve a different problem and add complexity without improving quotation extraction. The retrieval-like memory here is the SQLite-backed supplier/schema mapping store.
+Without a trusted reference corpus, adding catalogue retrieval would solve a different problem and add complexity without improving the core quotation-extraction task.
 
----
+Instead, schema recognition follows a layered approach:
 
-# 61. Alignment with Axmed's Haystack philosophy
+```text
+known mapping
+→ deterministic reuse
 
-Axmed's layered approach combines rules, fuzzy string matching, and AI for harder cases. This take-home applies that philosophy to supplier-document schema recognition:
+similar unknown field
+→ fuzzy candidate generation
 
-~~~
-fast deterministic path
-→ known mappings and structural rules
+semantic ambiguity
+→ LLM resolution
 
-candidate-generation path
-→ fuzzy similarity for unresolved field names
+reviewer correction
+→ stored mapping memory
+```
 
-semantic path
-→ LLM resolution with context
-
-learning path
-→ persist validated mappings for reuse
-~~~
-
-The scope differs: Haystack matches buyer data to a medicine catalogue; this system converts supplier documents into a canonical quotation for human review. The shared idea is progressive intelligence: use the cheapest reliable technique first, then escalate only when input requires it.
+The retrieval-like memory in this project is the SQLite-backed supplier/schema mapping store, not a medicine catalogue.
 
 ---
 
-# 62. Core technical thesis
+# 61. Core technical thesis
 
 The interesting part of the submission isn't that an LLM can turn a quotation into JSON.
 

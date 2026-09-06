@@ -1,11 +1,11 @@
 # Test Catalog
 
 > Purpose: inventory meaningful automated tests and the behavior each protects.
-> Status: Slice 1 baseline — focused backend and Vue tests exist; expand with every behavioral slice.
+> Status: Slices 1-5, 8, 9 delivered — comprehensive backend, Vue, worker, E2E, and PII audit checks in place.
 > Update in the same change whenever tests are added, removed, renamed, or materially repurposed.
 > Owner persona: quality engineer.
 > Related: `docs/system/testing.md`, `docs/system/false-confidence-audits.md`.
-> Search terms: test catalog, coverage, journey, regression, owner.
+> Search terms: test catalog, coverage, journey, regression, owner, batch, pii.
 > Each entry describes what could break, not merely the test filename.
 
 | Test / suite | Layer | Protects | Known limitations | Worksheet |
@@ -19,3 +19,14 @@
 | `backend/tests/test_commercial_rules.py` | unit | date validity, percentage bounds, non-overlapping tiers, and compatible quoted-quantity/MOQ checks at the deterministic validation seam | only rules with a canonical source field are added; source aliases stay out of this suite | DI-02 |
 | `frontend/src/App.spec.ts` | component | compact extracted-offer table, table-contained review controls, mapping confirmation, per-line typed correction command, and retention of every selected upload | browser batch journey remains to be added; component test validates selection retention | DI-02 |
 | `frontend/e2e/review.spec.ts` | end-to-end | isolated API/web startup, mapping confirmation, price correction/derivation, and explicit approval | one JSON fixture; batch and non-JSON journeys arrive with their parser slices | DI-02 |
+| `backend/tests/test_processing_events.py` | API/unit | persisted safe event metadata, contact redaction, and invalid SSE reconnect cursors | browser replay has a component seam; richer document stages arrive with parser slices | DI-03 |
+| `backend/tests/test_learning_worker.py` | integration | resolver request redaction, durable invocation/preference result, trusted-mapping demotion, terminal failure state, and safe diagnostics | configured resolver is mocked; credentials/provider adapters remain an operator configuration choice | DI-03 |
+| `backend/tests/test_email_parser.py` | API/unit | MIME plain-text selection, contact redaction, non-rendered HTML, safe email intake state, durable extraction lifecycle, resolver context, commercially validated quotation, and migration-backed storage | malformed resolver and live consumer coverage remain | DI-04 |
+| `backend/tests/test_pdf_parser.py` | API/unit | PDF signature safety, clean native-text reading order, quotation references, page-level quality, OCR avoidance, safe PDF intake, redacted resolver context, durable extraction lifecycle, and reviewable output | provenance and corpus evaluation remain | DI-05 |
+| `backend/tests/test_ocr_contract.py` | unit | versioned OCR provider response, original page identity, confidence, coordinates, dimensions, DPI, malformed-response rejection, authenticated bounded HTTP request, and idempotency key | live service smoke remains | DI-06 |
+| `backend/tests/test_image_parser.py` | API/unit | supplied PNG/JPEG signature and dimensions, independent OCR-job creation, and safe awaiting-configuration lifecycle | live OCR evidence and semantic follow-on remain | DI-06 |
+| `backend/tests/test_batch_processing.py` | API/integration | multi-file batch creation, derived aggregate progress calculation, batch listing/retrieval, and failure isolation (corrupt file fails while valid siblings succeed) | live OCR in batches deferred to Slice 6 deployment | DI-08 |
+| `frontend/e2e/batch.spec.ts` | end-to-end | multi-file upload in browser, aggregate batch indicator, and independent document processing | JSON multi-file journey | DI-08 |
+| `backend/tests/test_pii_audit.py` | unit/integration | deterministic phone/email scrubbing, recursive model context redaction, and event/diagnostic leakage protection | Presidio integration when advanced NER is configured | DI-09 |
+| `backend/tests/test_langchain_gemini.py` | integration/unit | LangChain + Gemini 3.1 Flash Lite structured output across email, PDF, OCR, and novel JSON mapping, chronological price correction supersession, and zero-cost schema cache bypass | simulated model responses in CI; live API key runs against Google Gemini | DI-10 |
+
