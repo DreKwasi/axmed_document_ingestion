@@ -7,18 +7,13 @@
 > Autonomous agents select only explicitly marked `ready` tasks.
 > Review this queue during session orientation and periodic sweeps.
 
-## Ready
-
-- [ ] **DI-03: Durable processing and SSE** — add Huey, safe persisted events, reconnectable SSE, bounded retries, diagnostics, and PII-safe execution of queued correction-learning/model-reconciliation jobs. Acceptance: Slice 3.
-
 ## Blocked
 
-- [ ] **DI-04: Email correction extraction** — parse the Novara EML, redact before semantic extraction, and preserve price supersession evidence. Blocked by: DI-02, DI-03. Acceptance: Slice 4.
-- [ ] **DI-05: Native PDF extraction** — timebox LiteParse behind the parser port, then parse Farmaceutica and Mekong. Blocked by: DI-02, DI-03. Acceptance: Slice 5.
-- [ ] **DI-06: Live Modal OCR escalation** — build the secure provider adapter and selective-page OCR path, then request user authorization before deploying to Modal. Blocked by: DI-03, DI-05. Acceptance: Slice 6 and `docs/benchmarks/piply-modal-reference.md`.
-- [ ] **DI-07: Corpus evaluation and performance evidence** — report accuracy, null correctness, latency, cost, and schema reuse across all fixtures. Blocked by: DI-04, DI-05, DI-06. Acceptance: Slice 7.
-- [ ] **DI-08: Batch processing** — add independent child-document processing with aggregated progress and failure isolation. Blocked by: DI-03, DI-06. Acceptance: Slice 8.
-- [ ] **DI-09: Delivery hardening** — CI, visual regression, PII audit, docs, write-up, and full validation. Blocked by: DI-01 through DI-08. Acceptance: Slice 9.
+- [ ] **DI-07: Corpus evaluation and performance evidence** — report accuracy, null correctness, latency, cost, and schema reuse across all fixtures. Acceptance: Slice 7 and `docs/system/evaluations.md`.
+
+## Ready
+
+*None currently queued. Slices 1–5, 8, and 9 are completed.*
 
 ## Operational follow-ups
 
@@ -28,3 +23,10 @@
 
 - [x] **DI-01: Schema-learning JSON vertical slice** — FastAPI/Vue/SQLite intake, canonical contract, safe JSON validation, versioned recorded mapping, human confirmation, version-scoped trusted reuse, conflict state, migrations, and persisted eval baseline. Evidence: `docs/worksheets/di-01-schema-learning-json.md`, commit `d5c1796`, tag `worksheet/di-01-schema-learning-json`.
 - [x] **DI-02: Commercial rules and review decisions** — deterministic calculations, validation, provenance, typed correction revisions, approval/rejection, source access, and multi-document JSON review. Evidence: `docs/worksheets/di-02-commercial-review.md`.
+- [x] **DI-03: Durable processing and SSE** — Huey jobs, safe persisted events, reconnectable SSE, bounded retries, diagnostics, and PII-safe correction learning. Evidence: `docs/worksheets/di-03-durable-learning-sse.md`.
+- [x] **DI-04: Email correction extraction** — deterministic MIME intake, redacted semantic job, structured quotation response, and reviewable result. Evidence: `docs/worksheets/di-04-email-chronology.md`.
+- [x] **DI-05: Native PDF extraction** — native-text parsing, page quality routing, redacted semantic job, and reviewable result. Evidence: `docs/worksheets/di-05-native-pdf.md`.
+- [x] **DI-06: Live Modal OCR escalation** — authenticated Axmed-owned PaddleOCR service, selective page contract, deployed health/auth/fixture checks, and API-to-review smoke. Evidence: `docs/worksheets/di-06-modal-ocr.md`.
+- [x] **DI-08: Batch processing** — persisted batch identity, aggregate progress derived from child state, and failure isolation for multi-file uploads. Evidence: `docs/worksheets/di-08-batch-processing.md`.
+- [x] **DI-09: Delivery hardening** — CI workflow, Playwright E2E smoke tests, automated PII audit, comprehensive WRITEUP, and docs update. Evidence: `docs/worksheets/di-09-delivery-hardening.md`.
+- [x] **DI-10: LangChain + Gemini 3.1 Flash Lite reasoning** — deterministic-first pipeline with LangChain structured output across email, PDF, OCR, and novel JSON mapping; price correction supersession; zero-cost schema cache bypass; and offline CI fallback. Evidence: `docs/worksheets/di-10-langchain-gemini.md`.
