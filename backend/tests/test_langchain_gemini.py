@@ -18,6 +18,7 @@ from app.infrastructure.models import DocumentRecord, EmailExtractionRecord, Mod
 from app.workers.email_extraction import consume_email_extraction
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+EMAIL_FIXTURE = PROJECT_ROOT / "backend/evals/fixtures/documents/RE_RFQ-2026-0244_Novara_quotation.eml"
 
 
 def test_product_dosage_form_uses_the_core_pharmaceutical_form():
@@ -118,7 +119,7 @@ def test_email_worker_executes_langchain_when_gemini_configured(tmp_path):
     session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
 
     with session_factory() as session:
-        email_data = (PROJECT_ROOT / "sample_documents/RE_RFQ-2026-0244_Novara_quotation.eml").read_bytes()
+        email_data = EMAIL_FIXTURE.read_bytes()
         doc = ingest_email(
             session,
             filename="novara.eml",
@@ -392,7 +393,7 @@ def test_langchain_offline_fallback_when_unconfigured(tmp_path):
     engine = create_sqlite_engine(db_url)
     session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
 
-    email_data = (PROJECT_ROOT / "sample_documents/RE_RFQ-2026-0244_Novara_quotation.eml").read_bytes()
+    email_data = EMAIL_FIXTURE.read_bytes()
     with session_factory() as session:
         doc = ingest_email(
             session,

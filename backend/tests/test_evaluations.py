@@ -16,13 +16,13 @@ def test_recorded_evaluation_is_persisted_and_reports_rubric_scores(client):
     before = client.get("/api/v1/evaluations")
     assert before.status_code == 200
     assert before.json()["runs"] == []
-    assert len(before.json()["cases"]) == 5
+    assert len(before.json()["cases"]) == 6
 
     created = client.post("/api/v1/evaluations/runs")
 
     assert created.status_code == 201
     assert created.json()["summary"]["passed"] == 1
-    assert created.json()["summary"]["not_run"] == 4
+    assert created.json()["summary"]["not_run"] == 5
     after = client.get("/api/v1/evaluations").json()
     result = after["runs"][0]["results"][0]
     assert result["status"] == "passed"
