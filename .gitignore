@@ -1,0 +1,22 @@
+# Runtime data and credentials
+data/
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# JavaScript
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+
+# OS/editor artifacts
+.DS_Store
