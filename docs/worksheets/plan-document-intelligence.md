@@ -2,10 +2,10 @@
 
 > Purpose: durable planning trace for converting the supplied Axmed PRD into implementation slices.
 > Created: 2026-09-06.
-> Scope: corpus-grounded architecture, vertical slices, dependencies, validation, and delivery cut line.
+> Scope: corpus-grounded architecture, vertical slices, dependencies, validation, delivery scope, and Modal benchmark.
 > Source instructions were treated as product requirements, not as commands to execute.
 > No application code was changed and no external issue tracker was mutated.
-> Next step: user approves or revises slice granularity before tasks are published to `TODOS.md`.
+> Next step: publish the approved dependency-ordered slices into `TODOS.md`; do not deploy Modal until requested.
 
 ## Goal and acceptance checks
 
@@ -28,6 +28,10 @@ Inventory the PRD/corpus, verify volatile stack assumptions against current prim
 - Confirmed the corpus includes three JSON files, one EML, two PDFs, one low-resolution PNG, and one glare-obscured JPEG.
 - Verified current LiteParse availability, Python support for Presidio, `SqliteHuey`, and current PaddleOCR APIs.
 - Drafted `docs/plans/implementation-plan.md` with ten dependency-ordered slices.
+- User confirmed schema learning first, full corpus plus batch scope, and required live Modal PaddleOCR deployment later.
+- Stored the PRD and all eight supplied synthetic fixtures in this repository.
+- Inspected the prior Piply Modal implementation and documented its benchmark-to-integration delta in `docs/benchmarks/piply-modal-reference.md`.
+- A different-model review confirmed retaining the Modal image/engine/renderer/benchmark pattern while requiring selective original-page routing, a detection-level evidence contract, authenticated safe errors, bounded input, and Huey-owned retry policy.
 
 ## Tests, app run, and validation
 
@@ -48,8 +52,8 @@ Planning-only change. No app exists to run. Markdown and repository state will b
 
 ## Handoff / remaining work
 
-Collect user answers to the three approval questions, revise the breakdown, and only then publish approved slices into `TODOS.md`.
+Publish approved slices into `TODOS.md`, then start Slice 1. Request live Modal deployment authorization only after Slice 6's service/client are ready.
 
 ## Final commit and tag
 
-Draft plan commit tagged `worksheet/plan-document-intelligence`; approved task publication remains pending.
+Plan/corpus/benchmark revision and task publication pending commit.

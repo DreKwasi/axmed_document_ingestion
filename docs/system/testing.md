@@ -1,7 +1,7 @@
 # Testing Strategy
 
 > Purpose: define evidence required for safe changes and how tests are selected.
-> Status: bootstrap — choose the concrete test runner with the application stack.
+> Status: planned — the selected stack and test layers are defined in the implementation plan; tooling is not installed yet.
 > Update when test layers, fixtures, commands, or test-writing guidance change.
 > Owner persona: quality engineer.
 > Related: `docs/system/test-catalog.md`, `docs/system/visual-regression.md`.

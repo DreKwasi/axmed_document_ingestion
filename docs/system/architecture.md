@@ -1,7 +1,7 @@
 # Architecture
 
 > Purpose: current system boundaries, runtime choices, and ownership map.
-> Status: bootstrap — no application implementation exists yet.
+> Status: planned — implementation has not started; the approved product plan is available.
 > Update when modules, data flow, deployment, dependencies, or operational boundaries change.
 > Owner persona: systems maintainer.
 > Related: `AGENTS.md`, `docs/system/coding-conventions.md`, `docs/system/testing.md`.
@@ -10,4 +10,4 @@
 
 ## Current state
 
-This repository is a blank scaffold. Select and document the application runtime before implementation. Keep this document focused on decisions that influence future work, not a file-by-file catalog.
+The project is a single-repository FastAPI + Vue 3 document-intelligence system. The source PRD is [axmed_document_intelligence_prd.md](../product/axmed_document_intelligence_prd.md); the execution order and proposed boundaries are in [implementation-plan.md](../plans/implementation-plan.md). Keep this document focused on decisions that have entered implementation, not unbuilt alternatives.

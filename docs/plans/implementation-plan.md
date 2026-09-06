@@ -1,11 +1,11 @@
 # Supplier Document Intelligence — Implementation Plan
 
 > Purpose: turn the Axmed document-intelligence PRD into an executable, take-home-sized delivery plan.
-> Status: proposed; approve slice granularity and dependencies before publishing them into `TODOS.md`.
+> Status: approved for full scope; publish dependency-ordered work into `TODOS.md` before implementation.
 > Strategy: ship tracer-bullet vertical slices, each demoable through the running FastAPI and Vue application.
 > Critical thesis: deterministic extraction and remembered mappings handle known structure; AI handles novelty and ambiguity.
 > Trust boundary: no extraction becomes accepted data until human review; missing or unreadable values remain explicit.
-> Source: `/Users/andrewsboateng/Downloads/axmed_document_intelligence_prd.md` and its supplied synthetic corpus.
+> Source: `docs/product/axmed_document_intelligence_prd.md` and the checked-in synthetic corpus in `sample_documents/`.
 
 ## 1. Outcome and scope
 
@@ -30,7 +30,7 @@ The finished take-home should demonstrate one coherent workflow:
 
 ### Deliberate cut line
 
-The submission minimum is Slices 1–3 plus one heterogeneous-format slice (email is the recommended choice), the matching evaluation cases, and final documentation. This proves the golden path, uncertainty, human review, and schema-memory thesis. Native PDF and OCR complete the intended corpus story; batch upload, live Modal deployment, production RBAC, distributed storage/queues, enterprise audit retention, and broad multilingual support are stretch or documented production considerations.
+The delivery scope includes every supplied format (JSON, email, native PDF, and degraded images), live PaddleOCR on Modal, batch upload, corpus evaluation, and final documentation. The take-home does not build production RBAC, distributed storage/queues, enterprise audit retention, or broad multilingual support; it documents their production implications instead. Deployment itself remains a user-authorized action when Slice 6 is ready.
 
 ## 2. Proposed technical baseline
 
@@ -201,7 +201,7 @@ Acceptance checks:
 **Blocked by:** Slices 3 and 5  
 **Covers:** US-01, US-03, US-06, US-07
 
-Add a PaddleOCR/Modal port with deterministic recorded output and an optional live adapter. Route images and only poor PDF pages to OCR, merge evidence, and prefer null/low-confidence review issues over guesses.
+Add a PaddleOCR/Modal port using the checked-in Piply benchmark reference. Route images and only poor PDF pages to OCR, merge evidence, and prefer null/low-confidence review issues over guesses. Build and test the client/contract now; request user authorization before the live Modal deployment.
 
 Acceptance checks:
 
@@ -209,7 +209,7 @@ Acceptance checks:
 - OCR timeout/service failures retry within policy and end explicitly.
 - OCR confidence, page, bounds, and method attach to evidence.
 - The glare fixture preserves intentionally unreadable fields as null/low confidence; a mutation inserting a plausible number fails evaluation.
-- Modal contract tests run without credentials; live-provider results are labelled separately.
+- Modal contract tests run without credentials; after authorized deployment, live smoke and latency measurements against all degraded fixtures are required and labelled separately.
 
 ### Slice 7 — Expand the evaluation and operational proof across the corpus
 
@@ -225,7 +225,7 @@ Acceptance checks:
 - Cold/warm timing uses a documented same-machine method; simulated/recorded and live provider measurements are separate.
 - Deterministic parsing/normalization benchmarks have a stable baseline and modest regression budget.
 
-### Slice 8 — Add independent batch progress and failure isolation (stretch)
+### Slice 8 — Add independent batch progress and failure isolation
 
 **Blocked by:** Slices 3 and 6  
 **Covers:** US-01, US-02, US-06
@@ -262,7 +262,7 @@ Acceptance checks:
         └── 5 Native PDFs
             └── 6 OCR escalation
                 └── 7 Full-corpus evaluation
-                    └── 8 Batch (stretch)
+                    └── 8 Batch
 
 9 Hardening follows the chosen delivery cut.
 ```
@@ -271,9 +271,8 @@ Recommended milestones:
 
 - **Milestone A — Core thesis:** Slice 1 proves unknown → confirmed → deterministic warm-schema reuse.
 - **Milestone B — Trustworthy product path:** Slices 2–3 add human decisions, provenance, durable work, and live state.
-- **Submission minimum:** Milestones A–B, Slice 4 (email), relevant evaluation cases, and Slice 9 hardening.
-- **Milestone C — Full heterogeneous corpus:** Slices 5–7 add native PDF, OCR escalation, and unified evidence.
-- **Stretch:** Slice 8 batch processing; document-level isolation already exists before the batch UI.
+- **Milestone C — Full heterogeneous corpus:** Slices 4–7 add email, native PDF, live Modal OCR, and unified evidence.
+- **Milestone D — Full delivery scope:** Slice 8 completes batch processing; Slice 9 completes hardening and submission artifacts.
 
 ## 5. Test and evaluation plan
 
@@ -295,7 +294,7 @@ Recommended milestones:
 
 ### Provider policy
 
-Normal CI must not require network access, model credentials, Modal, or non-deterministic outputs. It uses faithful recorded adapter fixtures and schema validation. A separate opt-in evaluation exercises live LLM/OCR providers and stores only redacted inputs plus safe metrics.
+Normal CI must not require network access, model credentials, Modal, or non-deterministic outputs. It uses faithful recorded adapter fixtures and schema validation. After the user authorizes deployment, a separate live integration/evaluation gate exercises Modal OCR and stores safe metrics; the service endpoint is never a CI prerequisite.
 
 ## 6. Risks and early decisions
 
@@ -305,9 +304,9 @@ Normal CI must not require network access, model credentials, Modal, or non-dete
 | Presidio false positives remove supplier context | Lower extraction quality | Entity allowlist/policy, redaction audit metadata, corpus tests. |
 | SQLite has one writer at a time | Worker/API lock contention | Separate Huey DB, WAL, short transactions, bounded retry, concurrency test. |
 | LLM output varies | Flaky tests and unsafe records | Structured schema, prompt versioning, deterministic fixtures, bounded retry, human review. |
-| OCR/model credentials are unavailable | Demo cannot complete live | Contract-tested adapters and recorded outputs; clearly label live-provider status. |
+| Live Modal deployment is not yet authorized | OCR integration cannot be verified against the hosted service | Complete contract/recorded tests first; request authorization only when Slice 6 is ready. |
 | Canonical schema grows too quickly | Migration/UI complexity | Version payload, expose a focused review subset, retain rich fields without rendering all initially. |
-| Scope expands to every PRD feature | Core thesis remains unfinished | Protect Milestones A–D; batch is stretch and production considerations stay documented. |
+| Scope expands to every PRD feature | Core thesis remains unfinished | Keep Milestones A–D dependency-ordered, demonstrate each before widening its surface, and document production considerations rather than building them. |
 
 ## 7. Definition of done for every slice
 
@@ -318,10 +317,8 @@ Normal CI must not require network access, model credentials, Modal, or non-dete
 - Research/plan/implementation/wrap-up review findings are resolved or recorded.
 - The worksheet contains commands, results, decisions, remaining risks, commit, and worksheet tag.
 
-## 8. Approval questions
+## 8. Confirmed decisions
 
-Before these slices are published into `TODOS.md` as agent-ready work:
-
-1. Does proving schema learning in Slice 1 feel like the right priority and slice size?
-2. Should the target be the submission minimum (JSON + email) or the full heterogeneous corpus (also PDF + OCR)?
-3. Should batch remain stretch, and must OCR call live Modal/PaddleOCR rather than a contract-tested adapter with recorded output?
+- Schema learning is the first runnable slice.
+- Deliver the full supplied corpus and batch processing.
+- Final OCR integration must use live PaddleOCR on Modal; request deployment authorization when the service/client are ready.

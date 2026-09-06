@@ -9,10 +9,19 @@
 
 ## Ready
 
-- [ ] **Bootstrap application stack** — choose the runtime, add a runnable minimal app, and configure its test/lint commands. Acceptance: `bin/agent-validate full` runs meaningful checks. Docs: architecture, testing, test catalog.
+- [ ] **DI-01: Schema-learning JSON vertical slice** — build the FastAPI/Vue/SQLite walking skeleton, canonical contract, corpus manifest, safe upload, recorded semantic mapping, human confirmation, and trusted warm-schema reuse. Acceptance: all Slice 1 checks in `docs/plans/implementation-plan.md`. Docs: architecture, testing, test catalog, security/privacy policy.
 
-## Backlog
+## Blocked
 
-- [ ] **Choose visual regression harness** — select Playwright or equivalent once the app stack exists. Acceptance: a deterministic baseline, comparison, and documented update path. Docs: visual regression, testing.
-- [ ] **Choose benchmark harness** — add representative performance scenarios and enforce a regression budget. Docs: performance.
+- [ ] **DI-02: Commercial rules and review decisions** — add deterministic calculations, validation, provenance, correction revisions, approval, and rejection. Blocked by: DI-01. Acceptance: Slice 2.
+- [ ] **DI-03: Durable processing and SSE** — add Huey, safe persisted events, reconnectable SSE, bounded retries, and diagnostics. Blocked by: DI-02. Acceptance: Slice 3.
+- [ ] **DI-04: Email correction extraction** — parse the Novara EML, redact before semantic extraction, and preserve price supersession evidence. Blocked by: DI-02, DI-03. Acceptance: Slice 4.
+- [ ] **DI-05: Native PDF extraction** — timebox LiteParse behind the parser port, then parse Farmaceutica and Mekong. Blocked by: DI-02, DI-03. Acceptance: Slice 5.
+- [ ] **DI-06: Live Modal OCR escalation** — build the secure provider adapter and selective-page OCR path, then request user authorization before deploying to Modal. Blocked by: DI-03, DI-05. Acceptance: Slice 6 and `docs/benchmarks/piply-modal-reference.md`.
+- [ ] **DI-07: Corpus evaluation and performance evidence** — report accuracy, null correctness, latency, cost, and schema reuse across all fixtures. Blocked by: DI-04, DI-05, DI-06. Acceptance: Slice 7.
+- [ ] **DI-08: Batch processing** — add independent child-document processing with aggregated progress and failure isolation. Blocked by: DI-03, DI-06. Acceptance: Slice 8.
+- [ ] **DI-09: Delivery hardening** — CI, visual regression, PII audit, docs, write-up, and full validation. Blocked by: DI-01 through DI-08. Acceptance: Slice 9.
+
+## Operational follow-ups
+
 - [ ] **Configure independent review providers** — set `AGENT_REVIEW_COMMAND` and, if desired, `AGENT_FIX_COMMAND` in the developer environment. Docs: agent review, tooling.

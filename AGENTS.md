@@ -13,6 +13,7 @@
 | --- | --- | --- |
 | Any implementation | `@AGENT_WORKFLOW.md`, `docs/system/coding-conventions.md` | `bin/agent-validate targeted` |
 | New feature or design | `docs/system/architecture.md`, `docs/system/testing.md` | app + targeted tests |
+| Product requirements or scope | `docs/product/axmed_document_intelligence_prd.md`, `docs/plans/implementation-plan.md` | update the affected plan/system docs |
 | Bug or regression | `docs/system/testing.md`, `docs/system/test-catalog.md` | reproduce, fix, regression test |
 | UI work | `docs/system/visual-regression.md`, `docs/system/testing.md` | app + visual checks |
 | Performance-sensitive work | `docs/system/performance.md` | baseline and compare |
