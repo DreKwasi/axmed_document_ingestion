@@ -4,7 +4,12 @@ import re
 from typing import Any
 
 EMAIL_PATTERN = re.compile(r"\b[^\s@]+@[^\s@]+\.[^\s@]+\b")
-PHONE_PATTERN = re.compile(r"(?<!\w)(?:\+?\d[\d .()\-]{6,}\d)(?!\w)")
+# A bare numeric range such as `2026-0812` is commonly a quotation reference,
+# not a phone number. Require an explicit international prefix, or conventional
+# phone formatting with whitespace/parentheses.
+PHONE_PATTERN = re.compile(
+    r"(?<!\w)(?:\+\d[\d .()\-]{6,}\d|\d(?=[\d .()\-]{8,}\d)(?=[\d .()\-]*[ ()])[\d .()\-]{6,}\d)(?!\w)"
+)
 
 
 def redact_text(value: str) -> str:

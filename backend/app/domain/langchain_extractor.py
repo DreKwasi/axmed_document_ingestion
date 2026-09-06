@@ -16,6 +16,8 @@ from pydantic import BaseModel, Field
 from app.domain.contracts import CanonicalQuotation
 from app.domain.schema_mapping import MappingProposal
 
+CANONICAL_QUOTATION_PROMPT_VERSION = "canonical-quotation-v2"
+
 
 class ProposedMappingSchema(BaseModel):
     required_fields: dict[str, str] = Field(default_factory=dict)
@@ -58,9 +60,16 @@ class LangChainSemanticExtractor:
             "evidence list with `supersedes_source_path` pointing to the prior quote.\n"
             "2. Pharmaceutical Entity Resolution: Separate product trade names from International Nonproprietary "
             "Names (INN / generic names). Extract active ingredient strength (value and unit), dosage form "
-            "(e.g., tablet, vial, ampoule), and packaging configuration.\n"
+            "(e.g., tablet, syrup, capsule) and packaging configuration.\n"
             "3. Commercial Terms: Extract currency, incoterms, payment terms, MOQ, lead times, and pack pricing.\n"
-            "4. Accuracy: Do NOT invent or hallucinate data. If a field is not present or unknown, leave it as null.\n"
+            "4. Table fidelity: Transcribe every numeric table value exactly. Do not round, scale, derive, "
+            "or replace a quoted unit price, pack price, quantity, discount, or extended amount. "
+            "Preserve all line items in source order.\n"
+            "5. Canonical normalization: Emit document_type as lowercase snake_case. Set dosage_form to the "
+            "core pharmaceutical form only (for example `tablet`, not `film-coated tablet`). Put qualifiers "
+            "such as `film-coated`, `chewable`, or `pressurised inhalation` in packaging.presentation. Use the "
+            "table's pack description as primary_pack and retain its stated unit label.\n"
+            "6. Accuracy: Do NOT invent or hallucinate data. If a field is not present or unknown, leave it as null.\n"
         )
 
         user_content = json.dumps(
@@ -84,6 +93,7 @@ class LangChainSemanticExtractor:
         telemetry = {
             "provider": "google-gemini",
             "model": self.model_name,
+            "prompt_version": CANONICAL_QUOTATION_PROMPT_VERSION,
             "source_type": source_type,
             "duration_ms": duration_ms,
         }

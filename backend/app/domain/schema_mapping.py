@@ -22,6 +22,7 @@ from app.domain.contracts import (
     Strength,
     Supplier,
     Supply,
+    _core_dosage_form,
 )
 
 
@@ -287,18 +288,24 @@ def apply_mapping(
                 strengths.append(Strength(ingredient=ingredient, value=as_decimal(value), unit="mg"))
                 item_evidence.append(make_evidence("product.strength", source_path, method))
 
+        source_dosage_form = line("dosage_form", "product.dosage_form")
+        if isinstance(source_dosage_form, str):
+            dosage_form, presentation = _core_dosage_form(source_dosage_form)
+        else:
+            dosage_form, presentation = source_dosage_form, None
         line_item = LineItem(
             source_key=line("source_key", "source_key"),
             product=Product(
                 trade_name=line("trade_name", "product.trade_name"),
                 inn=line("inn", "product.inn") or [],
                 strength=strengths,
-                dosage_form=line("dosage_form", "product.dosage_form"),
+                dosage_form=dosage_form,
                 manufacturer=line("manufacturer", "product.manufacturer"),
                 country_of_origin=line("country_of_origin", "product.country_of_origin"),
             ),
             packaging=Packaging(
                 description=line("pack_description", "packaging.description"),
+                presentation=presentation,
                 primary_pack=line("primary_pack", "packaging.primary_pack"),
                 units_per_pack=line("units_per_pack", "packaging.units_per_pack"),
                 unit_label=line("unit_label", "packaging.unit_label"),

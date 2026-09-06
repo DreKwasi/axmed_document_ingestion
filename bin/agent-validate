@@ -37,6 +37,9 @@ if [[ -f backend/pyproject.toml ]]; then
   if command -v uv >/dev/null; then
     run env PYTHONPATH=backend uv run --project backend ruff check backend
     run env PYTHONPATH=backend uv run --project backend pytest backend/tests -q
+    if [[ "$mode" == full && -x backend/bin/run-evals ]]; then
+      run backend/bin/run-evals
+    fi
   else
     echo "WARN: backend/pyproject.toml present but uv is unavailable." >&2
   fi
