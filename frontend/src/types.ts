@@ -7,8 +7,12 @@ export type Evidence = {
 
 export type LineItem = {
   source_key?: string | null;
-  product: { trade_name?: string | null; inn: string[]; dosage_form?: string | null };
-  packaging: { primary_pack?: string | null; units_per_pack?: number | null; unit_label?: string | null };
+  product: {
+    trade_name?: string | null;
+    inn: string[];
+    dosage_form?: string | null;
+  };
+  packaging: { presentation?: string | null; primary_pack?: string | null; units_per_pack?: number | null; unit_label?: string | null };
   quantity: { minimum_order_quantity?: string | null; minimum_order_quantity_uom?: string | null };
   pricing: {
     currency?: string | null;

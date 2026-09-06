@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { fileURLToPath } from "node:url";
 
 const sanovaFixture = fileURLToPath(
-  new URL("../../sample_documents/sanova_offer_export_2026-08-03.json", import.meta.url)
+  new URL("../../backend/evals/fixtures/documents/sanova_offer_export_2026-08-03.json", import.meta.url)
 );
 
 test("a reviewer confirms, corrects, and approves an extracted offer", async ({ page }) => {
