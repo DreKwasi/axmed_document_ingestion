@@ -1,0 +1,13 @@
+{
+  "evaluation_type": "ocr_evidence",
+  "require_all_anchors": false,
+  "minimum_anchor_matches": 2,
+  "anchors": [
+    "FARMACEUTICA ANDINA",
+    "PROFORMA QUOTATION",
+    "FA-COT-2026-118",
+    "Dolostop 500",
+    "Amlodin 5"
+  ],
+  "scope": "partial_document_only"
+}

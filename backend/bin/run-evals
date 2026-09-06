@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# Run evaluation regressions and persist a SQLite evaluation run from backend configuration.
+set -euo pipefail
+
+mode="recorded"
+if [[ "${1:-}" == "--live" ]]; then
+  mode="live"
+elif [[ "${1:-}" == "--ocr" ]]; then
+  mode="ocr"
+elif [[ $# -ne 0 ]]; then
+  echo "Usage: backend/bin/run-evals [--live|--ocr]" >&2
+  exit 64
+fi
+
+backend_root="$(cd "$(dirname "$0")/.." && pwd)"
+workspace_root="$(cd "$backend_root/.." && pwd)"
+database_url_override="${AXMED_DATABASE_URL:-}"
+
+if [[ -f "$backend_root/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$backend_root/.env"
+  set +a
+fi
+if [[ -n "$database_url_override" ]]; then
+  export AXMED_DATABASE_URL="$database_url_override"
+fi
+if [[ "$mode" == "recorded" || "$mode" == "ocr" ]]; then
+  unset AXMED_GEMINI_API_KEY GEMINI_API_KEY GOOGLE_API_KEY
+fi
+
+cd "$backend_root"
+uv run pytest tests/test_evaluations.py -q
+EVAL_MODE="$mode" PYTHONPATH=. uv run python - <<'PY'
+import json
+import os
+from pathlib import Path
+
+from app.application.evaluations import run_live_ocr_evaluation, run_live_pdf_evaluation, run_recorded_evaluation, seed_evaluation_cases
+from app.core.settings import Settings
+from app.domain.schema_mapping import RecordedSemanticMappingProvider
+from app.infrastructure.database import SessionLocal, run_migrations
+
+settings = Settings()
+workspace_root = Path.cwd().parent
+run_migrations(settings.database_url, workspace_root)
+with SessionLocal() as session:
+    seed_evaluation_cases(session, workspace_root / settings.golden_dataset_path)
+    if os.environ["EVAL_MODE"] == "live":
+        run = run_live_pdf_evaluation(
+            session,
+            project_root=workspace_root,
+            golden_dataset_path=workspace_root / settings.golden_dataset_path,
+            settings=settings,
+        )
+    elif os.environ["EVAL_MODE"] == "ocr":
+        run = run_live_ocr_evaluation(
+            session,
+            golden_dataset_path=workspace_root / settings.golden_dataset_path,
+            settings=settings,
+        )
+    else:
+        run = run_recorded_evaluation(
+            session,
+            project_root=workspace_root,
+            golden_dataset_path=workspace_root / settings.golden_dataset_path,
+            provider=RecordedSemanticMappingProvider(workspace_root / settings.recorded_mapping_dir),
+        )
+    print(json.dumps({"id": run.id, "mode": run.execution_mode, "summary": json.loads(run.summary_json)}))
+PY

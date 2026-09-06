@@ -1,0 +1,14 @@
+{
+  "evaluation_type": "ocr_evidence",
+  "require_all_anchors": true,
+  "anchors": [
+    "FARMACEUTICA ANDINA S.A.S.",
+    "PROFORMA QUOTATION",
+    "FA-COT-2026-118",
+    "AXMED-RFQ-2026-0233",
+    "FOB Cartagena",
+    "Dolostop 500",
+    "Amoxidina 250/5",
+    "TOTAL OFFER VALUE"
+  ]
+}
