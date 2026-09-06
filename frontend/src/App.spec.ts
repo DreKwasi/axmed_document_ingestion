@@ -1,5 +1,5 @@
 import { flushPromises, mount } from "@vue/test-utils";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App.vue";
 
@@ -7,9 +7,13 @@ const api = vi.hoisted(() => ({
   fetchEvaluations: vi.fn(),
   runEvaluation: vi.fn(),
   uploadDocument: vi.fn(),
+  uploadBatch: vi.fn(),
+  fetchBatch: vi.fn(),
   confirmMapping: vi.fn(),
   reviewDocument: vi.fn(),
-  sourceDocumentUrl: vi.fn((documentId: string) => `/api/v1/documents/${documentId}/source`)
+  sourceDocumentUrl: vi.fn((documentId: string) => `/api/v1/documents/${documentId}/source`),
+  eventStreamUrl: vi.fn((documentId: string) => `/api/v1/documents/${documentId}/events/stream`),
+  fetchDocument: vi.fn()
 }));
 
 vi.mock("@/api", () => ({
@@ -37,6 +41,8 @@ describe("App", () => {
     });
   });
 
+  afterEach(() => vi.unstubAllGlobals());
+
   it("shows the SQLite-backed evaluation lab and persists a requested run through the API", async () => {
     api.runEvaluation.mockResolvedValue({ id: "run-1", status: "completed" });
     const wrapper = mount(App);
@@ -50,6 +56,37 @@ describe("App", () => {
     expect(wrapper.text()).toContain("No evaluation runs.");
     expect(api.runEvaluation).toHaveBeenCalledOnce();
     expect(api.fetchEvaluations).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows persisted evaluation failures when a reviewer opens a run", async () => {
+    api.fetchEvaluations.mockResolvedValue({
+      cases: [],
+      runs: [
+        {
+          id: "run-12345678",
+          status: "completed",
+          execution_mode: "recorded",
+          created_at: "2026-09-06T15:00:00Z",
+          summary: { case_count: 1, passed: 0, rubrics: [] },
+          results: [
+            {
+              case_id: "email-correction-v1",
+              status: "failed",
+              scores: { canonical_fidelity: 0 },
+              errors: ["Corrected price did not win."]
+            }
+          ]
+        }
+      ]
+    });
+    const wrapper = mount(App);
+    await flushPromises();
+
+    await wrapper.findAll("button").find((button) => button.text() === "Evaluation lab")?.trigger("click");
+    await wrapper.get("summary").trigger("click");
+
+    expect(wrapper.text()).toContain("email-correction-v1");
+    expect(wrapper.text()).toContain("Corrected price did not win.");
   });
 
   it("shows the human mapping checkpoint for a newly observed schema and confirms it", async () => {
@@ -161,24 +198,34 @@ describe("App", () => {
     );
   });
 
-  it("keeps each selected source available when ingesting multiple documents", async () => {
-    api.uploadDocument
-      .mockResolvedValueOnce({
-        id: "document-a",
-        filename: "first.json",
-        status: "needs_mapping_confirmation",
-        semantic_mapping_calls: 1,
-        quotation: null,
-        reviews: []
-      })
-      .mockResolvedValueOnce({
-        id: "document-b",
-        filename: "second.json",
-        status: "needs_mapping_confirmation",
-        semantic_mapping_calls: 1,
-        quotation: null,
-        reviews: []
-      });
+  it("retains every selected file when multiple files are chosen together as a batch", async () => {
+    api.uploadBatch.mockResolvedValue({
+      id: "batch-1",
+      name: "Batch 1",
+      created_at: "2026-09-06T15:00:00Z",
+      updated_at: "2026-09-06T15:00:00Z",
+      total_documents: 2,
+      status_counts: { needs_mapping_confirmation: 2 },
+      is_completed: false,
+      documents: [
+        {
+          id: "first",
+          filename: "first.json",
+          status: "needs_mapping_confirmation",
+          semantic_mapping_calls: 1,
+          quotation: null,
+          reviews: []
+        },
+        {
+          id: "second",
+          filename: "second.json",
+          status: "needs_mapping_confirmation",
+          semantic_mapping_calls: 1,
+          quotation: null,
+          reviews: []
+        }
+      ]
+    });
     const wrapper = mount(App);
     await flushPromises();
 
@@ -192,8 +239,108 @@ describe("App", () => {
     await file.trigger("change");
     await flushPromises();
 
-    expect(api.uploadDocument).toHaveBeenCalledTimes(2);
+    expect(api.uploadBatch).toHaveBeenCalledOnce();
+    expect(wrapper.text()).toContain("Batch: 2 files");
     expect(wrapper.text()).toContain("first.json · new mapping");
     expect(wrapper.text()).toContain("second.json · new mapping");
+  });
+
+  it("displays isolated failures in batch upload cleanly", async () => {
+    api.uploadBatch.mockResolvedValue({
+      id: "batch-err",
+      name: "Batch Err",
+      created_at: "2026-09-06T15:00:00Z",
+      updated_at: "2026-09-06T15:00:00Z",
+      total_documents: 2,
+      status_counts: { needs_review: 1, failed: 1 },
+      is_completed: true,
+      documents: [
+        {
+          id: "valid-doc",
+          filename: "valid.json",
+          status: "needs_review",
+          semantic_mapping_calls: 0,
+          quotation: {
+            quotation_reference: "REF-1",
+            supplier: { name: "Supplier A" },
+            commercial_terms: {},
+            line_items: [],
+            revision: 1,
+            review_status: "unreviewed",
+            review_issues: []
+          },
+          reviews: []
+        },
+        {
+          id: "bad-doc",
+          filename: "corrupt.json",
+          status: "failed",
+          failure_reason: "The uploaded JSON is invalid.",
+          semantic_mapping_calls: 0,
+          quotation: null,
+          reviews: []
+        }
+      ]
+    });
+    const wrapper = mount(App);
+    await flushPromises();
+
+    const file = wrapper.get('input[type="file"]');
+    Object.defineProperty(file.element, "files", {
+      value: [
+        new File(["{}"], "valid.json", { type: "application/json" }),
+        new File(["broken"], "corrupt.json", { type: "application/json" })
+      ]
+    });
+    await file.trigger("change");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Batch: 2 files (1 ready for review, 1 failed)");
+    expect(wrapper.text()).toContain("corrupt.json · The uploaded JSON is invalid.");
+    expect(wrapper.text()).toContain("valid.json");
+  });
+
+  it("offers every supported intake format through the single multi-file ingest control", async () => {
+    const wrapper = mount(App);
+    await flushPromises();
+
+    expect(wrapper.get('input[type="file"]').attributes("accept")).toContain("application/pdf");
+    expect(wrapper.get('input[type="file"]').attributes("accept")).toContain("image/png");
+    expect(wrapper.get('input[type="file"]').attributes("accept")).toContain("image/jpeg");
+  });
+
+  it("refreshes a document after a persisted processing event", async () => {
+    const handlers = new Map<string, () => void>();
+    class FakeEventSource {
+      constructor() {}
+      addEventListener(type: string, handler: () => void) {
+        handlers.set(type, handler);
+      }
+      close() {}
+    }
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const uploaded = {
+      id: "document-events",
+      filename: "events.json",
+      status: "needs_mapping_confirmation",
+      semantic_mapping_calls: 1,
+      quotation: null,
+      reviews: []
+    };
+    api.uploadDocument.mockResolvedValue(uploaded);
+    api.fetchDocument.mockResolvedValue({ ...uploaded, status: "needs_review" });
+    const wrapper = mount(App);
+    await flushPromises();
+    const file = wrapper.get('input[type="file"]');
+    Object.defineProperty(file.element, "files", {
+      value: [new File(["{}"], "events.json", { type: "application/json" })]
+    });
+    await file.trigger("change");
+    await flushPromises();
+    handlers.get("processing")?.();
+    await flushPromises();
+
+    expect(api.eventStreamUrl).toHaveBeenCalledWith("document-events");
+    expect(api.fetchDocument).toHaveBeenCalledWith("document-events");
   });
 });
