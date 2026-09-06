@@ -2,7 +2,7 @@
 
 > Purpose: durable handoff trace for the live-PDF evaluation runner hardening.
 > Goal: preserve correct SQLite results and summaries as the golden corpus grows.
-> Scope: live case selection and persisted summary reporting; no provider call in automated tests.
+> Scope: live case selection, persisted summary reporting, and source-minimized email evaluation.
 > Evidence: `backend/tests/test_evaluations.py` with a one-case, mocked-extractor dataset.
 > Constraint: no commit or tag until the user explicitly authorizes one.
 > Search terms: evaluation, live PDF, golden corpus, SQLite, case count.
@@ -20,10 +20,13 @@ The live runner must count the cases it selected from the golden dataset, rather
 - Executed the command successfully: 2 evaluation tests passed and a recorded run persisted with 3 cases, 1 pass, and 2 intentionally `not_run` live-PDF cases.
 - Moved golden data, expected outputs, recorded mappings, source documents, and the supplied low-resolution/glare OCR inputs into `backend/evals/`. Dataset fixture paths now resolve relative to the dataset, so the evaluation package is self-contained rather than tied to repository-root paths.
 - Added approved OCR evidence cases and `backend/bin/run-evals --ocr`. The command runs the configured PaddleOCR service only, stores provider/model/configuration metadata and anchor recall in SQLite, and never invokes an extraction model. Live evidence: both supplied fixtures passed (2/2).
+- Added the supplied Novara `.eml` as a source-backed golden case with its reviewed expected canonical JSON. `backend/bin/run-evals --email` runs it only when a model is explicitly configured, persists the field-level result, and protects the normal regression run from provider calls.
+- Email parsing now removes greeting and signature sections before model context is made, then applies deterministic email/phone redaction. The fixture-level tests prove the contact name, address, email, and HTML source do not reach the model context while the later price correction remains.
+- Live email evidence: the later EUR `0.134` per-tablet correction is correctly extracted. The run remains deliberately failing overall: the model truncates `Novara Farmaceutici S.p.A.` and changes the quoted `box` UOM to `pack`. The reviewed expected output was not weakened to hide these regressions.
 
 ## Tests, app run, and validation
 
-- Focused: `uv run pytest tests/test_evaluations.py` — 2 passed.
+- Focused: `uv run pytest tests/test_evaluations.py tests/test_email_parser.py tests/test_pii_audit.py tests/test_langchain_gemini.py` — 19 passed.
 - Full: `bin/agent-validate full` — frontend lint, 8 Vitest tests, production build, 3 Playwright tests, Ruff, 62 backend tests, and `backend/bin/run-evals` all passed.
 - Running API: `curl -fsS http://127.0.0.1:8000/health` returned the healthy Axmed service response.
 
