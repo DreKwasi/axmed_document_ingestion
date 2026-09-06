@@ -16,6 +16,8 @@ The Sanova case checks a full cold-to-warm contract: an unfamiliar schema receiv
 
 The Farmaceutica Andina and Mekong PDF cases reference source fixtures and source-verified expected canonical JSON under `backend/evals/`. With Gemini configured, an evaluation run executes the live native-PDF pipeline (parse, redact, structured extraction, deterministic commercial rules) and persists field-level diffs in SQLite. Without credentials, those cases are explicitly marked `not_run`; they never count as passing recorded tests.
 
+The Novara EML case uses the same model-evaluation path for email parsing, deterministic PII minimization, structured extraction, correction precedence, and commercial rules. The email fixture is retained as source evidence, but the model context excludes greeting/signature contact material before evaluation.
+
 ## Growth plan
 
 Grow to a 30–50 case minimum viable evaluation set before delivery. Cover native JSON, changed schemas, email correction precedence, native PDF quality, OCR degradation/null correctness, price tiers, combination strengths, PII redaction, malformed structured output, and prompt-injection-like document content. For each case record source, expected output, comparison strategy, rubric threshold, reviewer, and known limitations.

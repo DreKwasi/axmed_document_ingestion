@@ -5,6 +5,7 @@
 > Default: recorded mode never calls a model; `--live` and `--email` explicitly enable model evaluation; `--ocr` calls only the OCR service.
 > Fixtures: `fixtures/documents/` contains source documents; `fixtures/ocr/` contains degraded image inputs.
 > Ground truth: only `golden_outputs/` reviewed from source documents is used for fidelity scoring.
+> Email privacy: the Novara source is retained as an eval fixture; greetings, signatures, email addresses, phones, and contact-address material are removed before model context is constructed.
 > OCR scope: the glare fixture is partial and validates OCR resilience, not full-quotation fidelity.
 > Search terms: eval, golden, OCR, fixture, ground truth, SQLite.
 

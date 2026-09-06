@@ -32,7 +32,7 @@ if [[ "$mode" == "recorded" || "$mode" == "ocr" ]]; then
 fi
 
 cd "$backend_root"
-uv run pytest tests/test_evaluations.py -q
+env -u AXMED_GEMINI_API_KEY -u GEMINI_API_KEY -u GOOGLE_API_KEY uv run pytest tests/test_evaluations.py -q
 EVAL_MODE="$mode" PYTHONPATH=. uv run python - <<'PY'
 import json
 import os
