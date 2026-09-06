@@ -8,6 +8,7 @@ from app.core.settings import Settings
 from app.security.redaction import redact_for_model, redact_text
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+EMAIL_FIXTURE = PROJECT_ROOT / "backend/evals/fixtures/documents/RE_RFQ-2026-0244_Novara_quotation.eml"
 
 
 def test_redaction_removes_contact_pii():
@@ -66,7 +67,7 @@ def test_processing_events_and_invocations_do_not_leak_raw_text_or_pii(tmp_path:
     )
     with TestClient(create_app(settings)) as client:
         # Ingest EML containing contact info
-        eml_bytes = (PROJECT_ROOT / "sample_documents/RE_RFQ-2026-0244_Novara_quotation.eml").read_bytes()
+        eml_bytes = EMAIL_FIXTURE.read_bytes()
         res = client.post(
             "/api/v1/documents",
             files={"file": ("novara.eml", eml_bytes, "message/rfc822")},
