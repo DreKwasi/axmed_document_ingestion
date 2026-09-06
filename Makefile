@@ -24,4 +24,4 @@ build:
 	@npm --prefix frontend run build
 
 eval:
-	@curl --fail --request POST http://127.0.0.1:8000/api/v1/evaluations/runs
+	@backend/bin/run-evals

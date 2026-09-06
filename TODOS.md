@@ -9,7 +9,7 @@
 
 ## Blocked
 
-- [ ] **DI-07: Corpus evaluation and performance evidence** — report accuracy, null correctness, latency, cost, and schema reuse across all fixtures. Acceptance: Slice 7 and `docs/system/evaluations.md`.
+- [ ] **DI-07: Corpus evaluation and performance evidence** — performance and schema-reuse evidence are complete; field-level accuracy, null correctness, and correction-precedence scoring await commercially approved ground truth for the supplied corpus. Acceptance: `docs/worksheets/di-07-evaluation-audit.md`.
 
 ## Ready
 

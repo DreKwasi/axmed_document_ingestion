@@ -22,22 +22,51 @@ See [WRITEUP.md](file:///Users/andrewsboateng/Projects/axmed-takehome/WRITEUP.md
 ## Quick Start
 
 ### Prerequisites
-- Python 3.12+ with [uv](https://docs.astral.sh/uv/)
-- Node.js 22+ with npm
+- **Python 3.12+** with [uv](https://docs.astral.sh/uv/)
+- **Node.js 22+** with npm
 
-### 1. Install Dependencies
+### 1. Install Dependencies & Configure Environment
 ```bash
+# Backend setup
 uv sync --project backend --all-groups
+cp backend/.env.example backend/.env
+# (Optional) Add your GEMINI_API_KEY in backend/.env for live LangChain Gemini reasoning
+
+# Frontend setup
 npm --prefix frontend install
+cp frontend/.env.example frontend/.env
 ```
 
-### 2. Start Application
+### 2. Start Both Services Together (Recommended)
 ```bash
 make dev
 # or: bin/dev
 ```
-- **Review Desk**: [http://127.0.0.1:5173](http://127.0.0.1:5173)
-- **FastAPI API**: [http://127.0.0.1:8000](http://127.0.0.1:8000) (Interactive OpenAPI docs at `/docs`)
+This concurrently boots:
+- **FastAPI API**: [http://127.0.0.1:8000](http://127.0.0.1:8000) (OpenAPI interactive docs at `/docs`)
+- **Huey Worker**: Listens on SQLite queue (`data/tasks.db`) for background extraction jobs
+- **Vue 3 Review Desk**: [http://127.0.0.1:5173](http://127.0.0.1:5173)
+
+### 3. Running Services Independently
+
+If you prefer running services in separate terminal windows:
+
+- **Terminal 1 — Backend Web API**:
+  ```bash
+  PYTHONPATH=backend uv run --project backend uvicorn app.api.application:app --host 127.0.0.1 --port 8000 --reload
+  ```
+- **Terminal 2 — Backend Huey Worker**:
+  ```bash
+  PYTHONPATH=backend uv run --project backend huey_consumer.py app.workers.tasks.huey
+  ```
+- **Terminal 3 — Frontend Dev Server**:
+  ```bash
+  npm --prefix frontend run dev
+  ```
+
+For in-depth service-specific options, architecture diagrams, and testing guides, see:
+- 📖 **[Backend Setup & Architecture Guide](file:///Users/andrewsboateng/Projects/axmed-takehome/backend/README.md)**
+- 📖 **[Frontend Setup & Feature Tour Guide](file:///Users/andrewsboateng/Projects/axmed-takehome/frontend/README.md)**
 
 ---
 
@@ -55,7 +84,7 @@ Or run individual targets via `make`:
 make lint    # Backend (Ruff) + Frontend (ESLint)
 make test    # Backend (Pytest) + Frontend (Vitest)
 make build   # Frontend production build (vue-tsc + vite)
-make eval    # Run recorded evaluation benchmark against golden dataset
+make eval    # Run backend evaluation regression tests and persist a recorded SQLite run
 ```
 
 ---
@@ -83,6 +112,6 @@ axmed-takehome/
 │   ├── worksheets/          # Implementation worksheets & session evidence
 │   └── product/             # Product Requirements Document (PRD)
 ├── sample_documents/        # Synthetic supplier fixtures (JSON, EML, PDF, PNG, JPG)
-├── evals/                   # Golden dataset rubric and recorded mapping fixtures
+├── backend/evals/           # Golden datasets, outputs, mappings, and OCR fixtures
 └── WRITEUP.md               # Architecture design & trade-off narrative
 ```
