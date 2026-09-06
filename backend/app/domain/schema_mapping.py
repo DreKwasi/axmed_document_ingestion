@@ -7,7 +7,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any, Protocol
 
-from app.domain import (
+from app.domain.contracts import (
     CanonicalQuotation,
     CommercialTerms,
     Evidence,
@@ -97,7 +97,13 @@ class MappingProposal:
 
 
 class SemanticMappingProvider(Protocol):
-    def propose(self, source_system: str, schema_fingerprint: str) -> MappingProposal | None: ...
+    def propose(
+        self,
+        source_system: str,
+        schema_fingerprint: str,
+        *,
+        learning_preferences: list[dict[str, Any]] | None = None,
+    ) -> MappingProposal | None: ...
 
 
 class RecordedSemanticMappingProvider:
@@ -106,7 +112,16 @@ class RecordedSemanticMappingProvider:
     def __init__(self, fixture_directory: Path):
         self.fixture_directory = fixture_directory
 
-    def propose(self, source_system: str, schema_fingerprint: str) -> MappingProposal | None:
+    def propose(
+        self,
+        source_system: str,
+        schema_fingerprint: str,
+        *,
+        learning_preferences: list[dict[str, Any]] | None = None,
+    ) -> MappingProposal | None:
+        # Recorded fixtures are immutable evidence. Production resolvers receive this same
+        # non-authoritative context and may return a new proposal for human confirmation.
+        del learning_preferences
         started_at = perf_counter()
         for fixture_path in self.fixture_directory.glob("*.json"):
             fixture = json.loads(fixture_path.read_text())
@@ -120,6 +135,66 @@ class RecordedSemanticMappingProvider:
                     provider=telemetry["provider"],
                     duration_ms=max(1, int((perf_counter() - started_at) * 1000)),
                 )
+        return None
+
+
+class LangChainSemanticMappingProvider:
+    """Uses LangChain and Google Gemini (gemini-3.1-flash-lite) to propose mappings for novel schemas."""
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "gemini-3.1-flash-lite",
+        sample_payload: dict[str, Any] | None = None,
+    ):
+        self.api_key = api_key
+        self.model = model
+        self.sample_payload = sample_payload
+
+    def propose(
+        self,
+        source_system: str,
+        schema_fingerprint: str,
+        *,
+        learning_preferences: list[dict[str, Any]] | None = None,
+    ) -> MappingProposal | None:
+        del learning_preferences
+        extractor = getattr(self, "extractor", None)
+        if extractor is None:
+            from app.domain.langchain_extractor import LangChainSemanticExtractor
+
+            extractor = LangChainSemanticExtractor(api_key=self.api_key, model=self.model)
+        try:
+            return extractor.propose_schema_mapping(
+                unmapped_payload=self.sample_payload or {},
+                schema_fingerprint=schema_fingerprint,
+                source_system=source_system,
+            )
+        except Exception:
+            return None
+
+
+class ChainedSemanticMappingProvider:
+    """Evaluates providers in order until a proposal is returned."""
+
+    def __init__(self, providers: list[SemanticMappingProvider]):
+        self.providers = providers
+
+    def propose(
+        self,
+        source_system: str,
+        schema_fingerprint: str,
+        *,
+        learning_preferences: list[dict[str, Any]] | None = None,
+    ) -> MappingProposal | None:
+        for provider in self.providers:
+            proposal = provider.propose(
+                source_system,
+                schema_fingerprint,
+                learning_preferences=learning_preferences,
+            )
+            if proposal is not None:
+                return proposal
         return None
 
 

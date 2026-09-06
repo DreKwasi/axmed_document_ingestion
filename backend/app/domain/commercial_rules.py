@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
-from app.domain import CanonicalQuotation, LineItem, ReviewIssue
+from app.domain.contracts import CanonicalQuotation, LineItem, ReviewIssue
 
 
 @dataclass(frozen=True)
