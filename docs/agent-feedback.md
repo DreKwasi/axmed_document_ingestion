@@ -10,3 +10,4 @@
 | Date | Worksheet | Signal | Improvement | Status |
 | --- | --- | --- | --- | --- |
 | 2026-09-05 | bootstrap-agent-os | Empty repository has no runnable app or selected toolchain. | Add stack bootstrap task; validation scripts report this explicitly. | queued |
+| 2026-09-06 | plan-document-intelligence | Infrastructure-first sequencing delayed the product’s schema-memory differentiator. | Require plans to demonstrate the riskiest product thesis in the earliest viable vertical slice. | adopted |
