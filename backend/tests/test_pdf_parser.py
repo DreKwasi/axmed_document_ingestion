@@ -12,6 +12,7 @@ from app.infrastructure.models import ModelInvocationRecord, PdfExtractionRecord
 from app.workers.pdf_extraction import consume_pdf_extraction
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PDF_FIXTURES = PROJECT_ROOT / "backend/evals/fixtures/documents"
 
 
 @pytest.mark.parametrize(
@@ -22,7 +23,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
     ],
 )
 def test_native_pdf_parser_recovers_reading_order_and_marks_clean_pages(filename: str, expected_text: str):
-    parsed = parse_native_pdf((PROJECT_ROOT / "sample_documents" / filename).read_bytes())
+    parsed = parse_native_pdf((PDF_FIXTURES / filename).read_bytes())
 
     assert len(parsed.pages) == 2
     assert expected_text in parsed.text
@@ -36,7 +37,7 @@ def test_native_pdf_parser_rejects_non_pdf_content():
 
 
 def test_pdf_upload_persists_page_quality_metadata_and_never_exposes_native_text(client):
-    source = (PROJECT_ROOT / "sample_documents/farmaceutica_andina_proforma_FA-COT-2026-118.pdf").read_bytes()
+    source = (PDF_FIXTURES / "farmaceutica_andina_proforma_FA-COT-2026-118.pdf").read_bytes()
 
     response = client.post("/api/v1/documents", files={"file": ("andina.pdf", source, "application/pdf")})
 
@@ -105,7 +106,7 @@ class _ResolverResponse:
 
 def test_pdf_worker_uses_redacted_page_context_and_persists_reviewable_quotation(client_settings, monkeypatch):
     client, base_settings = client_settings
-    source = (PROJECT_ROOT / "sample_documents/farmaceutica_andina_proforma_FA-COT-2026-118.pdf").read_bytes()
+    source = (PDF_FIXTURES / "farmaceutica_andina_proforma_FA-COT-2026-118.pdf").read_bytes()
     document = client.post("/api/v1/documents", files={"file": ("andina.pdf", source, "application/pdf")}).json()
     engine = create_sqlite_engine(base_settings.database_url)
     factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)

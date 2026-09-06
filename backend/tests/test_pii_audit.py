@@ -22,6 +22,17 @@ def test_redaction_removes_contact_pii():
     assert "[redacted-phone]" in redacted
     # Commercial product name and quote reference must be preserved
     assert "Amoxicillin" in redacted
+    assert "FA-COT-2026-118" in redacted
+
+
+def test_redaction_preserves_commercial_references_and_decimal_prices():
+    text = "Quotation MKP-2026-0812: USD 0.0091 per tablet; call +44 20 7946 0991."
+
+    redacted = redact_text(text)
+
+    assert "MKP-2026-0812" in redacted
+    assert "0.0091" in redacted
+    assert "+44 20 7946 0991" not in redacted
 
 
 def test_redact_for_model_recursive():
@@ -49,8 +60,8 @@ def test_processing_events_and_invocations_do_not_leak_raw_text_or_pii(tmp_path:
         database_url=f"sqlite:///{tmp_path / 'audit.db'}",
         task_database_path=tmp_path / "tasks.db",
         upload_dir=tmp_path / "uploads",
-        recorded_mapping_dir=PROJECT_ROOT / "evals/recorded_mappings",
-        golden_dataset_path=PROJECT_ROOT / "evals/golden_dataset.json",
+        recorded_mapping_dir=PROJECT_ROOT / "backend/evals/recorded_mappings",
+        golden_dataset_path=PROJECT_ROOT / "backend/evals/golden_dataset.json",
         background_job_dispatch_enabled=False,
     )
     with TestClient(create_app(settings)) as client:

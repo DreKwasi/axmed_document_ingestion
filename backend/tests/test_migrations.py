@@ -23,8 +23,8 @@ def test_startup_applies_checked_in_alembic_migration(tmp_path: Path):
     settings = Settings(
         database_url=f"sqlite:///{database_path}",
         upload_dir=tmp_path / "uploads",
-        recorded_mapping_dir=PROJECT_ROOT / "evals/recorded_mappings",
-        golden_dataset_path=PROJECT_ROOT / "evals/golden_dataset.json",
+        recorded_mapping_dir=PROJECT_ROOT / "backend/evals/recorded_mappings",
+        golden_dataset_path=PROJECT_ROOT / "backend/evals/golden_dataset.json",
     )
 
     with TestClient(create_app(settings)) as client:
@@ -53,8 +53,8 @@ def test_startup_upgrades_a_pre_alembic_slice_one_database(tmp_path: Path):
     settings = Settings(
         database_url=f"sqlite:///{database_path}",
         upload_dir=tmp_path / "uploads",
-        recorded_mapping_dir=PROJECT_ROOT / "evals/recorded_mappings",
-        golden_dataset_path=PROJECT_ROOT / "evals/golden_dataset.json",
+        recorded_mapping_dir=PROJECT_ROOT / "backend/evals/recorded_mappings",
+        golden_dataset_path=PROJECT_ROOT / "backend/evals/golden_dataset.json",
     )
     with TestClient(create_app(settings)) as client:
         assert client.get("/health").status_code == 200
@@ -79,8 +79,8 @@ def test_startup_repairs_an_interrupted_review_learning_migration(tmp_path: Path
     settings = Settings(
         database_url=f"sqlite:///{database_path}",
         upload_dir=tmp_path / "uploads",
-        recorded_mapping_dir=PROJECT_ROOT / "evals/recorded_mappings",
-        golden_dataset_path=PROJECT_ROOT / "evals/golden_dataset.json",
+        recorded_mapping_dir=PROJECT_ROOT / "backend/evals/recorded_mappings",
+        golden_dataset_path=PROJECT_ROOT / "backend/evals/golden_dataset.json",
     )
     with TestClient(create_app(settings)) as client:
         assert client.get("/health").status_code == 200

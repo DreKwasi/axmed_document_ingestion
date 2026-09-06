@@ -20,6 +20,22 @@ from app.workers.email_extraction import consume_email_extraction
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_product_dosage_form_uses_the_core_pharmaceutical_form():
+    film_coated = LineItem(product={"dosage_form": "Film-coated tablet"})
+    assert film_coated.product.dosage_form == "tablet"
+    assert film_coated.packaging.presentation == "film-coated"
+
+    chewable = LineItem(product={"dosage_form": "chewable tablet"})
+    assert chewable.product.dosage_form == "tablet"
+    assert chewable.packaging.presentation == "chewable"
+
+    oral_suspension = LineItem(product={"dosage_form": "Powder for oral suspension"})
+    assert oral_suspension.product.dosage_form == "suspension"
+    assert oral_suspension.packaging.presentation == "powder for oral"
+
+    assert Product(dosage_form="Syrup").dosage_form == "syrup"
+
+
 def test_langchain_email_extraction_resolves_corrections_and_supersession():
     extractor = LangChainSemanticExtractor(api_key="test-fake-key", model="gemini-3.1-flash-lite")
 
@@ -163,7 +179,7 @@ def test_schema_memory_bypasses_langchain_for_known_schema(tmp_path):
     session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
 
     # Seed a trusted schema mapping in SQLite
-    fixture_json = json.loads((PROJECT_ROOT / "evals/recorded_mappings/sanova_erp_2_4_1.json").read_text())
+    fixture_json = json.loads((PROJECT_ROOT / "backend/evals/recorded_mappings/sanova_erp_2_4_1.json").read_text())
     with session_factory() as session:
         mapping = SchemaMappingRecord(
             source_system=fixture_json["source_system"],
@@ -183,7 +199,7 @@ def test_schema_memory_bypasses_langchain_for_known_schema(tmp_path):
     provider = LangChainSemanticMappingProvider(api_key="test-api-key", model="gemini-3.1-flash-lite")
     provider.extractor = mock_extractor
 
-    json_data = (PROJECT_ROOT / "sample_documents/sanova_offer_export_2026-08-03.json").read_bytes()
+    json_data = (PROJECT_ROOT / "backend/evals/fixtures/documents/sanova_offer_export_2026-08-03.json").read_bytes()
     with session_factory() as session:
         doc = ingest_json(
             session,
@@ -219,7 +235,8 @@ def test_pdf_worker_executes_langchain_when_gemini_configured(tmp_path):
     engine = create_sqlite_engine(db_url)
     session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
 
-    pdf_data = (PROJECT_ROOT / "sample_documents/farmaceutica_andina_proforma_FA-COT-2026-118.pdf").read_bytes()
+    pdf_fixture = PROJECT_ROOT / "backend/evals/fixtures/documents/farmaceutica_andina_proforma_FA-COT-2026-118.pdf"
+    pdf_data = pdf_fixture.read_bytes()
     with session_factory() as session:
         doc = ingest_pdf(
             session,
