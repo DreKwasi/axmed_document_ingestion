@@ -26,4 +26,4 @@ The deployed OCR service has a separately reproducible warm-performance measurem
 
 ## Running evaluations
 
-Run `backend/bin/run-evals` from the repository root (or `./bin/run-evals` from `backend/`). It loads `backend/.env`, runs `tests/test_evaluations.py`, applies migrations, and persists the recorded SQLite run. It does not call a model. Pass `--live` only when a configured provider should run the live PDF cases. Pass `--ocr` to run the configured OCR service against approved OCR anchors; this invokes no extraction model.
+Run `backend/bin/run-evals` from the repository root (or `./bin/run-evals` from `backend/`). It loads `backend/.env`, runs `tests/test_evaluations.py`, applies migrations, and persists the recorded SQLite run. It does not call a model. Pass `--live` only when a configured provider should run the live PDF cases, `--email` for reviewed email cases, or `--ocr` to run the configured OCR service against approved OCR anchors; OCR mode invokes no extraction model.

@@ -20,3 +20,4 @@ test-results/
 
 # OS/editor artifacts
 .DS_Store
+tmp/
