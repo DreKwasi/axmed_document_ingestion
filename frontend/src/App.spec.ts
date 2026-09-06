@@ -4,8 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App.vue";
 
 const api = vi.hoisted(() => ({
-  fetchEvaluations: vi.fn(),
-  runEvaluation: vi.fn(),
+  fetchDocuments: vi.fn(),
   uploadDocument: vi.fn(),
   uploadBatch: vi.fn(),
   fetchBatch: vi.fn(),
@@ -23,71 +22,64 @@ vi.mock("@/api", () => ({
 describe("App", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.fetchEvaluations.mockResolvedValue({
-      cases: [
-        {
-          id: "sanova-schema-reuse-v1",
-          title: "Sanova ERP schema learns once and reuses deterministically",
-          rubric: [
-            {
-              id: "canonical_fidelity",
-              label: "Canonical fidelity",
-              success_criterion: "Critical quotation fields match ground truth."
-            }
-          ]
-        }
-      ],
-      runs: []
-    });
+    api.fetchDocuments.mockResolvedValue([]);
   });
 
   afterEach(() => vi.unstubAllGlobals());
 
-  it("shows the SQLite-backed evaluation lab and persists a requested run through the API", async () => {
-    api.runEvaluation.mockResolvedValue({ id: "run-1", status: "completed" });
+  it("opens on Home and removes the Evaluation Lab navigation", async () => {
     const wrapper = mount(App);
     await flushPromises();
 
-    await wrapper.findAll("button").find((button) => button.text() === "Evaluation lab")?.trigger("click");
-    await wrapper.get(".primary-action").trigger("click");
-    await flushPromises();
-
-    expect(wrapper.text()).toContain("Evaluation lab");
-    expect(wrapper.text()).toContain("No evaluation runs.");
-    expect(api.runEvaluation).toHaveBeenCalledOnce();
-    expect(api.fetchEvaluations).toHaveBeenCalledTimes(2);
+    expect(wrapper.text()).toContain("Your sources, at a glance.");
+    expect(wrapper.text()).not.toContain("Evaluation Lab");
+    expect(wrapper.find("nav").exists()).toBe(false);
+    expect(api.fetchDocuments).toHaveBeenCalledOnce();
   });
 
-  it("shows persisted evaluation failures when a reviewer opens a run", async () => {
-    api.fetchEvaluations.mockResolvedValue({
-      cases: [],
-      runs: [
-        {
-          id: "run-12345678",
-          status: "completed",
-          execution_mode: "recorded",
-          created_at: "2026-09-06T15:00:00Z",
-          summary: { case_count: 1, passed: 0, rubrics: [] },
-          results: [
-            {
-              case_id: "email-correction-v1",
-              status: "failed",
-              scores: { canonical_fidelity: 0, model: "test-model", prompt_version: "test-prompt-v1" },
-              errors: ["Corrected price did not win."]
-            }
-          ]
-        }
-      ]
-    });
+  it("lists sources at a high level and opens a product breakdown with quoted quantity", async () => {
+    api.fetchDocuments.mockResolvedValue([{
+      id: "document-quantity",
+      filename: "andina.pdf",
+      status: "needs_review",
+      source_system: "pdf",
+      semantic_mapping_calls: 0,
+      quotation: {
+        quotation_reference: "FA-COT-2026-118",
+        supplier: { name: "Farmaceutica Andina S.A.S." },
+        commercial_terms: {},
+        line_items: [{
+          source_key: "01",
+          product: { trade_name: "Dolostop 500", inn: ["Paracetamol"], strength: [], dosage_form: "tablet" },
+          packaging: { primary_pack: "PVC/Alu blister", units_per_pack: 20, unit_label: "tablet", packs_per_shipper: 12 },
+          quantity: { quoted_quantity: "6000000", quoted_quantity_uom: "tablet" },
+          pricing: { currency: "USD", quoted_price: { amount: "0.0091", uom: "tablet" }, normalized_price: {}, price_tiers: [{ min_quantity: "100", price: "0.008" }], adjustments: [{ type: "rebate", value: "5" }] },
+          supply: { minimum_remaining_shelf_life_percent: "80" },
+          regulatory: { who_prequalified: true, who_pq_reference: "PQ-1", registered_markets: ["KE"] },
+          evidence: [{ canonical_field: "product.trade_name", extraction_method: "table_extraction", confidence: "1.00" }]
+        }],
+        revision: 1,
+        review_status: "unreviewed",
+        review_issues: []
+      },
+      reviews: []
+    }]);
     const wrapper = mount(App);
     await flushPromises();
 
-    await wrapper.findAll("button").find((button) => button.text() === "Evaluation lab")?.trigger("click");
-    await wrapper.get("summary").trigger("click");
+    expect(wrapper.text()).toContain("Farmaceutica Andina S.A.S.");
+    expect(wrapper.text()).not.toContain("SourceConfidenceIssues");
+    await wrapper.get("button.group").trigger("click");
 
-    expect(wrapper.text()).toContain("email-correction-v1");
-    expect(wrapper.text()).toContain("Corrected price did not win.");
-    expect(wrapper.text()).toContain("test-model · test-prompt-v1");
+    expect(wrapper.text()).toContain("Product breakdown");
+    expect(wrapper.text()).toContain("6,000,000 tablet");
+    expect(wrapper.text()).toContain("Quoted quantity");
+    expect(wrapper.text()).toContain("12 packs / shipper");
+    expect(wrapper.text()).toContain("WHO prequalified");
+    expect(wrapper.text()).toContain("markets: KE");
+    expect(wrapper.text()).toContain("1 price tiers");
+    expect(wrapper.text()).toContain("1 adjustments");
+    expect(wrapper.find("th").text()).not.toContain("Source");
   });
 
   it("shows the human mapping checkpoint for a newly observed schema and confirms it", async () => {
@@ -123,9 +115,9 @@ describe("App", () => {
     await input.trigger("change");
     await flushPromises();
 
-    expect(wrapper.text()).toContain("sanova.json · new mapping");
+    expect(wrapper.text()).toContain("New source structure detected");
     expect(wrapper.text()).toContain("Confidence");
-    await wrapper.get(".notice .primary-action").trigger("click");
+    await wrapper.findAll("button").find((button) => button.text() === "Confirm mapping")?.trigger("click");
     await flushPromises();
     expect(api.confirmMapping).toHaveBeenCalledWith("document-1");
     expect(wrapper.text()).toContain("unreviewed · v2");
@@ -181,13 +173,12 @@ describe("App", () => {
     });
     await file.trigger("change");
     await flushPromises();
-    expect(wrapper.get("tfoot").text()).toContain("Approve");
-    expect(wrapper.get("tfoot").text()).toContain("Reject");
+    expect(wrapper.text()).toContain("Source decision");
+    expect(wrapper.text()).toContain("Approve source");
     await wrapper.get('input[aria-label="Correction value for Example"]').setValue("4.00");
-    await wrapper.findAll("button").find((button) => button.text() === "Correct")?.trigger("click");
+    await wrapper.findAll("button").find((button) => button.text() === "Save correction")?.trigger("click");
     await flushPromises();
 
-    expect(wrapper.text()).toContain("commercials.price_per_pack");
     expect(wrapper.text()).toContain("99%");
     expect(wrapper.text()).toContain("tablet · film-coated");
     expect(api.reviewDocument).toHaveBeenCalledWith(
@@ -242,9 +233,9 @@ describe("App", () => {
     await flushPromises();
 
     expect(api.uploadBatch).toHaveBeenCalledOnce();
-    expect(wrapper.text()).toContain("Batch: 2 files");
-    expect(wrapper.text()).toContain("first.json · new mapping");
-    expect(wrapper.text()).toContain("second.json · new mapping");
+    expect(wrapper.text()).toContain("Batch: 2 sources");
+    expect(wrapper.text()).toContain("first.json");
+    expect(wrapper.text()).toContain("second.json");
   });
 
   it("displays isolated failures in batch upload cleanly", async () => {
@@ -297,8 +288,8 @@ describe("App", () => {
     await file.trigger("change");
     await flushPromises();
 
-    expect(wrapper.text()).toContain("Batch: 2 files (1 ready for review, 1 failed)");
-    expect(wrapper.text()).toContain("corrupt.json · The uploaded JSON is invalid.");
+    expect(wrapper.text()).toContain("Batch: 2 sources");
+    expect(wrapper.text()).toContain("corrupt.json");
     expect(wrapper.text()).toContain("valid.json");
   });
 

@@ -10,17 +10,26 @@ export type LineItem = {
   product: {
     trade_name?: string | null;
     inn: string[];
+    strength: Array<{ ingredient?: string | null; value?: string | null; unit?: string | null; per_value?: string | null; per_unit?: string | null }>;
     dosage_form?: string | null;
+    route?: string | null;
+    manufacturer?: string | null;
+    country_of_origin?: string | null;
   };
-  packaging: { presentation?: string | null; primary_pack?: string | null; units_per_pack?: number | null; unit_label?: string | null };
-  quantity: { minimum_order_quantity?: string | null; minimum_order_quantity_uom?: string | null };
+  packaging: { description?: string | null; presentation?: string | null; primary_pack?: string | null; units_per_pack?: number | null; unit_label?: string | null; packs_per_shipper?: number | null };
+  quantity: { quoted_quantity?: string | null; quoted_quantity_uom?: string | null; quantity_basis?: string | null; minimum_order_quantity?: string | null; minimum_order_quantity_uom?: string | null };
   pricing: {
     currency?: string | null;
     pack_price?: string | null;
     quoted_price: { amount?: string | null; uom?: string | null };
     normalized_price: { amount?: string | null; uom?: string | null; calculation?: string | null; derived?: boolean };
+    discount?: string | null;
+    extended_price?: string | null;
+    price_tiers?: Array<{ min_quantity?: string | null; max_quantity?: string | null; quantity_uom?: string | null; price?: string | null; price_uom?: string | null }>;
+    adjustments?: Array<{ type: string; value?: string | null; value_type?: string | null; condition?: string | null }>;
   };
-  supply: { lead_time_days?: number | null };
+  supply: { lead_time_days?: number | null; shelf_life_months?: number | null; minimum_remaining_shelf_life_percent?: string | null; storage_conditions?: string | null; cold_chain_required?: boolean | null };
+  regulatory: { who_prequalified?: boolean | null; who_pq_reference?: string | null; registered_markets?: string[]; registration_reference?: string | null; regulatory_status?: string | null; hs_code?: string | null; atc_code?: string | null };
   evidence: Evidence[];
 };
 

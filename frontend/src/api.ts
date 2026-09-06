@@ -23,6 +23,10 @@ export function uploadDocument(file: File): Promise<DocumentResponse> {
   return request("/api/v1/documents", { method: "POST", body: formData });
 }
 
+export function fetchDocuments(): Promise<DocumentResponse[]> {
+  return request("/api/v1/documents");
+}
+
 export function uploadBatch(files: File[], name?: string): Promise<BatchResponse> {
   const formData = new FormData();
   files.forEach((file) => formData.append("files", file));
