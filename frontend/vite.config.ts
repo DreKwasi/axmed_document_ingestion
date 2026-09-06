@@ -1,7 +1,14 @@
 import { fileURLToPath, URL } from "node:url";
 
 import vue from "@vitejs/plugin-vue";
-import { defineConfig } from "vitest/config";
+import { defineConfig, type UserConfig } from "vite";
+
+interface VitestConfigExport extends UserConfig {
+  test?: {
+    environment?: string;
+    include?: string[];
+  };
+}
 
 export default defineConfig({
   plugins: [vue()],
@@ -14,4 +21,4 @@ export default defineConfig({
     environment: "jsdom",
     include: ["src/**/*.spec.ts"]
   }
-});
+} as VitestConfigExport);

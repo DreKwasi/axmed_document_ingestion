@@ -33,13 +33,16 @@ export type Quotation = {
 
 export type DocumentResponse = {
   id: string;
+  batch_id?: string | null;
   filename: string;
   status: "needs_mapping_confirmation" | "needs_mapping_resolution" | "needs_review" | "failed" | string;
+  failure_reason?: string | null;
   source_system?: string | null;
   schema_version?: string | null;
   schema_fingerprint?: string | null;
   semantic_mapping_calls: number;
   mapping_source?: string | null;
+  parsed_summary?: { subject?: string; message_id?: string | null; page_count?: number; needs_ocr_pages?: number[] } | null;
   mapping?: {
     id: string;
     trust_state: string;
@@ -55,7 +58,19 @@ export type DocumentResponse = {
     note?: string | null;
     patches: Array<{ path: string; before?: string | null; after?: string | null }>;
   }>;
-  learning?: Array<{ review_id: string; status: string }>;
+  learning?: Array<{ id: string; review_id: string; status: string }>;
+  ocr?: { id: string; status: string; selected_pages: number[] } | null;
+};
+
+export type BatchResponse = {
+  id: string;
+  name: string;
+  created_at: string | null;
+  updated_at: string | null;
+  total_documents: number;
+  status_counts: Record<string, number>;
+  is_completed: boolean;
+  documents: DocumentResponse[];
 };
 
 export type EvaluationCase = {

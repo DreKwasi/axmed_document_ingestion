@@ -1,4 +1,4 @@
-import type { DocumentResponse, EvaluationsResponse } from "@/types";
+import type { BatchResponse, DocumentResponse, EvaluationsResponse } from "@/types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
 
@@ -23,12 +23,33 @@ export function uploadDocument(file: File): Promise<DocumentResponse> {
   return request("/api/v1/documents", { method: "POST", body: formData });
 }
 
+export function uploadBatch(files: File[], name?: string): Promise<BatchResponse> {
+  const formData = new FormData();
+  files.forEach((file) => formData.append("files", file));
+  if (name) {
+    formData.append("name", name);
+  }
+  return request("/api/v1/batches", { method: "POST", body: formData });
+}
+
+export function fetchBatch(batchId: string): Promise<BatchResponse> {
+  return request(`/api/v1/batches/${batchId}`);
+}
+
 export function confirmMapping(documentId: string): Promise<DocumentResponse> {
   return request(`/api/v1/documents/${documentId}/mapping/confirm`, { method: "POST" });
 }
 
 export function sourceDocumentUrl(documentId: string): string {
   return `${API_BASE_URL}/api/v1/documents/${documentId}/source`;
+}
+
+export function eventStreamUrl(documentId: string, afterId = 0): string {
+  return `${API_BASE_URL}/api/v1/documents/${documentId}/events/stream?after_id=${afterId}`;
+}
+
+export function fetchDocument(documentId: string): Promise<DocumentResponse> {
+  return request(`/api/v1/documents/${documentId}`);
 }
 
 export function reviewDocument(
