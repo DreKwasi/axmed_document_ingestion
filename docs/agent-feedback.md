@@ -17,4 +17,4 @@
 | 2026-09-06 | di-03-durable-learning-sse | A retry queue can empty while its application record still looks pending, which hides exhausted failures. | Require every background task to persist an explicit terminal state and test it separately from queue delivery. | adopted |
 | 2026-09-06 | di-08-batch-processing | In-memory or incremental batch counters drift on partial failure or worker restart. | Derive batch aggregate progress directly from database child document state with per-document failure isolation. | adopted |
 | 2026-09-06 | di-10-langchain-gemini | Conflating decoupling with omitting LLM reasoning caused a pipeline gap. | Preserve the deterministic-first architecture (fast path, PII scrub, schema cache) while embedding LangChain + Gemini across all extraction sources with offline fallback. | adopted |
-
+| 2026-09-06 | di-06-modal-ocr | Starting a worker before migrations lets stale queued work fail against a partial SQLite schema. | Run migrations before launching Huey and make historical interrupted migrations repairable when their prerequisite table is absent. | adopted |
