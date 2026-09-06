@@ -4,7 +4,7 @@
 > Source inspected: `/Users/andrewsboateng/Projects/piply/piply-modal` on 2026-09-06.
 > Reuse its deployment patterns as reference; do not copy its service into this repository unchanged.
 > The Axmed app owns OCR routing, review status, PII policy, provenance, and retries through an `OcrClient` port.
-> Live Modal deployment is required for final delivery but is not authorized until the user requests it.
+> Live Modal deployment is authorized by the user as of 2026-09-06; the Axmed-owned service lives in `modal/`.
 > Search terms: Modal, PaddleOCR, benchmark, OCR contract, deployment, Piply.
 
 ## What the benchmark proves
@@ -40,6 +40,10 @@ ocr(bytes, media_type, selected_original_pages, idempotency_key, deadline) ->
 
 The caller sends only pages selected by `ParseQualityPolicy`. The response is provider evidence, not a canonical quotation; normalization and semantic interpretation remain inside the Axmed pipeline.
 
+The checked-in `app.domain.ocr_contract` now enforces this response shape locally. The reference service's text-only response is therefore a benchmark input, not a deployable Axmed contract; the Axmed-owned service must add bounds, confidence, dimensions, DPI, version, and safe execution metadata before it can be wired in.
+
+`app.workers.ocr_client` sends this contract with a bounded deadline, idempotency key, selected original pages, and optional backend-to-service bearer credential. `app.workers.ocr` is the retrying queue boundary: it retains only redacted OCR evidence, emits safe stage events, and does not pretend OCR succeeded when no endpoint is configured.
+
 ## Deployment and benchmark gate
 
-When the application reaches Slice 6, request explicit authorization before running `modal deploy`. After approval: verify secret/auth setup, PII/log audit, contract tests, and rollback version; deploy the Axmed-owned service; call `/health`; exercise one clean fixture and both degraded-image fixtures; record safe deployment/configuration/commit identifiers; and run repeated cold/warm OCR measurements. Compare selected versus total pages, character count, confidence coverage, error rate, p50/p95 seconds per page, and estimated provider cost against the checked-in baseline.
+Deployment was authorized and completed on 2026-09-06. The health check, unauthorized-route check, degraded-image smoke checks, contract validation, and API-to-review smoke are recorded in `docs/worksheets/di-06-modal-ocr.md`. A repeated cold/warm benchmark with percentile and cost tracking remains the next operational benchmark task.
