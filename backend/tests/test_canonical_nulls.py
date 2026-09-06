@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from app.schema_mapping import apply_mapping
+from app.domain.schema_mapping import apply_mapping
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 

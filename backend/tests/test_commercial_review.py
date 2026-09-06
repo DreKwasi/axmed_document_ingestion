@@ -56,6 +56,18 @@ def test_correction_creates_a_new_unapproved_revision_and_preserves_audit(client
     assert len(corrected["learning"]) == 1
     assert corrected["learning"][0]["status"] == "queued"
 
+    events = client.get(f"/api/v1/documents/{document['id']}/events").json()
+    assert events == [
+        {
+            "id": 1,
+            "document_id": document["id"],
+            "learning_id": corrected["learning"][0]["id"],
+            "stage": "learning_queued",
+            "metadata": {"corrected_field_count": 1},
+            "created_at": events[0]["created_at"],
+        }
+    ]
+
 
 def test_reviewer_can_open_the_stored_source_document(client, sanova_bytes):
     document = upload_json(client, "sanova-source.json", sanova_bytes).json()
