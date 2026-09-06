@@ -1,7 +1,7 @@
 # Testing Strategy
 
 > Purpose: define evidence required for safe changes and how tests are selected.
-> Status: planned — the selected stack and test layers are defined in the implementation plan; tooling is not installed yet.
+> Status: Slice 1 implemented — pytest/Ruff and Vitest/ESLint/Vite cover backend and frontend; Playwright arrives with the first browser E2E slice.
 > Update when test layers, fixtures, commands, or test-writing guidance change.
 > Owner persona: quality engineer.
 > Related: `docs/system/test-catalog.md`, `docs/system/visual-regression.md`.

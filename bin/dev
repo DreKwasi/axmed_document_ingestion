@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Start the local FastAPI and Vue development servers as one supervised process.
+set -euo pipefail
+
+workspace_root="$(cd "$(dirname "$0")/.." && pwd)"
+api_port="${AXMED_API_PORT:-8000}"
+web_port="${AXMED_WEB_PORT:-5173}"
+
+cleanup() {
+  for pid in "${api_pid:-}" "${web_pid:-}"; do
+    if [[ -n "$pid" ]]; then
+      pkill -TERM -P "$pid" 2>/dev/null || true
+      kill "$pid" 2>/dev/null || true
+    fi
+  done
+}
+trap cleanup EXIT INT TERM
+
+cd "$workspace_root"
+PYTHONPATH=backend uv run --project backend uvicorn app.main:app --host 127.0.0.1 --port "$api_port" &
+api_pid=$!
+npm --prefix frontend run dev -- --host 127.0.0.1 --port "$web_port" &
+web_pid=$!
+
+wait "$api_pid" "$web_pid"

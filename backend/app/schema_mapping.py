@@ -1,0 +1,266 @@
+import hashlib
+import json
+import re
+from dataclasses import dataclass
+from decimal import Decimal
+from pathlib import Path
+from time import perf_counter
+from typing import Any, Protocol
+
+from app.domain import (
+    CanonicalQuotation,
+    CommercialTerms,
+    Evidence,
+    LineItem,
+    Packaging,
+    Pricing,
+    Product,
+    Quantity,
+    QuotedPrice,
+    Regulatory,
+    ReviewIssue,
+    Strength,
+    Supplier,
+    Supply,
+)
+
+
+def normalize_key(value: str) -> str:
+    separated = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", value)
+    return "_".join(part for part in re.split(r"[^a-zA-Z0-9]+", separated.lower()) if part)
+
+
+def normalized_paths(payload: Any, prefix: str = "") -> list[str]:
+    if isinstance(payload, dict):
+        paths: list[str] = []
+        for key in sorted(payload):
+            next_path = f"{prefix}.{normalize_key(key)}" if prefix else normalize_key(key)
+            paths.extend(normalized_paths(payload[key], next_path))
+        return paths or [prefix]
+    if isinstance(payload, list):
+        item_prefix = f"{prefix}[]"
+        if not payload:
+            return [item_prefix]
+        paths = []
+        for item in payload:
+            paths.extend(normalized_paths(item, item_prefix))
+        return sorted(set(paths))
+    return [prefix]
+
+
+def fingerprint(payload: Any) -> str:
+    source = "\n".join(sorted(normalized_paths(payload)))
+    return hashlib.sha256(source.encode("utf-8")).hexdigest()
+
+
+def get_path(payload: Any, path: str) -> Any:
+    current = payload
+    for segment in path.split("."):
+        if not isinstance(current, dict):
+            return None
+        current = current.get(segment)
+    return current
+
+
+def scalar(item: dict[str, Any], path: str) -> Any:
+    return get_path(item, path)
+
+
+def resolve_mapping_value(item: dict[str, Any], specification: str | dict[str, str]) -> Any:
+    if isinstance(specification, str):
+        return scalar(item, specification)
+    if "constant" in specification:
+        return specification["constant"]
+    source_value = scalar(item, specification["path"])
+    if source_value is None:
+        return None
+    transform = specification.get("transform")
+    if transform == "weeks_to_days":
+        return int(source_value) * 7
+    raise ValueError(f"Unsupported mapping transform: {transform}")
+
+
+def as_decimal(value: Any) -> Decimal | None:
+    if value is None or value == "":
+        return None
+    return Decimal(str(value))
+
+
+@dataclass(frozen=True)
+class MappingProposal:
+    mapping: dict[str, Any]
+    input_tokens: int
+    output_tokens: int
+    estimated_cost_usd: Decimal
+    provider: str
+    duration_ms: int
+
+
+class SemanticMappingProvider(Protocol):
+    def propose(self, source_system: str, schema_fingerprint: str) -> MappingProposal | None: ...
+
+
+class RecordedSemanticMappingProvider:
+    """Uses explicit, versioned recorded model responses for local development and evaluation."""
+
+    def __init__(self, fixture_directory: Path):
+        self.fixture_directory = fixture_directory
+
+    def propose(self, source_system: str, schema_fingerprint: str) -> MappingProposal | None:
+        started_at = perf_counter()
+        for fixture_path in self.fixture_directory.glob("*.json"):
+            fixture = json.loads(fixture_path.read_text())
+            if fixture["source_system"] == source_system and fixture["schema_fingerprint"] == schema_fingerprint:
+                telemetry = fixture["telemetry"]
+                return MappingProposal(
+                    mapping=fixture["mapping"],
+                    input_tokens=telemetry["input_tokens"],
+                    output_tokens=telemetry["output_tokens"],
+                    estimated_cost_usd=Decimal(telemetry["estimated_cost_usd"]),
+                    provider=telemetry["provider"],
+                    duration_ms=max(1, int((perf_counter() - started_at) * 1000)),
+                )
+        return None
+
+
+def extract_source_metadata(payload: dict[str, Any]) -> tuple[str, str | None]:
+    meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+    source_system = meta.get("source_system") or payload.get("source_system") or "unknown"
+    schema_version = meta.get("export_version") or payload.get("schema_version")
+    return str(source_system), str(schema_version) if schema_version is not None else None
+
+
+def make_evidence(canonical_field: str, source_path: str, method: str) -> Evidence:
+    return Evidence(
+        canonical_field=canonical_field,
+        source_path=source_path,
+        extraction_method=method,
+        confidence=Decimal("0.99") if method == "deterministic_mapping" else Decimal("0.80"),
+    )
+
+
+def apply_mapping(
+    payload: dict[str, Any], mapping: dict[str, Any], *, source_document: str, method: str
+) -> CanonicalQuotation:
+    quotation_paths = mapping["quotation"]
+    supplier_paths = mapping["supplier"]
+    commercial_paths = mapping["commercial_terms"]
+    evidence: list[Evidence] = []
+
+    def field(path_key: str, field_name: str) -> Any:
+        source_path = quotation_paths.get(path_key)
+        if source_path:
+            evidence.append(make_evidence(field_name, source_path, method))
+            return get_path(payload, source_path)
+        return None
+
+    quotation = CanonicalQuotation(
+        quotation_reference=field("quotation_reference", "quotation_reference"),
+        rfq_reference=field("rfq_reference", "rfq_reference"),
+        document_type=field("document_type", "document_type"),
+        issue_date=field("issue_date", "issue_date"),
+        valid_until=field("valid_until", "valid_until"),
+        supplier=Supplier(
+            **{canonical: get_path(payload, source_path) for canonical, source_path in supplier_paths.items()}
+        ),
+        commercial_terms=CommercialTerms(
+            **{canonical: get_path(payload, source_path) for canonical, source_path in commercial_paths.items()}
+        ),
+        source={"document_name": source_document, "document_format": "json"},
+        evidence=evidence,
+    )
+    for field_path, source_path in mapping.get("required_fields", {}).items():
+        if get_path(payload, source_path) is None:
+            quotation.review_issues.append(
+                ReviewIssue(
+                    field_path=field_path,
+                    code="missing_required_source_value",
+                    message="A required source value is absent; the canonical value remains null.",
+                )
+            )
+    for canonical, source_path in supplier_paths.items():
+        quotation.evidence.append(make_evidence(f"supplier.{canonical}", source_path, method))
+    for canonical, source_path in commercial_paths.items():
+        quotation.evidence.append(make_evidence(f"commercial_terms.{canonical}", source_path, method))
+
+    collection_path = mapping["line_items"]["collection_path"]
+    collection = get_path(payload, collection_path.removesuffix("[]"))
+    if not isinstance(collection, list):
+        raise ValueError(f"Mapping collection path did not resolve to a list: {collection_path}")
+    fields = mapping["line_items"]["fields"]
+    for item in collection:
+        item_evidence: list[Evidence] = []
+
+        def line(
+            path_key: str,
+            canonical_field: str,
+            source_item: dict[str, Any] = item,
+            evidence_list: list[Evidence] = item_evidence,
+        ) -> Any:
+            specification = fields.get(path_key)
+            if specification:
+                source_path = specification if isinstance(specification, str) else specification.get("path", "constant")
+                evidence_list.append(make_evidence(canonical_field, source_path, method))
+                return resolve_mapping_value(source_item, specification)
+            return None
+
+        strengths = []
+        strength_sources = fields.get("strength", {})
+        for ingredient, source_path in strength_sources.items():
+            value = scalar(item, source_path)
+            if value is not None:
+                strengths.append(Strength(ingredient=ingredient, value=as_decimal(value), unit="mg"))
+                item_evidence.append(make_evidence("product.strength", source_path, method))
+
+        line_item = LineItem(
+            source_key=line("source_key", "source_key"),
+            product=Product(
+                trade_name=line("trade_name", "product.trade_name"),
+                inn=line("inn", "product.inn") or [],
+                strength=strengths,
+                dosage_form=line("dosage_form", "product.dosage_form"),
+                manufacturer=line("manufacturer", "product.manufacturer"),
+                country_of_origin=line("country_of_origin", "product.country_of_origin"),
+            ),
+            packaging=Packaging(
+                description=line("pack_description", "packaging.description"),
+                primary_pack=line("primary_pack", "packaging.primary_pack"),
+                units_per_pack=line("units_per_pack", "packaging.units_per_pack"),
+                unit_label=line("unit_label", "packaging.unit_label"),
+                packs_per_shipper=line("packs_per_shipper", "packaging.packs_per_shipper"),
+            ),
+            quantity=Quantity(
+                minimum_order_quantity=as_decimal(line("minimum_order_quantity", "quantity.minimum_order_quantity")),
+                minimum_order_quantity_uom=line("minimum_order_quantity_uom", "quantity.minimum_order_quantity_uom"),
+            ),
+            pricing=Pricing(
+                currency=quotation.commercial_terms.currency,
+                pack_price=as_decimal(line("pack_price", "pricing.pack_price")),
+                quoted_price=QuotedPrice(
+                    amount=as_decimal(line("quoted_price_amount", "pricing.quoted_price.amount")),
+                    uom=line("quoted_price_uom", "pricing.quoted_price.uom"),
+                ),
+            ),
+            supply=Supply(
+                lead_time_days=line("lead_time_days", "supply.lead_time_days"),
+                shelf_life_months=line("shelf_life_months", "supply.shelf_life_months"),
+                storage_conditions=line("storage_conditions", "supply.storage_conditions"),
+            ),
+            regulatory=Regulatory(
+                who_prequalified=line("who_prequalified", "regulatory.who_prequalified"),
+                who_pq_reference=line("who_pq_reference", "regulatory.who_pq_reference"),
+                registered_markets=line("registered_markets", "regulatory.registered_markets") or [],
+            ),
+            evidence=item_evidence,
+        )
+        for field_path, source_path in mapping["line_items"].get("required_fields", {}).items():
+            if scalar(item, source_path) is None:
+                quotation.review_issues.append(
+                    ReviewIssue(
+                        field_path=f"line_items[{len(quotation.line_items)}].{field_path}",
+                        code="missing_required_source_value",
+                        message="A required source value is absent; the canonical value remains null.",
+                    )
+                )
+        quotation.line_items.append(line_item)
+    return quotation

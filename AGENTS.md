@@ -17,6 +17,7 @@
 | Bug or regression | `docs/system/testing.md`, `docs/system/test-catalog.md` | reproduce, fix, regression test |
 | UI work | `docs/system/visual-regression.md`, `docs/system/testing.md` | app + visual checks |
 | Performance-sensitive work | `docs/system/performance.md` | baseline and compare |
+| Model or pipeline evaluation | `docs/system/evaluations.md`, `evals/golden_dataset.json` | run stored evaluations and analyze errors |
 | Security/domain-sensitive work | `docs/system/agent-review.md` plus the relevant system doc | persona review |
 | Tooling, hooks, or repair automation | `docs/system/tooling.md` | `bin/agent-lint --fix` |
 | Autonomous/night shift | `.codex/skills/autonomous-shift/SKILL.md` | full validation before stopping |

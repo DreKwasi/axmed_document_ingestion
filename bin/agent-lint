@@ -15,6 +15,13 @@ if [[ -f pyproject.toml || -f requirements.txt ]] && command -v ruff >/dev/null;
   if $fix; then run_lint ruff check . --fix; else run_lint ruff check .; fi
 fi
 
+if [[ -f frontend/package.json ]] && command -v npm >/dev/null; then
+  if $fix; then run_lint npm --prefix frontend run lint -- --fix; else run_lint npm --prefix frontend run lint; fi
+fi
+if [[ -f backend/pyproject.toml ]] && command -v uv >/dev/null; then
+  if $fix; then run_lint env PYTHONPATH=backend uv run --project backend ruff check backend --fix; else run_lint env PYTHONPATH=backend uv run --project backend ruff check backend; fi
+fi
+
 if [[ "$ran" == 0 ]]; then
   echo "NO LINTER CONFIGURED: add a stack formatter/linter; no files were changed." >&2
   exit 2

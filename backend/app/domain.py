@@ -1,0 +1,144 @@
+from decimal import Decimal
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class Strength(BaseModel):
+    ingredient: str | None = None
+    value: Decimal | None = None
+    unit: str | None = None
+    per_value: Decimal | None = None
+    per_unit: str | None = None
+
+
+class Supplier(BaseModel):
+    name: str | None = None
+    supplier_code: str | None = None
+    country: str | None = None
+    manufacturing_site: str | None = None
+
+
+class CommercialTerms(BaseModel):
+    currency: str | None = None
+    incoterm: str | None = None
+    incoterm_named_place: str | None = None
+    payment_terms: str | None = None
+    price_basis: str | None = None
+
+
+class Packaging(BaseModel):
+    description: str | None = None
+    primary_pack: str | None = None
+    units_per_pack: int | None = None
+    unit_label: str | None = None
+    packs_per_shipper: int | None = None
+
+
+class Quantity(BaseModel):
+    quoted_quantity: Decimal | None = None
+    quoted_quantity_uom: str | None = None
+    quantity_basis: str | None = None
+    minimum_order_quantity: Decimal | None = None
+    minimum_order_quantity_uom: str | None = None
+
+
+class QuotedPrice(BaseModel):
+    amount: Decimal | None = None
+    uom: str | None = None
+
+
+class PriceTier(BaseModel):
+    min_quantity: Decimal | None = None
+    max_quantity: Decimal | None = None
+    quantity_uom: str | None = None
+    price: Decimal | None = None
+    price_uom: str | None = None
+
+
+class Adjustment(BaseModel):
+    type: str
+    value: Decimal | None = None
+    value_type: str | None = None
+    condition: str | None = None
+
+
+class Pricing(BaseModel):
+    currency: str | None = None
+    quoted_price: QuotedPrice = Field(default_factory=QuotedPrice)
+    pack_price: Decimal | None = None
+    discount: Decimal | None = None
+    extended_price: Decimal | None = None
+    price_tiers: list[PriceTier] = Field(default_factory=list)
+    adjustments: list[Adjustment] = Field(default_factory=list)
+    normalized_price: dict[str, Any] = Field(default_factory=dict)
+
+
+class Supply(BaseModel):
+    lead_time_days: int | None = None
+    shelf_life_months: int | None = None
+    minimum_remaining_shelf_life_percent: Decimal | None = None
+    storage_conditions: str | None = None
+    cold_chain_required: bool | None = None
+
+
+class Regulatory(BaseModel):
+    who_prequalified: bool | None = None
+    who_pq_reference: str | None = None
+    registered_markets: list[str] = Field(default_factory=list)
+    registration_reference: str | None = None
+    regulatory_status: str | None = None
+    hs_code: str | None = None
+    atc_code: str | None = None
+
+
+class Product(BaseModel):
+    trade_name: str | None = None
+    inn: list[str] = Field(default_factory=list)
+    strength: list[Strength] = Field(default_factory=list)
+    dosage_form: str | None = None
+    route: str | None = None
+    manufacturer: str | None = None
+    country_of_origin: str | None = None
+
+
+class Evidence(BaseModel):
+    canonical_field: str
+    source_path: str | None = None
+    extraction_method: str
+    confidence: Decimal
+
+
+class ReviewIssue(BaseModel):
+    field_path: str
+    code: str
+    message: str
+    severity: str = "warning"
+
+
+class LineItem(BaseModel):
+    source_key: str | None = None
+    product: Product = Field(default_factory=Product)
+    packaging: Packaging = Field(default_factory=Packaging)
+    quantity: Quantity = Field(default_factory=Quantity)
+    pricing: Pricing = Field(default_factory=Pricing)
+    supply: Supply = Field(default_factory=Supply)
+    regulatory: Regulatory = Field(default_factory=Regulatory)
+    evidence: list[Evidence] = Field(default_factory=list)
+
+
+class CanonicalQuotation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = "1.0"
+    quotation_reference: str | None = None
+    rfq_reference: str | None = None
+    document_type: str | None = None
+    issue_date: str | None = None
+    valid_until: str | None = None
+    supplier: Supplier = Field(default_factory=Supplier)
+    commercial_terms: CommercialTerms = Field(default_factory=CommercialTerms)
+    line_items: list[LineItem] = Field(default_factory=list)
+    source: dict[str, str | None] = Field(default_factory=dict)
+    evidence: list[Evidence] = Field(default_factory=list)
+    review_issues: list[ReviewIssue] = Field(default_factory=list)

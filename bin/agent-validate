@@ -19,9 +19,26 @@ if [[ -f package.json ]]; then
   else echo "WARN: package.json present but npm is unavailable." >&2; fi
 fi
 
+if [[ -f frontend/package.json ]]; then
+  command -v npm >/dev/null && run npm --prefix frontend run lint
+  command -v npm >/dev/null && run npm --prefix frontend test
+  if [[ "$mode" == full ]]; then
+    command -v npm >/dev/null && run npm --prefix frontend run build
+  fi
+fi
+
 if [[ -f pyproject.toml || -f requirements.txt ]]; then
   command -v ruff >/dev/null && run ruff check . || true
   command -v pytest >/dev/null && run pytest || true
+fi
+
+if [[ -f backend/pyproject.toml ]]; then
+  if command -v uv >/dev/null; then
+    run env PYTHONPATH=backend uv run --project backend ruff check backend
+    run env PYTHONPATH=backend uv run --project backend pytest backend/tests -q
+  else
+    echo "WARN: backend/pyproject.toml present but uv is unavailable." >&2
+  fi
 fi
 
 if [[ "$ran" == 0 ]]; then
