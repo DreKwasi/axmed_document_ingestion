@@ -1,6 +1,6 @@
-# Axmed Review Desk & Evaluation Lab — Frontend
+# Axmed Review Desk — Frontend
 
-Single-page web application built with **Vue 3**, **TypeScript**, and **Vite** for the Axmed Supplier Document Intelligence platform. Provides a real-time human-in-the-loop review desk, batch file uploader, live Server-Sent Events (SSE) ingestion timeline, side-by-side source provenance inspector, and evaluation lab for pharmaceutical procurement.
+Single-page web application built with **Vue 3**, **TypeScript**, **Tailwind CSS**, and **Vite** for the Axmed Supplier Document Intelligence platform. Provides a Home source list, source-level review, product breakdown, batch file uploader, and live Server-Sent Events (SSE) processing updates.
 
 ---
 
@@ -107,10 +107,6 @@ npx playwright test --ui
 - **Inline Field Corrections**: Correct any misread field; records an immutable revision trail and triggers review learning.
 - **Decision Boundary**: Explicitly Approve or Reject quotations before export.
 
-### 5. Evaluation Lab
-- Inspect precision and recall benchmarks evaluated against the golden dataset ([backend/evals/golden_dataset.json](../backend/evals/golden_dataset.json)).
-- Trigger on-demand benchmark evaluation runs directly from the UI.
-
 ---
 
 ## Directory Architecture
@@ -120,8 +116,8 @@ frontend/
 ├── src/
 │   ├── api.ts          # Strongly typed fetch client & SSE event source wrappers
 │   ├── types.ts        # TypeScript interfaces matching backend CanonicalQuotation
-│   ├── App.vue         # Main application container: Upload, Review Desk, Evaluation Lab
-│   ├── styles.css      # Design system: responsive layout, dark/light contrast tokens
+│   ├── App.vue         # Home source list, source detail, product review, and upload UI
+│   ├── styles.css      # Tailwind entrypoint
 │   ├── main.ts         # Vue 3 application entry point
 │   └── App.spec.ts     # Vitest component test suite
 ├── e2e/                # Playwright End-to-End test specs:
