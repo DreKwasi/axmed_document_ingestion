@@ -8,7 +8,13 @@ from sqlalchemy.orm import sessionmaker
 from app.core.settings import Settings
 from app.domain.pdf_parser import ParsedPdf, ParsedPdfPage, PdfParseError, parse_native_pdf
 from app.infrastructure.database import create_sqlite_engine
-from app.infrastructure.models import ModelInvocationRecord, PdfExtractionRecord, ProcessingEventRecord
+from app.infrastructure.models import (
+    ModelInvocationRecord,
+    PdfExtractionRecord,
+    ProcessingEventRecord,
+    QuotationLineItemRecord,
+    QuotationRecord,
+)
 from app.workers.pdf_extraction import consume_pdf_extraction
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -29,6 +35,18 @@ def test_native_pdf_parser_recovers_reading_order_and_marks_clean_pages(filename
     assert expected_text in parsed.text
     assert all(page.quality == "good" for page in parsed.pages)
     assert parsed.needs_ocr_pages == ()
+
+
+def test_native_pdf_parser_preserves_quotation_table_reading_order():
+    parsed = parse_native_pdf((PDF_FIXTURES / "farmaceutica_andina_proforma_FA-COT-2026-118.pdf").read_bytes())
+
+    first_page = parsed.pages[0].text
+
+    assert "Item   Product" in first_page
+    assert "Dolostop 500      Paracetamol" in first_page
+    assert "0.0091" in first_page
+    assert parsed.pages[0].raw_representation is not None
+    assert parsed.pages[0].raw_representation["page"] == 1
 
 
 def test_native_pdf_parser_rejects_non_pdf_content():
@@ -55,6 +73,10 @@ def test_pdf_upload_persists_page_quality_metadata_and_never_exposes_native_text
     ]
     assert all(artifact["metadata"]["native_text_characters"] >= 80 for artifact in document["artifacts"])
     assert "Farmaceutica Andina" not in response.text
+
+    listed = client.get("/api/v1/documents")
+    assert listed.status_code == 200
+    assert [item["filename"] for item in listed.json()] == ["andina.pdf"]
 
 
 def test_pdf_with_poor_native_page_creates_a_targeted_ocr_job(client, monkeypatch):
@@ -134,6 +156,14 @@ def test_pdf_worker_uses_redacted_page_context_and_persists_reviewable_quotation
     assert "exportaciones@fandina.com.co" not in json.dumps(submitted)
     with factory() as session:
         extraction = session.get(PdfExtractionRecord, document["pdf_extraction"]["id"])
+        quotation = session.scalar(select(QuotationRecord).where(QuotationRecord.document_id == document["id"]))
+        line_items = list(
+            session.scalars(
+                select(QuotationLineItemRecord)
+                .where(QuotationLineItemRecord.quotation_id == quotation.id)  # type: ignore[union-attr]
+                .order_by(QuotationLineItemRecord.position)
+            )
+        )
         invocation = session.scalar(
             select(ModelInvocationRecord).where(ModelInvocationRecord.document_id == document["id"])
         )
@@ -141,6 +171,7 @@ def test_pdf_worker_uses_redacted_page_context_and_persists_reviewable_quotation
             session.scalars(select(ProcessingEventRecord).where(ProcessingEventRecord.document_id == document["id"]))
         )
         assert extraction is not None and extraction.status == "completed"
+        assert len(line_items) == 1
         assert invocation is not None and invocation.status == "completed"
         assert [event.stage for event in events] == [
             "pdf_native_parse_completed",

@@ -10,11 +10,27 @@ from sqlalchemy.orm import sessionmaker
 
 from app.application.documents import ingest_email, ingest_json
 from app.core.settings import Settings
-from app.domain.contracts import CanonicalQuotation, LineItem, Pricing, Product, QuotedPrice, Supplier
+from app.domain.contracts import (
+    CanonicalQuotation,
+    LineItem,
+    Pricing,
+    Product,
+    Quantity,
+    QuotedPrice,
+    Strength,
+    Supplier,
+)
 from app.domain.langchain_extractor import LangChainSemanticExtractor, ProposedMappingSchema
 from app.domain.schema_mapping import LangChainSemanticMappingProvider
 from app.infrastructure.database import create_sqlite_engine, run_migrations
-from app.infrastructure.models import DocumentRecord, EmailExtractionRecord, ModelInvocationRecord, SchemaMappingRecord
+from app.infrastructure.models import (
+    DocumentRecord,
+    EmailExtractionRecord,
+    ModelInvocationRecord,
+    QuotationLineItemRecord,
+    QuotationRecord,
+    SchemaMappingRecord,
+)
 from app.workers.email_extraction import consume_email_extraction
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -35,6 +51,20 @@ def test_product_dosage_form_uses_the_core_pharmaceutical_form():
     assert oral_suspension.packaging.presentation == "powder for oral"
 
     assert Product(dosage_form="Syrup").dosage_form == "syrup"
+
+
+def test_packaging_reads_explicit_quantity_without_relabeling_the_source_basis():
+    line = LineItem(packaging={"description": "PVC/Alu blister, 1,000 tablets/pack"})
+    assert line.packaging.units_per_pack == 1000
+    assert line.packaging.unit_label == "tablet"
+
+    suspension = LineItem(packaging={"description": "250 mg/5 mL powder for oral suspension"})
+    assert suspension.packaging.presentation == "powder for oral"
+
+    unchanged = LineItem(packaging={"description": "supplier box", "unit_label": "box"})
+    assert unchanged.packaging.unit_label == "box"
+
+    assert Strength(ingredient="Clavulanic acid (as potassium clavulanate)").ingredient == "Clavulanic acid"
 
 
 def test_langchain_email_extraction_resolves_corrections_and_supersession():
@@ -63,8 +93,7 @@ def test_langchain_email_extraction_resolves_corrections_and_supersession():
     context = {
         "subject": "RE: RFQ-2026-0244 - Novara Farma Quotation",
         "body_text": (
-            "Initial price: Azimax 250 is EUR 0.128 per tablet.\n"
-            "Correction: Azimax 250 is EUR 0.134 per tablet."
+            "Initial price: Azimax 250 is EUR 0.128 per tablet.\nCorrection: Azimax 250 is EUR 0.134 per tablet."
         ),
     }
     quotation, telemetry = extractor.extract_canonical_quotation(context, source_type="email")
@@ -256,6 +285,7 @@ def test_pdf_worker_executes_langchain_when_gemini_configured(tmp_path):
         line_items=[
             LineItem(
                 product=Product(trade_name="Amoxicilina 500mg"),
+                quantity=Quantity(quoted_quantity=Decimal("1200"), quoted_quantity_uom="capsule"),
                 pricing=Pricing(currency="USD", quoted_price=QuotedPrice(amount=Decimal("0.045"), uom="capsule")),
             )
         ],
@@ -270,6 +300,13 @@ def test_pdf_worker_executes_langchain_when_gemini_configured(tmp_path):
         doc = session.get(DocumentRecord, doc.id)
         assert doc.status == "needs_review"
         assert doc.quotation is not None
+        quotation = session.scalar(select(QuotationRecord).where(QuotationRecord.document_id == doc.id))
+        line_item = session.scalar(
+            select(QuotationLineItemRecord).where(QuotationLineItemRecord.quotation_id == quotation.id)  # type: ignore[union-attr]
+        )
+        assert line_item is not None
+        assert line_item.quoted_quantity == Decimal("1200")
+        assert line_item.quoted_quantity_uom == "capsule"
         invocation = session.scalar(
             select(ModelInvocationRecord).where(
                 ModelInvocationRecord.document_id == doc.id,
@@ -295,10 +332,10 @@ def test_ocr_worker_executes_langchain_when_gemini_configured(tmp_path):
         database_url=db_url,
         upload_dir=tmp_path / "uploads",
         gemini_api_key="test-api-key",
-            gemini_model="gemini-3.1-flash-lite",
-            ocr_service_url="https://modal.example.com/ocr",
-            ocr_service_token="test-service-token",
-        )
+        gemini_model="gemini-3.1-flash-lite",
+        ocr_service_url="https://modal.example.com/ocr",
+        ocr_service_token="test-service-token",
+    )
 
     engine = create_sqlite_engine(db_url)
     session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
