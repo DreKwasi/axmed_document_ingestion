@@ -27,6 +27,22 @@ export function confirmMapping(documentId: string): Promise<DocumentResponse> {
   return request(`/api/v1/documents/${documentId}/mapping/confirm`, { method: "POST" });
 }
 
+export function sourceDocumentUrl(documentId: string): string {
+  return `${API_BASE_URL}/api/v1/documents/${documentId}/source`;
+}
+
+export function reviewDocument(
+  documentId: string,
+  action: "approve" | "reject" | "correct",
+  command: { request_id: string; expected_revision: number; note?: string; patches?: Array<{ path: string; value: string }> }
+): Promise<DocumentResponse> {
+  return request(`/api/v1/documents/${documentId}/reviews/${action}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(command)
+  });
+}
+
 export function fetchEvaluations(): Promise<EvaluationsResponse> {
   return request("/api/v1/evaluations");
 }

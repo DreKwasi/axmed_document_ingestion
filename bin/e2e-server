@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Starts isolated API and web servers for Playwright; no user data is reused.
+set -euo pipefail
+
+workspace_root="$(cd "$(dirname "$0")/.." && pwd)"
+runtime_dir="$(mktemp -d)"
+
+cleanup() {
+  for pid in "$api_pid" "$web_pid"; do
+    [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
+  done
+  rm -rf "$runtime_dir"
+}
+api_pid=""
+web_pid=""
+trap cleanup EXIT INT TERM
+
+cd "$workspace_root"
+env PYTHONPATH=backend AXMED_DATABASE_URL="sqlite:///$runtime_dir/app.db" AXMED_UPLOAD_DIR="$runtime_dir/uploads" AXMED_CORS_ORIGINS="http://127.0.0.1:15173" uv run --project backend uvicorn app.main:app --host 127.0.0.1 --port 18000 &
+api_pid=$!
+for attempt in {1..60}; do
+  curl -fsS http://127.0.0.1:18000/health >/dev/null && break
+  sleep 0.25
+done
+curl -fsS http://127.0.0.1:18000/health >/dev/null
+env VITE_API_BASE_URL="http://127.0.0.1:18000" npm --prefix frontend run dev -- --host 127.0.0.1 --port 15173 &
+web_pid=$!
+
+wait "$api_pid" "$web_pid"

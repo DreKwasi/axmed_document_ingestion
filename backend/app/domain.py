@@ -107,6 +107,7 @@ class Evidence(BaseModel):
     source_path: str | None = None
     extraction_method: str
     confidence: Decimal
+    supersedes_source_path: str | None = None
 
 
 class ReviewIssue(BaseModel):

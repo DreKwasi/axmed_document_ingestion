@@ -1,16 +1,20 @@
 import hashlib
 import json
+from collections.abc import Callable
+from dataclasses import dataclass
 from decimal import InvalidOperation
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.commercial_rules import apply_commercial_rules, decimal_patch
 from app.domain import CanonicalQuotation
-from app.models import DocumentRecord, QuotationRecord, SchemaMappingRecord
+from app.models import DocumentRecord, QuotationRecord, ReviewLearningRecord, ReviewRecord, SchemaMappingRecord
 from app.schema_mapping import (
     RecordedSemanticMappingProvider,
     apply_mapping,
@@ -22,6 +26,30 @@ from app.settings import Settings
 
 class UploadValidationError(ValueError):
     pass
+
+
+class ReviewValidationError(ValueError):
+    pass
+
+
+@dataclass(frozen=True)
+class CorrectableLineField:
+    canonical_field: str
+    parse: Callable[[object], Any]
+
+
+def _integer_patch(value: object) -> int:
+    decimal_value = decimal_patch(value)
+    if decimal_value != decimal_value.to_integral_value():
+        raise ValueError("This correction must be a whole number.")
+    return int(decimal_value)
+
+
+CORRECTABLE_LINE_FIELDS = {
+    "pricing.pack_price": CorrectableLineField("pricing.pack_price", decimal_patch),
+    "quantity.minimum_order_quantity": CorrectableLineField("quantity.minimum_order_quantity", decimal_patch),
+    "packaging.units_per_pack": CorrectableLineField("packaging.units_per_pack", _integer_patch),
+}
 
 
 def validate_json_upload(filename: str, content_type: str | None, data: bytes, settings: Settings) -> None:
@@ -52,7 +80,7 @@ def read_json(data: bytes) -> dict[str, Any]:
 
 def _upsert_quotation(session: Session, document: DocumentRecord, quotation: CanonicalQuotation) -> QuotationRecord:
     stored = session.scalar(select(QuotationRecord).where(QuotationRecord.document_id == document.id))
-    payload_json = quotation.model_dump_json()
+    payload_json = apply_commercial_rules(quotation).model_dump_json()
     if stored:
         stored.payload_json = payload_json
         stored.revision += 1
@@ -60,6 +88,130 @@ def _upsert_quotation(session: Session, document: DocumentRecord, quotation: Can
     stored = QuotationRecord(document_id=document.id, payload_json=payload_json)
     session.add(stored)
     return stored
+
+
+def apply_review_action(session: Session, document_id: str, action: str, command: dict[str, Any]) -> DocumentRecord:
+    document = session.get(DocumentRecord, document_id)
+    quotation = session.scalar(select(QuotationRecord).where(QuotationRecord.document_id == document_id))
+    if document is None or quotation is None:
+        raise LookupError("Document quotation not found.")
+    request_id = str(command["request_id"])
+    existing = session.scalar(
+        select(ReviewRecord).where(ReviewRecord.document_id == document_id, ReviewRecord.request_id == request_id)
+    )
+    if existing:
+        return document
+    expected_revision = int(command["expected_revision"])
+    if expected_revision != quotation.revision:
+        raise ValueError("The quotation revision is stale; reload before deciding.")
+    if document.status != "needs_review" or quotation.review_status != "unreviewed":
+        raise ValueError("Only an unreviewed quotation that completed processing can receive a decision.")
+    payload = json.loads(quotation.payload_json)
+    prior_revision = quotation.revision
+    patches = command.get("patches", [])
+    audit_patches: list[dict[str, Any]] = []
+    if action == "corrected":
+        for patch in patches:
+            segments = patch["path"].split(".")
+            if len(segments) != 4 or segments[0] != "line_items":
+                raise ReviewValidationError("Correction path is not supported.")
+            field = CORRECTABLE_LINE_FIELDS.get(".".join(segments[2:]))
+            if field is None:
+                raise ReviewValidationError("Correction field is not supported.")
+            try:
+                line_index = int(segments[1])
+                current: Any = payload
+                for segment in segments[:-1]:
+                    current = current[int(segment)] if isinstance(current, list) else current[segment]
+                before = current[segments[-1]]
+            except (IndexError, KeyError, TypeError, ValueError) as error:
+                raise ReviewValidationError("Correction path does not exist in this quotation.") from error
+            try:
+                value = field.parse(patch.get("value"))
+            except ValueError as error:
+                raise ReviewValidationError(str(error)) from error
+            current[segments[-1]] = value
+            line_evidence = payload["line_items"][line_index]["evidence"]
+            prior_evidence = next(
+                (evidence for evidence in line_evidence if evidence["canonical_field"] == field.canonical_field),
+                {},
+            )
+            line_evidence.append(
+                {
+                    "canonical_field": field.canonical_field,
+                    "source_path": f"review:{request_id}",
+                    "extraction_method": "human_corrected",
+                    "confidence": "1.00",
+                    "supersedes_source_path": prior_evidence.get("source_path"),
+                }
+            )
+            audit_patches.append({"path": patch["path"], "before": before, "after": value})
+        canonical = apply_commercial_rules(CanonicalQuotation.model_validate(payload))
+        payload_json = canonical.model_dump_json()
+        next_review_status = "unreviewed"
+    else:
+        if action == "approved" and any(issue.get("severity") == "error" for issue in payload.get("review_issues", [])):
+            raise ValueError("Resolve error-level review issues before approval.")
+        payload_json = quotation.payload_json
+        next_review_status = "approved" if action == "approved" else "rejected"
+    next_revision = prior_revision + 1
+    transition = session.execute(
+        update(QuotationRecord)
+        .where(
+            QuotationRecord.id == quotation.id,
+            QuotationRecord.revision == prior_revision,
+            QuotationRecord.review_status == "unreviewed",
+        )
+        .values(payload_json=payload_json, review_status=next_review_status, revision=next_revision)
+    )
+    if transition.rowcount != 1:
+        session.rollback()
+        replay = session.scalar(
+            select(ReviewRecord).where(ReviewRecord.document_id == document_id, ReviewRecord.request_id == request_id)
+        )
+        if replay:
+            return session.get(DocumentRecord, document_id)  # type: ignore[return-value]
+        raise ValueError("The quotation changed before this decision could be applied; reload and try again.")
+    review = ReviewRecord(
+        document_id=document_id,
+        request_id=request_id,
+        action=action,
+        prior_revision=prior_revision,
+        resulting_revision=next_revision,
+        patches_json=json.dumps(audit_patches if action == "corrected" else patches, default=str),
+        note=command.get("note"),
+    )
+    session.add(review)
+    try:
+        if action == "corrected":
+            session.flush()
+            session.add(
+                ReviewLearningRecord(
+                    document_id=document_id,
+                    review_id=review.id,
+                    source_system=document.source_system,
+                    schema_fingerprint=document.schema_fingerprint,
+                    status="queued",
+                    context_json=json.dumps(
+                        {
+                            "rule": "Learn field interpretation, never copy corrected commercial values.",
+                            "corrected_fields": [{"path": patch["path"]} for patch in audit_patches],
+                        },
+                        default=str,
+                    ),
+                )
+            )
+        session.commit()
+    except IntegrityError as error:
+        session.rollback()
+        replay = session.scalar(
+            select(ReviewRecord).where(ReviewRecord.document_id == document_id, ReviewRecord.request_id == request_id)
+        )
+        if replay:
+            return session.get(DocumentRecord, document_id)  # type: ignore[return-value]
+        raise ValueError("The decision could not be recorded; reload and try again.") from error
+    session.expire(document)
+    return document
 
 
 def _find_mapping(
@@ -217,6 +369,10 @@ def confirm_mapping(session: Session, document_id: str, settings: Settings) -> D
 
 def serialize_document(session: Session, document: DocumentRecord) -> dict[str, Any]:
     quotation = session.scalar(select(QuotationRecord).where(QuotationRecord.document_id == document.id))
+    quotation_payload = None if quotation is None else json.loads(quotation.payload_json)
+    if quotation_payload is not None:
+        quotation_payload["revision"] = quotation.revision
+        quotation_payload["review_status"] = quotation.review_status
     mapping = None
     if document.source_system and document.schema_fingerprint:
         mapping = _find_mapping(
@@ -243,5 +399,30 @@ def serialize_document(session: Session, document: DocumentRecord) -> dict[str, 
             "times_confirmed": mapping.times_confirmed,
             "human_verified": mapping.human_verified,
         },
-        "quotation": None if quotation is None else json.loads(quotation.payload_json),
+        "quotation": quotation_payload,
+        "reviews": [
+            {
+                "action": review.action,
+                "prior_revision": review.prior_revision,
+                "resulting_revision": review.resulting_revision,
+                "note": review.note,
+                "patches": json.loads(review.patches_json),
+            }
+            for review in session.scalars(
+                select(ReviewRecord)
+                .where(ReviewRecord.document_id == document.id)
+                .order_by(ReviewRecord.created_at.desc())
+            )
+        ],
+        "learning": [
+            {
+                "review_id": learning.review_id,
+                "status": learning.status,
+            }
+            for learning in session.scalars(
+                select(ReviewLearningRecord)
+                .where(ReviewLearningRecord.document_id == document.id)
+                .order_by(ReviewLearningRecord.created_at.desc())
+            )
+        ],
     }

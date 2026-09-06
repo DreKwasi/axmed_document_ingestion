@@ -9,11 +9,10 @@
 
 ## Ready
 
-- [ ] **DI-02: Commercial rules and review decisions** — add deterministic calculations, validation, provenance, correction revisions, approval, and rejection. Acceptance: Slice 2.
+- [ ] **DI-03: Durable processing and SSE** — add Huey, safe persisted events, reconnectable SSE, bounded retries, diagnostics, and PII-safe execution of queued correction-learning/model-reconciliation jobs. Acceptance: Slice 3.
 
 ## Blocked
 
-- [ ] **DI-03: Durable processing and SSE** — add Huey, safe persisted events, reconnectable SSE, bounded retries, and diagnostics. Blocked by: DI-02. Acceptance: Slice 3.
 - [ ] **DI-04: Email correction extraction** — parse the Novara EML, redact before semantic extraction, and preserve price supersession evidence. Blocked by: DI-02, DI-03. Acceptance: Slice 4.
 - [ ] **DI-05: Native PDF extraction** — timebox LiteParse behind the parser port, then parse Farmaceutica and Mekong. Blocked by: DI-02, DI-03. Acceptance: Slice 5.
 - [ ] **DI-06: Live Modal OCR escalation** — build the secure provider adapter and selective-page OCR path, then request user authorization before deploying to Modal. Blocked by: DI-03, DI-05. Acceptance: Slice 6 and `docs/benchmarks/piply-modal-reference.md`.
@@ -28,3 +27,4 @@
 ## Completed
 
 - [x] **DI-01: Schema-learning JSON vertical slice** — FastAPI/Vue/SQLite intake, canonical contract, safe JSON validation, versioned recorded mapping, human confirmation, version-scoped trusted reuse, conflict state, migrations, and persisted eval baseline. Evidence: `docs/worksheets/di-01-schema-learning-json.md`, commit `d5c1796`, tag `worksheet/di-01-schema-learning-json`.
+- [x] **DI-02: Commercial rules and review decisions** — deterministic calculations, validation, provenance, typed correction revisions, approval/rejection, source access, and multi-document JSON review. Evidence: `docs/worksheets/di-02-commercial-review.md`.

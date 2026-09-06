@@ -50,6 +50,37 @@ class QuotationRecord(Base):
     document: Mapped[DocumentRecord] = relationship(back_populates="quotation")
 
 
+class ReviewRecord(Base):
+    __tablename__ = "reviews"
+    __table_args__ = (UniqueConstraint("document_id", "request_id", name="uq_review_request"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    document_id: Mapped[str] = mapped_column(ForeignKey("documents.id"), index=True)
+    request_id: Mapped[str] = mapped_column(String(120))
+    action: Mapped[str] = mapped_column(String(40))
+    prior_revision: Mapped[int] = mapped_column(Integer)
+    resulting_revision: Mapped[int] = mapped_column(Integer)
+    patches_json: Mapped[str] = mapped_column(Text, default="[]")
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ReviewLearningRecord(Base):
+    __tablename__ = "review_learning"
+    __table_args__ = (UniqueConstraint("review_id", name="uq_review_learning_review"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    document_id: Mapped[str] = mapped_column(ForeignKey("documents.id"), index=True)
+    review_id: Mapped[str] = mapped_column(ForeignKey("reviews.id"))
+    source_system: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    schema_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(40), default="queued")
+    context_json: Mapped[str] = mapped_column(Text)
+    result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class SchemaMappingRecord(Base):
     __tablename__ = "schema_mappings"
     __table_args__ = (

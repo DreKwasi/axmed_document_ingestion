@@ -1,26 +1,53 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { onMounted, ref } from "vue";
 
-import { confirmMapping, fetchEvaluations, runEvaluation, uploadDocument } from "@/api";
+import { confirmMapping, fetchEvaluations, reviewDocument, runEvaluation, sourceDocumentUrl, uploadDocument } from "@/api";
 import type { DocumentResponse, EvaluationsResponse } from "@/types";
 
 type Tab = "review" | "evaluations";
 
 const activeTab = ref<Tab>("review");
-const selectedDocument = ref<DocumentResponse | null>(null);
+const documents = ref<DocumentResponse[]>([]);
 const evaluations = ref<EvaluationsResponse | null>(null);
 const busy = ref(false);
 const errorMessage = ref("");
 const fileInput = ref<HTMLInputElement | null>(null);
+const correctionValues = ref<Record<string, string>>({});
+const correctionFields = ref<Record<string, string>>({});
+const correctionNotes = ref<Record<string, string>>({});
 
-const statusLabel = computed(() => {
-  const status = selectedDocument.value?.status;
-  if (status === "needs_mapping_confirmation") return "Mapping needs your confirmation";
-  if (status === "needs_mapping_resolution") return "Changed source structure needs review";
-  if (status === "needs_review") return "Ready for quotation review";
-  if (status === "failed") return "Extraction stopped safely";
-  return "Awaiting a document";
-});
+function correctionKey(documentId: string, lineIndex: number) {
+  return `${documentId}:${lineIndex}`;
+}
+
+function correctionPath(documentId: string, lineIndex: number) {
+  const field = correctionFields.value[correctionKey(documentId, lineIndex)] ?? "pricing.pack_price";
+  return `line_items.${lineIndex}.${field}`;
+}
+
+function hasBlockingIssue(document: DocumentResponse) {
+  return document.quotation?.review_issues.some((issue) => issue.severity === "error") ?? false;
+}
+
+function displayPrice(value: string | null | undefined) {
+  if (value == null) return "—";
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric.toLocaleString(undefined, { maximumFractionDigits: 6 }) : value;
+}
+
+function priceEvidence(item: { evidence: Array<{ canonical_field: string; source_path?: string | null; extraction_method: string; confidence: string }> }) {
+  return item.evidence.find((evidence) => evidence.canonical_field === "pricing.pack_price") ?? item.evidence[0];
+}
+
+function source(item: { evidence: Array<{ canonical_field: string; source_path?: string | null; extraction_method: string; confidence: string }> }) {
+  const evidence = priceEvidence(item);
+  return evidence?.source_path ?? evidence?.extraction_method ?? "—";
+}
+
+function confidence(item: { evidence: Array<{ canonical_field: string; source_path?: string | null; extraction_method: string; confidence: string }> }) {
+  const value = priceEvidence(item)?.confidence;
+  return value ? `${Math.round(Number(value) * 100)}%` : "—";
+}
 
 async function loadEvaluations() {
   evaluations.value = await fetchEvaluations();
@@ -28,31 +55,37 @@ async function loadEvaluations() {
 
 async function chooseFile(event: Event) {
   const input = event.target as HTMLInputElement;
-  const [file] = input.files ?? [];
-  if (file) await upload(file);
-  input.value = "";
-}
-
-async function upload(file: File) {
+  const files = Array.from(input.files ?? []);
+  if (!files.length) return;
   busy.value = true;
   errorMessage.value = "";
   try {
-    selectedDocument.value = await uploadDocument(file);
-  } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : "Upload failed.";
+    const results = await Promise.allSettled(files.map(uploadDocument));
+    const accepted = results.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
+    const failures = results
+      .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+      .map((result) => (result.reason instanceof Error ? result.reason.message : "Upload failed."));
+    documents.value.push(...accepted);
+    if (failures.length) {
+      errorMessage.value = failures.join(" ");
+    }
   } finally {
     busy.value = false;
+    input.value = "";
   }
 }
 
-async function confirm() {
-  if (!selectedDocument.value) return;
+function replaceDocument(nextDocument: DocumentResponse) {
+  documents.value = documents.value.map((document) => (document.id === nextDocument.id ? nextDocument : document));
+}
+
+async function confirm(document: DocumentResponse) {
   busy.value = true;
   errorMessage.value = "";
   try {
-    selectedDocument.value = await confirmMapping(selectedDocument.value.id);
+    replaceDocument(await confirmMapping(document.id));
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : "Mapping confirmation failed.";
+    errorMessage.value = error instanceof Error ? error.message : "Confirmation failed.";
   } finally {
     busy.value = false;
   }
@@ -71,148 +104,153 @@ async function evaluate() {
   }
 }
 
-onMounted(async () => {
+async function decide(document: DocumentResponse, action: "approve" | "reject" | "correct", lineIndex?: number) {
+  if (!document.quotation) return;
+  busy.value = true;
+  errorMessage.value = "";
   try {
-    await loadEvaluations();
-  } catch {
-    // The review workflow remains useful when the API is still starting.
+    replaceDocument(await reviewDocument(document.id, action, {
+      request_id: `${action}-${crypto.randomUUID()}`,
+      expected_revision: document.quotation.revision,
+      note: correctionNotes.value[document.id] || undefined,
+      patches:
+        action === "correct" && lineIndex !== undefined
+          ? [
+              {
+                path: correctionPath(document.id, lineIndex),
+                value: correctionValues.value[correctionKey(document.id, lineIndex)]
+              }
+            ]
+          : undefined
+    }));
+    delete correctionValues.value[correctionKey(document.id, lineIndex ?? 0)];
+    delete correctionFields.value[correctionKey(document.id, lineIndex ?? 0)];
+    delete correctionNotes.value[document.id];
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : "Review failed.";
+  } finally {
+    busy.value = false;
   }
-});
+}
+
+onMounted(() => loadEvaluations().catch(() => undefined));
 </script>
 
 <template>
   <main class="app-shell">
     <header class="masthead">
-      <a class="wordmark" href="#" aria-label="Axmed source ledger home">
-        <span class="wordmark-mark">A</span>
-        <span>AXMED</span>
-      </a>
-      <nav aria-label="Workspace sections">
-        <button :class="{ active: activeTab === 'review' }" @click="activeTab = 'review'">Review desk</button>
+      <span class="wordmark">AXMED</span>
+      <nav aria-label="Sections">
+        <button :class="{ active: activeTab === 'review' }" @click="activeTab = 'review'">Review</button>
         <button :class="{ active: activeTab === 'evaluations' }" @click="activeTab = 'evaluations'">Evaluation lab</button>
       </nav>
-      <div class="environment-pill"><span></span> Local evidence ledger</div>
     </header>
 
-    <section v-if="activeTab === 'review'" class="review-layout">
-      <div class="intro-panel">
-        <p class="eyebrow">Supplier intelligence / intake 01</p>
-        <h1>Keep the offer.<br /><em>Challenge the guess.</em></h1>
-        <p class="intro-copy">
-          Upload a supplier export. New structures request a human-confirmed mapping; repeat structures become deterministic data processing.
-        </p>
-        <dl class="rule-list">
-          <div><dt>01</dt><dd>Supplier source stays traceable</dd></div>
-          <div><dt>02</dt><dd>Model work is measured, never assumed</dd></div>
-          <div><dt>03</dt><dd>Review is the acceptance boundary</dd></div>
-        </dl>
+    <section v-if="activeTab === 'review'" class="workspace">
+      <div class="toolbar">
+        <h1>Documents</h1>
+        <input ref="fileInput" class="visually-hidden" type="file" accept="application/json,.json" multiple @change="chooseFile" />
+        <button class="primary-action" :disabled="busy" @click="fileInput?.click()">{{ busy ? "Ingesting…" : "Ingest JSON" }}</button>
       </div>
 
-      <section class="intake-card" aria-labelledby="intake-title">
-        <div class="card-kicker"><span class="live-dot"></span> JSON intake enabled</div>
-        <h2 id="intake-title">Bring in a supplier export</h2>
-        <p>Start with a JSON file. PDF, email, and OCR paths enter the same ledger in later stages.</p>
-        <input ref="fileInput" class="visually-hidden" type="file" accept="application/json,.json" @change="chooseFile" />
-        <button class="upload-zone" :disabled="busy" @click="fileInput?.click()">
-          <span class="upload-icon">↑</span>
-          <span><strong>{{ busy ? 'Reading the structure…' : 'Select supplier JSON' }}</strong><small>Maximum 5 MB · signature checked</small></span>
-        </button>
-        <p class="quiet-note">Try <code>sanova_offer_export_2026-08-03.json</code> from the supplied corpus.</p>
-      </section>
+      <p v-if="errorMessage" class="error-message" role="alert">{{ errorMessage }}</p>
 
-      <section class="ledger-card" aria-live="polite">
-        <div class="ledger-heading">
-          <div>
-            <p class="eyebrow">Current intake</p>
-            <h2>{{ selectedDocument?.filename ?? 'No source selected' }}</h2>
-          </div>
-          <span class="status-badge" :data-status="selectedDocument?.status ?? 'idle'">{{ statusLabel }}</span>
+      <section v-for="document in documents" :key="document.id" class="document-group">
+        <div v-if="document.status === 'needs_mapping_confirmation'" class="notice">
+          <span>{{ document.filename }} · new mapping</span>
+          <button class="primary-action" :disabled="busy" @click="confirm(document)">Confirm map</button>
+        </div>
+        <div v-else-if="document.status === 'needs_mapping_resolution'" class="notice notice-error">
+          {{ document.filename }} · changed source structure
         </div>
 
-        <p v-if="errorMessage" class="error-message" role="alert">{{ errorMessage }}</p>
-        <div v-else-if="!selectedDocument" class="empty-state">A source ledger will appear here after upload.</div>
-
-        <template v-else>
-          <div class="metric-strip">
-            <div><span>Source system</span><strong>{{ selectedDocument.source_system }}</strong></div>
-            <div><span>Schema version</span><strong>{{ selectedDocument.schema_version }}</strong></div>
-            <div><span>Semantic calls</span><strong>{{ selectedDocument.semantic_mapping_calls }}</strong></div>
-          </div>
-
-          <div v-if="selectedDocument.status === 'needs_mapping_confirmation'" class="confirmation-panel">
+        <section v-if="document.quotation" class="panel">
+          <div class="panel-header">
             <div>
-              <p class="eyebrow">Human checkpoint</p>
-              <h3>Confirm this source-to-canonical map</h3>
-              <p>The recorded mapper proposed a structure. Confirmation makes only this supplier fingerprint reusable.</p>
+              <h2>{{ document.filename }}</h2>
+              <span class="metadata">{{ document.source_system }} · {{ document.schema_version }}</span>
             </div>
-            <button class="primary-action" :disabled="busy" @click="confirm">Confirm mapping</button>
+            <span class="status">{{ document.quotation.review_status }} · v{{ document.quotation.revision }}</span>
           </div>
 
-          <div v-if="selectedDocument.status === 'needs_mapping_resolution'" class="confirmation-panel conflict-panel">
-            <div>
-              <p class="eyebrow">Safe stop</p>
-              <h3>The source structure changed</h3>
-              <p>No prior mapping was applied. A reviewer must resolve this schema before it can be processed.</p>
-            </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Product</th><th>Quantity</th><th>Quoted</th><th>Derived</th><th>Source</th><th>Confidence</th><th>Issue</th><th>Review</th><th>Action</th></tr>
+              </thead>
+              <tbody>
+                <tr v-for="(item, index) in document.quotation.line_items" :key="item.source_key ?? index">
+                  <td><strong>{{ item.product.trade_name ?? "—" }}</strong><small>{{ item.product.inn.join(" · ") }}</small></td>
+                  <td>{{ item.quantity.minimum_order_quantity ?? "—" }} {{ item.quantity.minimum_order_quantity_uom }}</td>
+                  <td>{{ item.pricing.currency }} {{ displayPrice(item.pricing.quoted_price.amount) }} / {{ item.pricing.quoted_price.uom }}</td>
+                  <td>
+                    {{ item.pricing.currency }} {{ displayPrice(item.pricing.normalized_price.amount) }} / {{ item.pricing.normalized_price.uom }}
+                    <small>{{ item.pricing.normalized_price.calculation }}</small>
+                  </td>
+                  <td>
+                    <a :href="sourceDocumentUrl(document.id)" target="_blank" rel="noreferrer">{{ source(item) }}</a>
+                  </td>
+                  <td>{{ confidence(item) }}</td>
+                  <td>
+                    <span v-for="issue in document.quotation.review_issues.filter((issue) => issue.field_path.startsWith(`line_items[${index}]`))" :key="issue.code" class="issue">
+                      {{ issue.message }}
+                    </span>
+                    <span v-if="!document.quotation.review_issues.some((issue) => issue.field_path.startsWith(`line_items[${index}]`))">—</span>
+                  </td>
+                  <td>{{ document.quotation.review_status }}</td>
+                  <td>
+                    <select v-model="correctionFields[correctionKey(document.id, index)]" aria-label="Correction field">
+                      <option value="pricing.pack_price">Pack price</option>
+                      <option value="quantity.minimum_order_quantity">MOQ</option>
+                      <option value="packaging.units_per_pack">Units / pack</option>
+                    </select>
+                    <input v-model="correctionValues[correctionKey(document.id, index)]" :aria-label="`Correction value for ${item.product.trade_name ?? index}`" placeholder="Value" inputmode="decimal" />
+                    <button class="table-action" :disabled="busy || !correctionValues[correctionKey(document.id, index)]" @click="decide(document, 'correct', index)">Correct</button>
+                  </td>
+                </tr>
+              </tbody>
+              <tfoot v-if="document.status === 'needs_review'">
+                <tr>
+                  <td colspan="9">
+                    <div class="table-review">
+                      <span v-if="hasBlockingIssue(document)" class="issue">Resolve issues before approval.</span>
+                      <input v-model="correctionNotes[document.id]" :aria-label="`Review note for ${document.filename}`" placeholder="Note" />
+                      <button :disabled="busy || hasBlockingIssue(document)" @click="decide(document, 'approve')">Approve</button>
+                      <button :disabled="busy" @click="decide(document, 'reject')">Reject</button>
+                    </div>
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
           </div>
+        </section>
+      </section>
 
-          <div v-if="selectedDocument.quotation" class="quotation-view">
-            <div class="quote-summary">
-              <div><span>Reference</span><strong>{{ selectedDocument.quotation.quotation_reference }}</strong></div>
-              <div><span>Supplier</span><strong>{{ selectedDocument.quotation.supplier.name }}</strong></div>
-              <div><span>Terms</span><strong>{{ selectedDocument.quotation.commercial_terms.incoterm }} {{ selectedDocument.quotation.commercial_terms.incoterm_named_place }}</strong></div>
-            </div>
-            <div class="table-wrap">
-              <table>
-                <thead><tr><th>Product</th><th>Pack</th><th>MOQ</th><th>Pack price</th><th>Evidence</th></tr></thead>
-                <tbody>
-                  <tr v-for="(item, index) in selectedDocument.quotation.line_items" :key="item.source_key ?? index">
-                    <td><strong>{{ item.product.trade_name }}</strong><small>{{ item.product.inn.join(' · ') }}</small></td>
-                    <td>{{ item.packaging.units_per_pack }} {{ item.packaging.unit_label }}<small>{{ item.packaging.primary_pack }}</small></td>
-                    <td>{{ item.quantity.minimum_order_quantity }} {{ item.quantity.minimum_order_quantity_uom }}</td>
-                    <td>{{ item.pricing.currency }} {{ item.pricing.pack_price }}</td>
-                    <td><span class="evidence-chip">{{ item.evidence.length }} source links</span></td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </template>
+      <section v-if="!documents.length" class="panel">
+        <div class="empty-state">Ingest JSON files to view extracted offers.</div>
       </section>
     </section>
 
-    <section v-else class="evaluation-layout">
-      <div class="evaluation-heading">
-        <div>
-          <p class="eyebrow">Level 1 / module evaluation</p>
-          <h1>Evidence over <em>plausibility.</em></h1>
-          <p>Each run is persisted in SQLite with its rubric, case-level scores, and error analysis.</p>
-        </div>
-        <button class="primary-action" :disabled="busy" @click="evaluate">{{ busy ? 'Running…' : 'Run recorded evaluation' }}</button>
+    <section v-else class="workspace">
+      <div class="toolbar">
+        <h1>Evaluations</h1>
+        <button class="primary-action" :disabled="busy" @click="evaluate">{{ busy ? "Running…" : "Run" }}</button>
       </div>
-
-      <div class="rubric-grid">
-        <article v-for="rubric in evaluations?.cases[0]?.rubric ?? []" :key="rubric.id">
-          <span class="rubric-number">{{ rubric.id.slice(0, 2).toUpperCase() }}</span>
-          <h2>{{ rubric.label }}</h2>
-          <p>{{ rubric.success_criterion }}</p>
-        </article>
-      </div>
-
-      <section class="runs-card">
-        <div class="ledger-heading"><div><p class="eyebrow">Stored run history</p><h2>Golden dataset results</h2></div></div>
-        <p v-if="errorMessage" class="error-message" role="alert">{{ errorMessage }}</p>
-        <div v-else-if="!evaluations?.runs.length" class="empty-state">No evaluation runs yet. The first run verifies the cold-to-warm mapping contract.</div>
-        <div v-else class="run-list">
-          <article v-for="run in evaluations.runs" :key="run.id" class="run-row">
-            <div><span class="run-mode">{{ run.execution_mode }}</span><strong>{{ run.summary.passed }}/{{ run.summary.case_count }} cases passed</strong><small>{{ new Date(run.created_at).toLocaleString() }}</small></div>
-            <div v-for="result in run.results" :key="result.case_id" class="score-cluster">
-              <span :class="['result-status', result.status]">{{ result.status }}</span>
-              <span>Fidelity {{ Math.round(Number(result.scores.canonical_fidelity) * 100) }}%</span>
-              <span>Warm calls {{ result.scores.warm_mapping_calls }}</span>
-              <span>Recorded cost ${{ result.scores.estimated_cost_usd }}</span>
-            </div>
-          </article>
+      <p v-if="errorMessage" class="error-message" role="alert">{{ errorMessage }}</p>
+      <section class="panel">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Run</th><th>Result</th><th>Mode</th><th>Time</th></tr></thead>
+            <tbody v-if="evaluations?.runs.length">
+              <tr v-for="run in evaluations.runs" :key="run.id">
+                <td>{{ run.id }}</td>
+                <td>{{ run.summary.passed }}/{{ run.summary.case_count }} passed</td>
+                <td>{{ run.execution_mode }}</td>
+                <td>{{ new Date(run.created_at).toLocaleString() }}</td>
+              </tr>
+            </tbody>
+            <tbody v-else><tr><td colspan="4" class="empty-state">No evaluation runs.</td></tr></tbody>
+          </table>
         </div>
       </section>
     </section>

@@ -10,7 +10,12 @@ export type LineItem = {
   product: { trade_name?: string | null; inn: string[]; dosage_form?: string | null };
   packaging: { primary_pack?: string | null; units_per_pack?: number | null; unit_label?: string | null };
   quantity: { minimum_order_quantity?: string | null; minimum_order_quantity_uom?: string | null };
-  pricing: { currency?: string | null; pack_price?: string | null };
+  pricing: {
+    currency?: string | null;
+    pack_price?: string | null;
+    quoted_price: { amount?: string | null; uom?: string | null };
+    normalized_price: { amount?: string | null; uom?: string | null; calculation?: string | null; derived?: boolean };
+  };
   supply: { lead_time_days?: number | null };
   evidence: Evidence[];
 };
@@ -21,6 +26,9 @@ export type Quotation = {
   supplier: { name?: string | null; country?: string | null };
   commercial_terms: { currency?: string | null; incoterm?: string | null; incoterm_named_place?: string | null };
   line_items: LineItem[];
+  revision: number;
+  review_status: string;
+  review_issues: Array<{ field_path: string; code: string; message: string; severity: string }>;
 };
 
 export type DocumentResponse = {
@@ -40,6 +48,14 @@ export type DocumentResponse = {
     human_verified: boolean;
   } | null;
   quotation?: Quotation | null;
+  reviews: Array<{
+    action: string;
+    prior_revision: number;
+    resulting_revision: number;
+    note?: string | null;
+    patches: Array<{ path: string; before?: string | null; after?: string | null }>;
+  }>;
+  learning?: Array<{ review_id: string; status: string }>;
 };
 
 export type EvaluationCase = {

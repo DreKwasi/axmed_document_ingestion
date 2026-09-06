@@ -24,6 +24,7 @@ if [[ -f frontend/package.json ]]; then
   command -v npm >/dev/null && run npm --prefix frontend test
   if [[ "$mode" == full ]]; then
     command -v npm >/dev/null && run npm --prefix frontend run build
+    node -e 'const p=require("./frontend/package.json"); process.exit(p.scripts?.["test:e2e"] ? 0 : 1)' && run npm --prefix frontend run test:e2e || true
   fi
 fi
 

@@ -986,7 +986,9 @@ Human reviewers should be able to see this difference.
 
 # 31. JSON schema recognition
 
-JSON should use a progressive field-mapping system.
+JSON should use a progressive field-mapping system inspired by the same general principle Axmed describes for Haystack: simple and known cases should be handled cheaply and deterministically, while ambiguous cases should receive progressively stronger interpretation.
+
+Fuzzy similarity should not be treated as authoritative. It is only used to generate plausible candidates for unresolved fields.
 
 ```text
 Incoming JSON
@@ -995,18 +997,43 @@ Flatten / discover paths
      ↓
 Normalize key names
      ↓
-Look up known schema mapping
+Look up known supplier/schema mappings
      ↓
-Apply deterministic mappings
+Apply deterministic canonical matches
      ↓
-Identify unresolved fields
+Apply small global alias set
      ↓
-LLM maps only unresolved fields
+Generate fuzzy candidates for unresolved fields
+     ↓
+LLM resolves ambiguous mappings using field context
      ↓
 Validate
      ↓
+Human correction where required
+     ↓
 Persist successful mappings
 ```
+
+The key principle is:
+
+~~~
+Known mapping
+→ deterministic reuse
+
+Obvious canonical field
+→ deterministic mapping
+
+Near-match field name
+→ fuzzy candidates only
+
+Ambiguous/new field
+→ LLM resolution
+
+Low-confidence result
+→ human review
+~~~
+
+This keeps the LLM focused on semantic ambiguity rather than repeatedly rediscovering mappings the system already understands.
 
 ---
 
@@ -1042,9 +1069,25 @@ active_moiety
 
 The system should not depend on maintaining an enormous global dictionary.
 
+A large alias registry quickly becomes brittle and supplier-specific. The goal is to handle common conventions deterministically while allowing the mapping memory and LLM resolver to absorb the long tail.
+
 ---
 
-# 34. Supplier-specific schema memory
+# 34. Fuzzy matching as candidate generation
+
+Fuzzy matching should not automatically accept a canonical mapping on first encounter.
+
+Use a lightweight technique such as RapidFuzz only to narrow the candidate space for fields that have not already been resolved by exact matches, known schema mappings, or the small global alias set.
+
+For example, a source field like `min_order_packs` may nominate `quantity.minimum_order_quantity`, `packaging.units_per_pack`, and `quantity.quoted_quantity` as candidates. The fuzzy score is not proof.
+
+The LLM receives the source field, sample value, nearby fields, supplier/schema context, and top candidate mappings, then chooses the most plausible canonical target. If the result remains uncertain, the field is flagged for human review.
+
+The project should not rely on a hard rule such as “score above 92 means accept” unless evaluation shows it is safe for a narrowly defined field class.
+
+---
+
+# 35. Supplier-specific schema memory
 
 SQLite stores successful mappings.
 
@@ -1084,7 +1127,7 @@ offer.products[].commercials.price_per_pack
 
 ---
 
-# 35. Schema fingerprinting
+# 36. Schema fingerprinting
 
 Not every supplier provides an explicit schema version.
 
@@ -1110,7 +1153,7 @@ If the supplier silently changes its ERP export structure, the fingerprint chang
 
 ---
 
-# 36. Learning from uploads
+# 37. Learning from uploads
 
 The model itself isn't being retrained.
 
@@ -1140,7 +1183,7 @@ The LLM increasingly handles only novelty.
 
 ---
 
-# 37. Human corrections improve schema recognition
+# 38. Human corrections improve schema recognition
 
 Suppose the system maps:
 
@@ -1162,7 +1205,7 @@ Human review therefore improves future extraction.
 
 ---
 
-# 38. Mapping trust
+# 39. Mapping trust
 
 A mapping shouldn't automatically become permanently trusted because the LLM used it once.
 
@@ -1192,7 +1235,7 @@ Changed fingerprint
 
 ---
 
-# 39. Deterministic derived calculations
+# 40. Deterministic derived calculations
 
 Several calculations should never require an LLM.
 
@@ -1222,7 +1265,7 @@ These formulas can both derive missing values and validate extracted ones.
 
 ---
 
-# 40. Deterministic validation
+# 41. Deterministic validation
 
 Examples:
 
@@ -1278,7 +1321,7 @@ These rules give us confidence signals that don't depend on the model's self-ass
 
 ---
 
-# 41. LLM responsibilities
+# 42. LLM responsibilities
 
 Use LangChain as the model abstraction and structured-output layer.
 
@@ -1297,7 +1340,7 @@ The LLM should return structured Pydantic-compatible output.
 
 ---
 
-# 42. Email extraction
+# 43. Email extraction
 
 Email requires chronology and discourse interpretation.
 
@@ -1334,7 +1377,7 @@ Conceptually:
 
 ---
 
-# 43. Confidence model
+# 44. Confidence model
 
 Do not rely solely on:
 
@@ -1372,7 +1415,7 @@ Field-level confidence is preferable to one document-wide score.
 
 ---
 
-# 44. Review status
+# 45. Review status
 
 Useful states might conceptually include:
 
@@ -1390,7 +1433,7 @@ Exact implementation naming can be decided during development.
 
 ---
 
-# 45. Review experience
+# 46. Review experience
 
 The user should be able to quickly answer:
 
@@ -1416,7 +1459,7 @@ The reviewer shouldn't have to manually inspect every field when 95% of the extr
 
 ---
 
-# 46. Evidence view
+# 47. Evidence view
 
 For structured text sources, display the relevant source snippet.
 
@@ -1440,7 +1483,7 @@ should be able to inspect the source location that caused the extraction.
 
 ---
 
-# 47. Processing events
+# 48. Processing events
 
 Maintain a lightweight processing-event history.
 
@@ -1465,7 +1508,7 @@ These events support both SSE updates and operational debugging.
 
 ---
 
-# 48. Failure handling
+# 49. Failure handling
 
 Failures should be explicit.
 
@@ -1500,7 +1543,7 @@ Store null and flag.
 
 ---
 
-# 49. File batches
+# 50. File batches
 
 A folder upload is represented conceptually as a batch containing documents.
 
@@ -1528,7 +1571,7 @@ without treating the whole batch as failed.
 
 ---
 
-# 50. Model strategy
+# 51. Model strategy
 
 Prefer a lightweight model.
 
@@ -1542,7 +1585,7 @@ Clean JSON should trend toward near-zero LLM usage as mappings accumulate.
 
 ---
 
-# 51. Evaluation framework
+# 52. Evaluation framework
 
 Evaluation should be a first-class component.
 
@@ -1591,7 +1634,7 @@ Are ingredients and strengths kept correctly paired?
 
 ---
 
-# 52. Cost evaluation
+# 53. Cost evaluation
 
 Track model usage:
 
@@ -1622,7 +1665,7 @@ This is a meaningful product characteristic rather than just a benchmark.
 
 ---
 
-# 53. Latency evaluation
+# 54. Latency evaluation
 
 Track time spent in:
 
@@ -1640,7 +1683,7 @@ This will show where the actual bottlenecks are.
 
 ---
 
-# 54. Production considerations
+# 55. Production considerations
 
 The take-home remains local, but the design should acknowledge what changes in a real deployment.
 
@@ -1670,7 +1713,7 @@ Production use should require suitable contractual data handling, retention and 
 
 ---
 
-# 55. Security and regulated-data considerations
+# 56. Security and regulated-data considerations
 
 A production version should include:
 
@@ -1690,7 +1733,7 @@ Raw source documents should have tighter access control than normalized commerci
 
 ---
 
-# 56. CI/CD
+# 57. CI/CD
 
 The repository should support reproducible setup and testing.
 
@@ -1719,7 +1762,7 @@ A small deterministic fixture set can run continuously, with fuller LLM evaluati
 
 ---
 
-# 57. Repository structure
+# 58. Repository structure
 
 A sensible high-level repository might be:
 
@@ -1764,7 +1807,7 @@ This is directional, not a requirement to split every concept into its own packa
 
 ---
 
-# 58. Deliverables
+# 59. Deliverables
 
 The final repository should contain:
 
@@ -1808,7 +1851,7 @@ Cover:
 
 ---
 
-# 59. What we're deliberately not doing
+# 60. What we're deliberately not doing
 
 A few things should stay out unless they prove necessary.
 
@@ -1832,9 +1875,37 @@ Unreadable values remain unreadable.
 
 SQLite + Huey gives us the local architecture we want.
 
+**No medicine-catalogue RAG layer.**
+
+Axmed's Haystack uses a RAG-like approach because it has a canonical medicine catalogue to match customer data against. This take-home does not require us to build or replicate that catalogue.
+
+Without a trusted reference corpus, catalogue retrieval would solve a different problem and add complexity without improving quotation extraction. The retrieval-like memory here is the SQLite-backed supplier/schema mapping store.
+
 ---
 
-# 60. Core technical thesis
+# 61. Alignment with Axmed's Haystack philosophy
+
+Axmed's layered approach combines rules, fuzzy string matching, and AI for harder cases. This take-home applies that philosophy to supplier-document schema recognition:
+
+~~~
+fast deterministic path
+→ known mappings and structural rules
+
+candidate-generation path
+→ fuzzy similarity for unresolved field names
+
+semantic path
+→ LLM resolution with context
+
+learning path
+→ persist validated mappings for reuse
+~~~
+
+The scope differs: Haystack matches buyer data to a medicine catalogue; this system converts supplier documents into a canonical quotation for human review. The shared idea is progressive intelligence: use the cheapest reliable technique first, then escalate only when input requires it.
+
+---
+
+# 62. Core technical thesis
 
 The interesting part of the submission isn't that an LLM can turn a quotation into JSON.
 

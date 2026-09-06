@@ -5,6 +5,8 @@ from typing import Annotated
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -12,10 +14,29 @@ from app.db import create_sqlite_engine, run_migrations
 from app.evaluations import list_runs, run_recorded_evaluation, seed_evaluation_cases
 from app.models import DocumentRecord, EvaluationCaseRecord, EvaluationResultRecord
 from app.schema_mapping import RecordedSemanticMappingProvider
-from app.services import UploadValidationError, confirm_mapping, ingest_json, serialize_document
+from app.services import (
+    ReviewValidationError,
+    UploadValidationError,
+    apply_review_action,
+    confirm_mapping,
+    ingest_json,
+    serialize_document,
+)
 from app.settings import Settings, get_settings
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+class ReviewPatch(BaseModel):
+    path: str
+    value: object | None = None
+
+
+class ReviewCommand(BaseModel):
+    request_id: str = Field(min_length=1, max_length=120)
+    expected_revision: int = Field(ge=1)
+    note: str | None = Field(default=None, max_length=2_000)
+    patches: list[ReviewPatch] = Field(default_factory=list)
 
 
 def _absolute_path(path: Path) -> Path:
@@ -86,6 +107,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Document not found.")
         return serialize_document(session, document)
 
+    @app.get("/api/v1/documents/{document_id}/source")
+    def get_document_source(document_id: str, session: SessionDep):
+        document = session.get(DocumentRecord, document_id)
+        if document is None:
+            raise HTTPException(status_code=404, detail="Document not found.")
+        source_path = active_settings.upload_dir / document.stored_filename
+        if not source_path.is_file():
+            raise HTTPException(status_code=404, detail="Stored source document not found.")
+        return FileResponse(source_path, media_type=document.media_type, filename=document.original_filename)
+
     @app.post("/api/v1/documents/{document_id}/mapping/confirm")
     def confirm_document_mapping(document_id: str, session: SessionDep):
         try:
@@ -93,6 +124,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return serialize_document(session, document)
         except LookupError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.post("/api/v1/documents/{document_id}/reviews/{action}")
+    def review_document(document_id: str, action: str, command: ReviewCommand, session: SessionDep):
+        if action not in {"correct", "approve", "reject"}:
+            raise HTTPException(status_code=404, detail="Unknown review action.")
+        if action == "correct" and not command.patches:
+            raise HTTPException(status_code=422, detail="A correction requires at least one patch.")
+        try:
+            document = apply_review_action(
+                session, document_id, f"{action}ed" if action != "approve" else "approved", command.model_dump()
+            )
+            return serialize_document(session, document)
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ReviewValidationError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
         except ValueError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
 

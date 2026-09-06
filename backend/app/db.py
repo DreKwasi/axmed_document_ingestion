@@ -60,7 +60,8 @@ def run_migrations(database_url: str, project_root: Path) -> None:
     }
     with migration_engine.connect() as connection:
         existing_tables = set(inspect(connection).get_table_names())
-    if expected_tables.issubset(existing_tables) and "alembic_version" not in existing_tables:
-        command.stamp(config, "head")
+    if existing_tables == expected_tables:
+        command.stamp(config, "20260906_01")
+        command.upgrade(config, "head")
     else:
         command.upgrade(config, "head")

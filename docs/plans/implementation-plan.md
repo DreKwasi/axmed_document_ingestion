@@ -93,8 +93,12 @@ A mapping lookup key is `(supplier/source_system, optional source schema version
 - Same shape with different values is a cache hit; the same supplier with a changed normalized shape is a miss.
 - A trusted hit is forbidden from calling the semantic schema-mapping adapter.
 - Confirming a proposed mapping makes that mapping reusable.
-- Correcting a wrongly mapped field can replace or revoke only the affected mapping and records an audit event.
+- A small global alias layer handles only obvious universal names. Exact canonical matches precede aliases.
+- Fuzzy matching is candidate generation only; it never accepts a mapping. The semantic resolver receives candidates plus field/sample/nearby-field/schema context and may still return an uncertainty flag.
+- Correcting a wrongly mapped field updates or revokes only the affected mapping and records an audit event. It stores a field-interpretation lesson, never a historical commercial value to copy into later offers.
 - A warm run must match the approved cold-run canonical payload except for identifiers, timestamps, and operational metrics.
+
+This project does not build a medicine-catalogue RAG layer. Its retrieval-like memory is the supplier/schema mapping store.
 
 ### State and trust model
 
@@ -141,15 +145,15 @@ Acceptance checks:
 **Blocked by:** Slice 1  
 **Covers:** US-03, US-04, US-07
 
-Complete the Sanova quotation path with price normalization, validation, field evidence, confidence/issues, correction revisions, approval, and rejection. Retain the supplier’s pack price while deriving unit price with `Decimal` arithmetic.
+Complete the Sanova quotation path with price normalization, validation, field evidence, confidence/issues, correction revisions, approval, and rejection. Retain the supplier’s pack price while deriving unit price with `Decimal` arithmetic. This slice supports multiple selected JSON documents; the PRD's EML/PDF/image router arrives with their parser slices.
 
 Acceptance checks:
 
 - Review UI separates quoted and derived price, shows formula/source path, and prioritizes failed validations.
-- Corrections retain prior evidence, update/revoke an affected mapping where applicable, and remain unapproved until an explicit approval.
+- Corrections retain prior evidence, enqueue PII-safe learning feedback about field interpretation (never a reusable historical price), update/revoke an affected mapping where applicable, and remain unapproved until an explicit approval.
 - Approve/reject/correct commands are idempotent; stale revisions conflict; failed or stale records cannot be accepted downstream.
 - Tests cover arithmetic, quantities versus MOQ, invalid dates/percentages/tiers, mapping correction, and review transitions.
-- A Playwright test uploads, confirms mapping, corrects a field, and approves the current revision.
+- One ingest action accepts multiple documents and preserves independent review state/source access for each; a Playwright test uploads, confirms mapping, corrects a field, and approves the current revision.
 
 ### Slice 3 — Add durable jobs and reconnectable live progress
 
@@ -165,6 +169,7 @@ Acceptance checks:
 - Retry policy is bounded and idempotent; retry-after-failure follows an explicit transition.
 - Event/log/exception payload tests prove seeded PII and raw document text cannot escape.
 - Stage duration is recorded and exposed in a safe local diagnostics view/report.
+- Queued human-correction learning is consumed only after PII redaction. The worker invokes the semantic resolver with correction interpretation and mapping evidence, persists its outcome, and the next matching schema run receives that preference as non-authoritative context.
 
 ### Slice 4 — Interpret email chronology behind the privacy boundary
 
