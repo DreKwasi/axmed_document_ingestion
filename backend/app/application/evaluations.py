@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.settings import Settings
 from app.domain.commercial_rules import apply_commercial_rules
+from app.domain.email_parser import parse_email
 from app.domain.pdf_parser import parse_native_pdf
 from app.domain.schema_mapping import (
     RecordedSemanticMappingProvider,
@@ -310,6 +311,62 @@ def run_live_ocr_evaluation(
             )
         )
     run.summary_json = json.dumps({"case_count": len(ocr_cases), "passed": passed, "rubrics": dataset["rubric"]})
+    session.commit()
+    return run
+
+
+def run_live_email_evaluation(
+    session: Session,
+    *,
+    golden_dataset_path: Path,
+    settings: Settings,
+) -> EvaluationRunRecord:
+    """Run approved email cases through parse, redaction, structured extraction, and rules."""
+
+    if not settings.resolved_gemini_api_key:
+        raise ValueError("Live email evaluation requires configured Gemini credentials.")
+    dataset = json.loads(golden_dataset_path.read_text())
+    email_cases = [case for case in dataset["cases"] if case.get("execution") == "live_email_pipeline"]
+    run = EvaluationRunRecord(
+        rubric_version=dataset["rubric_version"], execution_mode="live_email_pipeline", summary_json="{}"
+    )
+    session.add(run)
+    session.flush()
+    passed = 0
+    from app.domain.langchain_extractor import LangChainSemanticExtractor
+
+    extractor = LangChainSemanticExtractor(settings.resolved_gemini_api_key, settings.resolved_gemini_model)
+    for case in email_cases:
+        fixture_path = _dataset_fixture_path(golden_dataset_path, case["input_fixture"])
+        expected = json.loads(_dataset_fixture_path(golden_dataset_path, case["expected_output_fixture"]).read_text())
+        parsed = parse_email(fixture_path.read_bytes())
+        context = redact_for_model(
+            {"subject": parsed.subject, "message_id": parsed.message_id, "body_text": parsed.body_text}
+        )
+        started = perf_counter()
+        actual, telemetry = extractor.extract_canonical_quotation(context, source_type="email")
+        errors = _subset_mismatches(expected, apply_commercial_rules(actual).model_dump(mode="json"))
+        status = "passed" if not errors else "failed"
+        passed += status == "passed"
+        session.add(
+            EvaluationResultRecord(
+                run_id=run.id,
+                case_id=case["id"],
+                status=status,
+                scores_json=json.dumps(
+                    {
+                        "canonical_fidelity": 1.0 if not errors else 0.0,
+                        "duration_ms": telemetry.get("duration_ms", int((perf_counter() - started) * 1000)),
+                        "provider": telemetry.get("provider"),
+                        "model": telemetry.get("model"),
+                        "prompt_version": telemetry.get("prompt_version"),
+                        "environment": settings.environment,
+                    }
+                ),
+                error_analysis_json=json.dumps(errors),
+            )
+        )
+    run.summary_json = json.dumps({"case_count": len(email_cases), "passed": passed, "rubrics": dataset["rubric"]})
     session.commit()
     return run
 

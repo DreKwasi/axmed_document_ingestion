@@ -7,8 +7,10 @@ if [[ "${1:-}" == "--live" ]]; then
   mode="live"
 elif [[ "${1:-}" == "--ocr" ]]; then
   mode="ocr"
+elif [[ "${1:-}" == "--email" ]]; then
+  mode="email"
 elif [[ $# -ne 0 ]]; then
-  echo "Usage: backend/bin/run-evals [--live|--ocr]" >&2
+  echo "Usage: backend/bin/run-evals [--live|--ocr|--email]" >&2
   exit 64
 fi
 
@@ -36,7 +38,7 @@ import json
 import os
 from pathlib import Path
 
-from app.application.evaluations import run_live_ocr_evaluation, run_live_pdf_evaluation, run_recorded_evaluation, seed_evaluation_cases
+from app.application.evaluations import run_live_email_evaluation, run_live_ocr_evaluation, run_live_pdf_evaluation, run_recorded_evaluation, seed_evaluation_cases
 from app.core.settings import Settings
 from app.domain.schema_mapping import RecordedSemanticMappingProvider
 from app.infrastructure.database import SessionLocal, run_migrations
@@ -55,6 +57,12 @@ with SessionLocal() as session:
         )
     elif os.environ["EVAL_MODE"] == "ocr":
         run = run_live_ocr_evaluation(
+            session,
+            golden_dataset_path=workspace_root / settings.golden_dataset_path,
+            settings=settings,
+        )
+    elif os.environ["EVAL_MODE"] == "email":
+        run = run_live_email_evaluation(
             session,
             golden_dataset_path=workspace_root / settings.golden_dataset_path,
             settings=settings,

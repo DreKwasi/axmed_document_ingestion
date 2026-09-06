@@ -2,7 +2,7 @@
 
 > Purpose: versioned inputs and approved expected outputs for pipeline evaluations.
 > Run: `backend/bin/run-evals` runs regression checks and persists a recorded SQLite run.
-> Default: recorded mode never calls a model; `--live` is explicitly required for live PDF evaluation; `--ocr` calls only the OCR service.
+> Default: recorded mode never calls a model; `--live` and `--email` explicitly enable model evaluation; `--ocr` calls only the OCR service.
 > Fixtures: `fixtures/documents/` contains source documents; `fixtures/ocr/` contains degraded image inputs.
 > Ground truth: only `golden_outputs/` reviewed from source documents is used for fidelity scoring.
 > OCR scope: the glare fixture is partial and validates OCR resilience, not full-quotation fidelity.
@@ -24,3 +24,5 @@
 | `scan_03_glare_partial_andina_p1.jpg` | Glare, perspective distortion, and partial table visibility. | OCR should return safe evidence; it must not be scored as a complete quotation. |
 
 Run `backend/bin/run-evals --ocr` to execute the OCR anchors against the configured PaddleOCR service and persist the result in SQLite. It does not invoke an LLM.
+
+Run `backend/bin/run-evals --email` to execute reviewed email cases, including correction precedence, through the configured structured-extraction model.

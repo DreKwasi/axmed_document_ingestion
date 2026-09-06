@@ -3,7 +3,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import sessionmaker
 
-from app.application.evaluations import run_live_ocr_evaluation, run_live_pdf_evaluation
+from app.application.evaluations import run_live_email_evaluation, run_live_ocr_evaluation, run_live_pdf_evaluation
 from app.domain.contracts import CanonicalQuotation
 from app.domain.ocr_contract import OcrLine, OcrPage, OcrResult
 from app.infrastructure.database import create_sqlite_engine
@@ -167,3 +167,60 @@ def test_live_ocr_evaluation_scores_anchor_evidence_without_a_model(tmp_path, cl
         assert run.results[0].status == "passed"
         assert scores["matched_anchors"] == 1
         assert scores["model"] == "test-model"
+
+
+def test_live_email_evaluation_persists_final_correction_fidelity(tmp_path, client_settings, monkeypatch):
+    _, configured_settings = client_settings
+    fixture = tmp_path / "correction.eml"
+    fixture.write_text(
+        "Subject: RFQ-1\nMessage-ID: <id>\n\nPrice: 0.128. Correction: price is 0.134."
+    )
+    expected = tmp_path / "expected.json"
+    expected.write_text(
+        json.dumps(
+            {"rfq_reference": "RFQ-1", "line_items": [{"pricing": {"quoted_price": {"amount": "0.134"}}}]}
+        )
+    )
+    dataset = tmp_path / "dataset.json"
+    dataset.write_text(
+        json.dumps(
+            {
+                "rubric_version": "test",
+                "rubric": [],
+                "cases": [
+                    {
+                        "id": "email-case",
+                        "title": "Email",
+                        "input_fixture": str(fixture),
+                        "expected_output_fixture": str(expected),
+                        "execution": "live_email_pipeline",
+                    }
+                ],
+            }
+        )
+    )
+
+    class FakeExtractor:
+        def __init__(self, *_: object):
+            pass
+
+        def extract_canonical_quotation(self, *_: object, **__: object):
+            return CanonicalQuotation(
+                rfq_reference="RFQ-1",
+                line_items=[{"pricing": {"quoted_price": {"amount": "0.134"}}}],
+            ), {"duration_ms": 1, "model": "test-model"}
+
+    monkeypatch.setattr("app.domain.langchain_extractor.LangChainSemanticExtractor", FakeExtractor)
+    engine = create_sqlite_engine(configured_settings.database_url)
+    session_factory = sessionmaker(engine)
+    settings = configured_settings.model_copy(update={"gemini_api_key": "test-key"})
+    with session_factory() as session:
+        session.add(
+            EvaluationCaseRecord(
+                id="email-case", title="Email", rubric_json="[]", input_fixture="email.eml", expected_json="{}"
+            )
+        )
+        session.commit()
+        run = run_live_email_evaluation(session, golden_dataset_path=dataset, settings=settings)
+        assert run.results[0].status == "passed"
+        assert json.loads(run.results[0].scores_json)["model"] == "test-model"
