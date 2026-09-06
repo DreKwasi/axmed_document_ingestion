@@ -9,6 +9,7 @@
 
 | Date | Worksheet | Signal | Improvement | Status |
 | 2026-09-06 | frontend-home-review | A UI showed a null MOQ while the source quantity was correctly persisted as `quoted_quantity`; JSON aggregate reads obscured the distinction. | Keep active extracted line-item fields relational and name UI fields after their canonical quantity semantics; preserve JSON only as a revision snapshot. | applied |
+| 2026-09-06 | field-review-persistence | Normalized scalar tables alone still made it possible to lose field-level review state and confidence outside the JSON evidence array. | Treat extracted values as first-class rows with canonical paths, provenance, confidence, and explicit human-review transitions; backfill them in the same migration chain. | applied |
 | --- | --- | --- | --- | --- |
 | 2026-09-05 | bootstrap-agent-os | Empty repository has no runnable app or selected toolchain. | Add stack bootstrap task; validation scripts report this explicitly. | queued |
 | 2026-09-06 | plan-document-intelligence | Infrastructure-first sequencing delayed the product’s schema-memory differentiator. | Require plans to demonstrate the riskiest product thesis in the earliest viable vertical slice. | adopted |
