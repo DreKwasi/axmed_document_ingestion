@@ -69,4 +69,4 @@
 
 ## Final commit and tag
 
-Pending final commit/tag. The worktree contained pre-existing changes across the same backend/docs files, so staging must preserve those user-owned changes rather than sweeping the entire worktree into this change.
+Completed in contextual commits: `fc1bba9`, `5faf8b0`, `04c729a`, `3ab41bf`, `fba5376`, and `cab233e`. Tagged `worksheet/frontend-home-review`. The worktree still contains pre-existing user-owned changes outside this task; they were left unstaged.
