@@ -1,0 +1,28 @@
+{
+  "rfq_reference": "RFQ-2026-0244",
+  "supplier": {"name": "Novara Farmaceutici S.p.A."},
+  "commercial_terms": {"currency": "EUR", "incoterm": "FCA", "incoterm_named_place": "Milan Malpensa"},
+  "line_items": [
+    {
+      "product": {"trade_name": "Azimax 250", "inn": ["azithromycin"], "dosage_form": "tablet"},
+      "packaging": {"presentation": "film-coated", "primary_pack": "blister", "units_per_pack": 6, "unit_label": "tablet"},
+      "quantity": {"minimum_order_quantity": "30000", "minimum_order_quantity_uom": "pack"},
+      "pricing": {"currency": "EUR", "quoted_price": {"amount": "0.134", "uom": "tablet"}},
+      "supply": {"lead_time_days": 42}
+    },
+    {
+      "product": {"trade_name": "Zincora 20", "inn": ["zinc sulfate"], "dosage_form": "tablet"},
+      "packaging": {"presentation": "dispersible", "primary_pack": "box", "units_per_pack": 100, "unit_label": "tablet"},
+      "quantity": {"minimum_order_quantity": "5000", "minimum_order_quantity_uom": "box"},
+      "pricing": {"currency": "EUR", "quoted_price": {"amount": "1.55", "uom": "box"}},
+      "supply": {"lead_time_days": 28}
+    },
+    {
+      "product": {"trade_name": "Dexafar 4 mg/mL", "inn": ["dexamethasone sodium phosphate"], "dosage_form": "injection"},
+      "packaging": {"presentation": "solution for", "primary_pack": "ampoules", "units_per_pack": 25, "unit_label": "ampoule"},
+      "quantity": {"minimum_order_quantity": "2000", "minimum_order_quantity_uom": "pack"},
+      "pricing": {"currency": "EUR", "quoted_price": {"amount": "0.41", "uom": "ampoule"}},
+      "supply": {"lead_time_days": 63}
+    }
+  ]
+}

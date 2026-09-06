@@ -64,6 +64,14 @@
       "expected_output_fixture": "golden_outputs/scan_03_glare_partial_andina_p1.ocr.json",
       "execution": "live_ocr_evidence",
       "comparison": "ocr_anchors"
+    },
+    {
+      "id": "novara-email-correction-v1",
+      "title": "Novara email correction quotation",
+      "input_fixture": "fixtures/documents/RE_RFQ-2026-0244_Novara_quotation.eml",
+      "expected_output_fixture": "golden_outputs/novara_rfq_2026_0244.expected.json",
+      "execution": "live_email_pipeline",
+      "comparison": "expected_subset"
     }
   ]
 }
