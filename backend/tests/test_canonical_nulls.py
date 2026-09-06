@@ -7,8 +7,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_missing_required_source_value_stays_null_and_creates_a_review_issue():
-    payload = json.loads((PROJECT_ROOT / "sample_documents/sanova_offer_export_2026-08-03.json").read_text())
-    mapping = json.loads((PROJECT_ROOT / "evals/recorded_mappings/sanova_erp_2_4_1.json").read_text())["mapping"]
+    fixture_root = PROJECT_ROOT / "backend/evals"
+    payload = json.loads((fixture_root / "fixtures/documents/sanova_offer_export_2026-08-03.json").read_text())
+    mapping = json.loads((fixture_root / "recorded_mappings/sanova_erp_2_4_1.json").read_text())["mapping"]
     payload["offer"]["products"][0]["commercials"].pop("price_per_pack")
 
     quotation = apply_mapping(payload, mapping, source_document="missing-price.json", method="deterministic_mapping")

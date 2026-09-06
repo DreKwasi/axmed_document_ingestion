@@ -11,6 +11,7 @@ from app.infrastructure.models import OcrJobRecord, ProcessingEventRecord
 from app.workers.ocr import consume_ocr
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+OCR_FIXTURES = PROJECT_ROOT / "backend/evals/fixtures/ocr"
 
 
 @pytest.mark.parametrize(
@@ -18,7 +19,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
     ["scan_02_lowres_fax_andina_p1.png", "scan_03_glare_partial_andina_p1.jpg"],
 )
 def test_image_parser_accepts_supplied_degraded_document_images(filename: str):
-    parsed = parse_image((PROJECT_ROOT / "sample_documents" / filename).read_bytes())
+    parsed = parse_image((OCR_FIXTURES / filename).read_bytes())
 
     assert parsed.width > 0
     assert parsed.height > 0
@@ -30,7 +31,7 @@ def test_image_parser_rejects_non_image_content():
 
 
 def test_image_upload_creates_an_independent_ocr_job(client):
-    source = (PROJECT_ROOT / "sample_documents/scan_02_lowres_fax_andina_p1.png").read_bytes()
+    source = (OCR_FIXTURES / "scan_02_lowres_fax_andina_p1.png").read_bytes()
 
     response = client.post("/api/v1/documents", files={"file": ("fax.png", source, "image/png")})
 
@@ -43,7 +44,7 @@ def test_image_upload_creates_an_independent_ocr_job(client):
 
 def test_ocr_worker_exposes_missing_service_configuration_without_faking_a_result(client_settings):
     client, base_settings = client_settings
-    source = (PROJECT_ROOT / "sample_documents/scan_02_lowres_fax_andina_p1.png").read_bytes()
+    source = (OCR_FIXTURES / "scan_02_lowres_fax_andina_p1.png").read_bytes()
     document = client.post("/api/v1/documents", files={"file": ("fax.png", source, "image/png")}).json()
     engine = create_sqlite_engine(base_settings.database_url)
     factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
@@ -52,7 +53,13 @@ def test_ocr_worker_exposes_missing_service_configuration_without_faking_a_resul
         consume_ocr(
             session,
             document["ocr"]["id"],
-            Settings(database_url=base_settings.database_url, task_database_path=base_settings.task_database_path),
+            Settings(
+                database_url=base_settings.database_url,
+                task_database_path=base_settings.task_database_path,
+                upload_dir=base_settings.upload_dir,
+                ocr_service_url=None,
+                ocr_service_token=None,
+            ),
         )
 
     with factory() as session:

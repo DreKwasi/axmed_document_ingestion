@@ -14,8 +14,8 @@ def client(tmp_path: Path):
     settings = Settings(
         database_url=f"sqlite:///{tmp_path / 'app.db'}",
         upload_dir=tmp_path / "uploads",
-        recorded_mapping_dir=PROJECT_ROOT / "evals/recorded_mappings",
-        golden_dataset_path=PROJECT_ROOT / "evals/golden_dataset.json",
+        recorded_mapping_dir=PROJECT_ROOT / "backend/evals/recorded_mappings",
+        golden_dataset_path=PROJECT_ROOT / "backend/evals/golden_dataset.json",
         background_job_dispatch_enabled=False,
     )
     with TestClient(create_app(settings)) as test_client:
@@ -28,8 +28,8 @@ def client_settings(tmp_path: Path):
         database_url=f"sqlite:///{tmp_path / 'app.db'}",
         task_database_path=tmp_path / "tasks.db",
         upload_dir=tmp_path / "uploads",
-        recorded_mapping_dir=PROJECT_ROOT / "evals/recorded_mappings",
-        golden_dataset_path=PROJECT_ROOT / "evals/golden_dataset.json",
+        recorded_mapping_dir=PROJECT_ROOT / "backend/evals/recorded_mappings",
+        golden_dataset_path=PROJECT_ROOT / "backend/evals/golden_dataset.json",
         background_job_dispatch_enabled=False,
     )
     with TestClient(create_app(settings)) as test_client:
@@ -38,4 +38,4 @@ def client_settings(tmp_path: Path):
 
 @pytest.fixture
 def sanova_bytes() -> bytes:
-    return (PROJECT_ROOT / "sample_documents/sanova_offer_export_2026-08-03.json").read_bytes()
+    return (PROJECT_ROOT / "backend/evals/fixtures/documents/sanova_offer_export_2026-08-03.json").read_bytes()
