@@ -25,7 +25,12 @@ from app.application.documents import (
     serialize_batch,
     serialize_document,
 )
-from app.application.evaluations import list_runs, run_recorded_evaluation, seed_evaluation_cases
+from app.application.evaluations import (
+    list_runs,
+    run_live_pdf_evaluation,
+    run_recorded_evaluation,
+    seed_evaluation_cases,
+)
 from app.application.processing_events import list_events_after, record_event, serialize_event
 from app.core.settings import Settings, get_settings
 from app.domain.schema_mapping import (
@@ -475,12 +480,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/v1/evaluations/runs", status_code=201)
     def run_evaluation(session: SessionDep):
-        run = run_recorded_evaluation(
-            session,
-            project_root=PROJECT_ROOT,
-            golden_dataset_path=active_settings.golden_dataset_path,
-            provider=provider,
-        )
+        if active_settings.resolved_gemini_api_key:
+            run = run_live_pdf_evaluation(
+                session,
+                project_root=PROJECT_ROOT,
+                golden_dataset_path=active_settings.golden_dataset_path,
+                settings=active_settings,
+            )
+        else:
+            run = run_recorded_evaluation(
+                session,
+                project_root=PROJECT_ROOT,
+                golden_dataset_path=active_settings.golden_dataset_path,
+                provider=provider,
+            )
         return {"id": run.id, "status": run.status, "summary": json.loads(run.summary_json)}
 
     return app

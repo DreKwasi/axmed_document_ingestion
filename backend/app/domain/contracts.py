@@ -1,7 +1,35 @@
+import re
 from decimal import Decimal
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+_CORE_DOSAGE_FORMS = (
+    "tablet",
+    "capsule",
+    "syrup",
+    "suspension",
+    "solution",
+    "cream",
+    "ointment",
+    "gel",
+    "drops",
+    "spray",
+    "injection",
+    "suppository",
+    "patch",
+)
+
+
+def _core_dosage_form(value: str) -> tuple[str, str | None]:
+    """Split a source dosage-form phrase into a core form and presentation qualifier."""
+    normalized = re.sub(r"\s+", " ", value.strip().lower().replace("–", "-").replace("—", "-"))
+    for core_form in _CORE_DOSAGE_FORMS:
+        match = re.search(rf"\b{re.escape(core_form)}s?\b", normalized)
+        if match:
+            presentation = (normalized[: match.start()] + normalized[match.end() :]).strip(" -,") or None
+            return core_form, presentation
+    return normalized, None
 
 
 class Strength(BaseModel):
@@ -29,6 +57,7 @@ class CommercialTerms(BaseModel):
 
 class Packaging(BaseModel):
     description: str | None = None
+    presentation: str | None = None
     primary_pack: str | None = None
     units_per_pack: int | None = None
     unit_label: str | None = None
@@ -101,6 +130,17 @@ class Product(BaseModel):
     manufacturer: str | None = None
     country_of_origin: str | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_dosage_form(cls, values: Any) -> Any:
+        if not isinstance(values, dict) or not isinstance(values.get("dosage_form"), str):
+            return values
+
+        dosage_form, _ = _core_dosage_form(values["dosage_form"])
+        normalized_values = dict(values)
+        normalized_values["dosage_form"] = dosage_form
+        return normalized_values
+
 
 class Evidence(BaseModel):
     canonical_field: str
@@ -126,6 +166,26 @@ class LineItem(BaseModel):
     supply: Supply = Field(default_factory=Supply)
     regulatory: Regulatory = Field(default_factory=Regulatory)
     evidence: list[Evidence] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def move_dosage_qualifier_to_packaging(cls, values: Any) -> Any:
+        if not isinstance(values, dict) or not isinstance(values.get("product"), dict):
+            return values
+        dosage_form = values["product"].get("dosage_form")
+        if not isinstance(dosage_form, str):
+            return values
+
+        core_form, presentation = _core_dosage_form(dosage_form)
+        normalized_values = dict(values)
+        normalized_product = dict(values["product"])
+        normalized_product["dosage_form"] = core_form
+        normalized_values["product"] = normalized_product
+        if presentation:
+            packaging = dict(values.get("packaging") or {})
+            packaging.setdefault("presentation", presentation)
+            normalized_values["packaging"] = packaging
+        return normalized_values
 
 
 class CanonicalQuotation(BaseModel):

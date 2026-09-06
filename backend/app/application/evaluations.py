@@ -1,4 +1,6 @@
 import json
+import re
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -6,6 +8,9 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.settings import Settings
+from app.domain.commercial_rules import apply_commercial_rules
+from app.domain.pdf_parser import parse_native_pdf
 from app.domain.schema_mapping import (
     RecordedSemanticMappingProvider,
     apply_mapping,
@@ -13,6 +18,8 @@ from app.domain.schema_mapping import (
     fingerprint,
 )
 from app.infrastructure.models import EvaluationCaseRecord, EvaluationResultRecord, EvaluationRunRecord
+from app.security.redaction import redact_for_model
+from app.workers.ocr_client import request_ocr
 
 
 def _set_path(payload: dict[str, Any], path: str, value: Any) -> None:
@@ -26,9 +33,18 @@ def _set_path(payload: dict[str, Any], path: str, value: Any) -> None:
         current[final_segment] = value
 
 
+def _dataset_fixture_path(golden_dataset_path: Path, fixture: str) -> Path:
+    fixture_path = Path(fixture)
+    return fixture_path if fixture_path.is_absolute() else golden_dataset_path.parent / fixture_path
+
+
 def seed_evaluation_cases(session: Session, golden_dataset_path: Path) -> None:
     dataset = json.loads(golden_dataset_path.read_text())
     for case in dataset["cases"]:
+        expected = case.get("expected")
+        expected_output_fixture = case.get("expected_output_fixture")
+        if expected_output_fixture:
+            expected = json.loads(_dataset_fixture_path(golden_dataset_path, expected_output_fixture).read_text())
         existing = session.get(EvaluationCaseRecord, case["id"])
         if existing:
             continue
@@ -38,7 +54,7 @@ def seed_evaluation_cases(session: Session, golden_dataset_path: Path) -> None:
                 title=case["title"],
                 rubric_json=json.dumps(dataset["rubric"]),
                 input_fixture=case["input_fixture"],
-                expected_json=json.dumps(case["expected"]),
+                expected_json=json.dumps(expected or {}),
             )
         )
     session.commit()
@@ -61,7 +77,21 @@ def run_recorded_evaluation(
     session.flush()
     results = []
     for case in dataset["cases"]:
-        payload = json.loads((project_root / case["input_fixture"]).read_text())
+        if case.get("execution"):
+            scores = {"canonical_fidelity": 0.0, "mapping_efficiency": 0.0, "safety_and_uncertainty": 0.0}
+            session.add(
+                EvaluationResultRecord(
+                    run_id=run.id,
+                    case_id=case["id"],
+                    status="not_run",
+                    scores_json=json.dumps(scores),
+                    error_analysis_json=json.dumps([f"This case requires {case['execution']} evaluation mode."]),
+                )
+            )
+            results.append(scores)
+            continue
+        fixture_path = _dataset_fixture_path(golden_dataset_path, case["input_fixture"])
+        payload = json.loads(fixture_path.read_text())
         source_system, _ = extract_source_metadata(payload)
         schema_fingerprint = fingerprint(payload)
         cold_started = perf_counter()
@@ -88,7 +118,7 @@ def run_recorded_evaluation(
             quotation = apply_mapping(
                 payload,
                 cold_proposal.mapping,
-                source_document=case["input_fixture"],
+                source_document=str(fixture_path),
                 method="llm_extraction",
             )
             cold_duration_ms = max(1, int((perf_counter() - cold_started) * 1000))
@@ -99,7 +129,7 @@ def run_recorded_evaluation(
             warm_quotation = apply_mapping(
                 warm_payload,
                 cold_proposal.mapping,
-                source_document=case["input_fixture"],
+                source_document=str(fixture_path),
                 method="deterministic_mapping",
             )
             warm_duration_ms = max(1, int((perf_counter() - warm_started) * 1000))
@@ -149,11 +179,179 @@ def run_recorded_evaluation(
         {
             "case_count": len(results),
             "passed": sum(score["canonical_fidelity"] == 1.0 for score in results),
+            "not_run": sum(
+                score["canonical_fidelity"] == 0.0 and "cold_mapping_calls" not in score for score in results
+            ),
             "rubrics": dataset["rubric"],
         }
     )
     session.commit()
     return run
+
+
+def run_live_pdf_evaluation(
+    session: Session,
+    *,
+    project_root: Path,
+    golden_dataset_path: Path,
+    settings: Settings,
+) -> EvaluationRunRecord:
+    """Run source PDFs through the production extraction stages and score reviewed fields."""
+
+    if not settings.resolved_gemini_api_key:
+        raise ValueError("Live PDF evaluation requires configured Gemini credentials.")
+    dataset = json.loads(golden_dataset_path.read_text())
+    run = EvaluationRunRecord(
+        rubric_version=dataset["rubric_version"], execution_mode="live_pdf_pipeline", summary_json="{}"
+    )
+    session.add(run)
+    session.flush()
+    passed = 0
+    live_cases = [case for case in dataset["cases"] if case.get("execution") == "live_pdf_pipeline"]
+    for case in live_cases:
+        expected = json.loads(_dataset_fixture_path(golden_dataset_path, case["expected_output_fixture"]).read_text())
+        fixture_path = _dataset_fixture_path(golden_dataset_path, case["input_fixture"])
+        parsed = parse_native_pdf(fixture_path.read_bytes())
+        context = redact_for_model(
+            {
+                "source_document": fixture_path.name,
+                "pages": [{"page_number": page.page_number, "text": page.text} for page in parsed.pages],
+            }
+        )
+        started = perf_counter()
+        from app.domain.langchain_extractor import LangChainSemanticExtractor
+
+        extractor = LangChainSemanticExtractor(settings.resolved_gemini_api_key, settings.resolved_gemini_model)
+        actual, telemetry = extractor.extract_canonical_quotation(context, source_type="pdf")
+        actual_payload = apply_commercial_rules(actual).model_dump(mode="json")
+        errors = _subset_mismatches(expected, actual_payload)
+        status = "passed" if not errors else "failed"
+        passed += status == "passed"
+        session.add(
+            EvaluationResultRecord(
+                run_id=run.id,
+                case_id=case["id"],
+                status=status,
+                scores_json=json.dumps(
+                    {
+                        "canonical_fidelity": 1.0 if not errors else 0.0,
+                        "duration_ms": telemetry.get("duration_ms", int((perf_counter() - started) * 1000)),
+                        "provider": telemetry.get("provider"),
+                        "model": telemetry.get("model"),
+                        "prompt_version": telemetry.get("prompt_version"),
+                        "environment": settings.environment,
+                    }
+                ),
+                error_analysis_json=json.dumps(errors),
+            )
+        )
+    run.summary_json = json.dumps(
+        {"case_count": len(live_cases), "passed": passed, "rubrics": dataset["rubric"]}
+    )
+    session.commit()
+    return run
+
+
+def run_live_ocr_evaluation(
+    session: Session,
+    *,
+    golden_dataset_path: Path,
+    settings: Settings,
+) -> EvaluationRunRecord:
+    """Evaluate configured OCR evidence without invoking an extraction model."""
+
+    if not settings.ocr_service_url or not settings.ocr_service_token:
+        raise ValueError("Live OCR evaluation requires configured OCR service credentials.")
+    dataset = json.loads(golden_dataset_path.read_text())
+    ocr_cases = [case for case in dataset["cases"] if case.get("execution") == "live_ocr_evidence"]
+    run = EvaluationRunRecord(
+        rubric_version=dataset["rubric_version"], execution_mode="live_ocr_evidence", summary_json="{}"
+    )
+    session.add(run)
+    session.flush()
+    passed = 0
+    for case in ocr_cases:
+        fixture_path = _dataset_fixture_path(golden_dataset_path, case["input_fixture"])
+        expected = json.loads(_dataset_fixture_path(golden_dataset_path, case["expected_output_fixture"]).read_text())
+        result = request_ocr(
+            settings.ocr_service_url,
+            data=fixture_path.read_bytes(),
+            media_type="image/png" if fixture_path.suffix.lower() == ".png" else "image/jpeg",
+            selected_original_pages=(1,),
+            idempotency_key=f"evaluation:{case['id']}",
+            deadline_ms=settings.ocr_request_timeout_seconds * 1000,
+            token=settings.ocr_service_token,
+        )
+        text = "\n".join(line.text for page in result.pages for line in page.lines)
+        matched, missing = _ocr_anchor_result(expected, text)
+        errors = [f"Missing OCR anchor: {anchor}" for anchor in missing]
+        required_matches = (
+            len(expected["anchors"]) if expected.get("require_all_anchors") else expected["minimum_anchor_matches"]
+        )
+        status = "passed" if len(matched) >= required_matches else "failed"
+        passed += status == "passed"
+        session.add(
+            EvaluationResultRecord(
+                run_id=run.id,
+                case_id=case["id"],
+                status=status,
+                scores_json=json.dumps(
+                    {
+                        "ocr_anchor_recall": len(matched) / len(expected["anchors"]),
+                        "matched_anchors": len(matched),
+                        "required_anchor_matches": required_matches,
+                        "provider": result.provider,
+                        "model": result.model,
+                        "configuration_version": result.configuration_version,
+                        "duration_ms": result.duration_ms,
+                    }
+                ),
+                error_analysis_json=json.dumps(errors),
+            )
+        )
+    run.summary_json = json.dumps({"case_count": len(ocr_cases), "passed": passed, "rubrics": dataset["rubric"]})
+    session.commit()
+    return run
+
+
+def _ocr_anchor_result(expected: dict[str, Any], text: str) -> tuple[list[str], list[str]]:
+    normalized_text = _normalize_ocr_text(text)
+    matched = [anchor for anchor in expected["anchors"] if _normalize_ocr_text(anchor) in normalized_text]
+    missing = [anchor for anchor in expected["anchors"] if anchor not in matched]
+    return matched, missing
+
+
+def _normalize_ocr_text(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
+def _subset_mismatches(expected: Any, actual: Any, path: str = "") -> list[str]:
+    if isinstance(expected, dict):
+        if not isinstance(actual, dict):
+            return [f"{path or '$'} expected object."]
+        return [
+            mismatch
+            for key, value in expected.items()
+            for mismatch in _subset_mismatches(value, actual.get(key), f"{path}.{key}" if path else key)
+        ]
+    if isinstance(expected, list):
+        if not isinstance(actual, list) or len(expected) != len(actual):
+            return [f"{path} expected {len(expected)} items."]
+        return [
+            mismatch
+            for index, value in enumerate(expected)
+            for mismatch in _subset_mismatches(value, actual[index], f"{path}[{index}]")
+        ]
+    if _values_match(expected, actual):
+        return []
+    return [f"{path} expected {expected!r}, got {actual!r}."]
+
+
+def _values_match(expected: Any, actual: Any) -> bool:
+    try:
+        return Decimal(str(expected)) == Decimal(str(actual))
+    except (InvalidOperation, ValueError):
+        return expected == actual
 
 
 def _get_path(payload: dict[str, Any], path: str) -> Any:

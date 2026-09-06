@@ -11,8 +11,8 @@ class Settings(BaseSettings):
     task_database_path: Path = Path("data/tasks.db")
     upload_dir: Path = Path("data/uploads")
     max_upload_bytes: int = 5 * 1024 * 1024
-    recorded_mapping_dir: Path = Path("evals/recorded_mappings")
-    golden_dataset_path: Path = Path("evals/golden_dataset.json")
+    recorded_mapping_dir: Path = Path("backend/evals/recorded_mappings")
+    golden_dataset_path: Path = Path("backend/evals/golden_dataset.json")
     event_poll_interval_ms: int = 250
     background_job_dispatch_enabled: bool = True
     learning_resolver_url: str | None = None
