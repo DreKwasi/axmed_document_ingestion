@@ -207,7 +207,11 @@ onBeforeUnmount(() => eventSources.forEach((source) => source.close()));
               </thead>
               <tbody>
                 <tr v-for="(item, index) in document.quotation.line_items" :key="item.source_key ?? index">
-                  <td><strong>{{ item.product.trade_name ?? "—" }}</strong><small>{{ item.product.inn.join(" · ") }}</small></td>
+                  <td>
+                    <strong>{{ item.product.trade_name ?? "—" }}</strong>
+                    <small>{{ item.product.inn.join(" · ") }}</small>
+                    <small v-if="item.product.dosage_form">{{ [item.product.dosage_form, item.packaging.presentation].filter(Boolean).join(" · ") }}</small>
+                  </td>
                   <td>{{ item.quantity.minimum_order_quantity ?? "—" }} {{ item.quantity.minimum_order_quantity_uom }}</td>
                   <td>{{ item.pricing.currency }} {{ displayPrice(item.pricing.quoted_price.amount) }} / {{ item.pricing.quoted_price.uom }}</td>
                   <td>
@@ -278,7 +282,7 @@ onBeforeUnmount(() => eventSources.forEach((source) => source.close()));
                       <tbody>
                         <tr v-for="result in run.results" :key="result.case_id">
                           <td>{{ result.case_id }}</td>
-                          <td>{{ result.status }}</td>
+                          <td>{{ result.status }}<small v-if="result.scores.model">{{ [result.scores.model, result.scores.prompt_version].filter(Boolean).join(" · ") }}</small></td>
                           <td>{{ result.scores.canonical_fidelity ?? "—" }}</td>
                           <td>{{ result.errors.join("; ") || "—" }}</td>
                         </tr>

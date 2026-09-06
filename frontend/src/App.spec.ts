@@ -72,7 +72,7 @@ describe("App", () => {
             {
               case_id: "email-correction-v1",
               status: "failed",
-              scores: { canonical_fidelity: 0 },
+              scores: { canonical_fidelity: 0, model: "test-model", prompt_version: "test-prompt-v1" },
               errors: ["Corrected price did not win."]
             }
           ]
@@ -87,6 +87,7 @@ describe("App", () => {
 
     expect(wrapper.text()).toContain("email-correction-v1");
     expect(wrapper.text()).toContain("Corrected price did not win.");
+    expect(wrapper.text()).toContain("test-model · test-prompt-v1");
   });
 
   it("shows the human mapping checkpoint for a newly observed schema and confirms it", async () => {
@@ -142,8 +143,8 @@ describe("App", () => {
         line_items: [
           {
             source_key: "line-1",
-            product: { trade_name: "Example", inn: ["Example INN"] },
-            packaging: {},
+            product: { trade_name: "Example", inn: ["Example INN"], dosage_form: "tablet" },
+            packaging: { presentation: "film-coated" },
             quantity: { minimum_order_quantity: "10", minimum_order_quantity_uom: "pack" },
             pricing: {
               currency: "EUR",
@@ -188,6 +189,7 @@ describe("App", () => {
 
     expect(wrapper.text()).toContain("commercials.price_per_pack");
     expect(wrapper.text()).toContain("99%");
+    expect(wrapper.text()).toContain("tablet · film-coated");
     expect(api.reviewDocument).toHaveBeenCalledWith(
       "document-2",
       "correct",

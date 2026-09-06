@@ -20,5 +20,5 @@ Measure a deployed image endpoint without retaining OCR text:
 
 ```sh
 set -a; source ../backend/.env; set +a
-uvx --from modal python benchmark_ocr.py ../sample_documents/scan_02_lowres_fax_andina_p1.png --runs 3
+uvx --from modal python benchmark_ocr.py ../backend/evals/fixtures/ocr/scan_02_lowres_fax_andina_p1.png --runs 3
 ```
