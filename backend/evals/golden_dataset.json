@@ -1,0 +1,69 @@
+{
+  "rubric_version": "1.0",
+  "rubric": [
+    {
+      "id": "canonical_fidelity",
+      "label": "Canonical fidelity",
+      "success_criterion": "Critical quotation fields and line-item count exactly match approved ground truth."
+    },
+    {
+      "id": "mapping_efficiency",
+      "label": "Mapping efficiency",
+      "success_criterion": "A trusted identical schema makes zero semantic-mapping calls."
+    },
+    {
+      "id": "safety_and_uncertainty",
+      "label": "Safety and uncertainty",
+      "success_criterion": "Unsupported or invalid inputs fail safely and unknown values are never invented."
+    }
+  ],
+  "cases": [
+    {
+      "id": "sanova-schema-reuse-v1",
+      "title": "Sanova ERP schema learns once and reuses deterministically",
+      "input_fixture": "fixtures/documents/sanova_offer_export_2026-08-03.json",
+      "expected": {
+        "source_system": "SanovaERP",
+        "quotation_reference": "SNV/EXP/2026/0771",
+        "line_item_count": 3,
+        "warm_mutation": {
+          "source_path": "offer.products.0.commercials.price_per_pack",
+          "value": 3.33,
+          "canonical_path": "line_items.0.pricing.pack_price"
+        }
+      }
+    },
+    {
+      "id": "farmaceutica-andina-pdf-v1",
+      "title": "Farmaceutica Andina proforma quotation",
+      "input_fixture": "fixtures/documents/farmaceutica_andina_proforma_FA-COT-2026-118.pdf",
+      "expected_output_fixture": "golden_outputs/farmaceutica_andina_proforma_FA-COT-2026-118.expected.json",
+      "execution": "live_pdf_pipeline",
+      "comparison": "expected_subset"
+    },
+    {
+      "id": "mekong-pharma-pdf-v1",
+      "title": "Mekong Pharma supplier quotation",
+      "input_fixture": "fixtures/documents/mekong_pharma_quotation_MKP-2026-0812.pdf",
+      "expected_output_fixture": "golden_outputs/mekong_pharma_quotation_MKP-2026-0812.expected.json",
+      "execution": "live_pdf_pipeline",
+      "comparison": "expected_subset"
+    },
+    {
+      "id": "andina-lowres-fax-ocr-v1",
+      "title": "Farmaceutica Andina low-resolution fax OCR evidence",
+      "input_fixture": "fixtures/ocr/scan_02_lowres_fax_andina_p1.png",
+      "expected_output_fixture": "golden_outputs/scan_02_lowres_fax_andina_p1.ocr.json",
+      "execution": "live_ocr_evidence",
+      "comparison": "ocr_anchors"
+    },
+    {
+      "id": "andina-glare-partial-ocr-v1",
+      "title": "Farmaceutica Andina glare partial OCR evidence",
+      "input_fixture": "fixtures/ocr/scan_03_glare_partial_andina_p1.jpg",
+      "expected_output_fixture": "golden_outputs/scan_03_glare_partial_andina_p1.ocr.json",
+      "execution": "live_ocr_evidence",
+      "comparison": "ocr_anchors"
+    }
+  ]
+}
