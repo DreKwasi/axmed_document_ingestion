@@ -2,19 +2,20 @@ import hashlib
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
-from decimal import InvalidOperation
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from pydantic import ValidationError
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.application.processing_events import record_event
 from app.core.settings import Settings
 from app.domain.commercial_rules import apply_commercial_rules, decimal_patch
+from app.domain.confidence import ConfidenceSignals, score_field_confidence
 from app.domain.contracts import CanonicalQuotation
 from app.domain.email_parser import parse_email
 from app.domain.image_parser import ImageParseError, parse_image
@@ -30,8 +31,16 @@ from app.infrastructure.models import (
     DocumentArtifactRecord,
     DocumentRecord,
     EmailExtractionRecord,
+    FieldEvidenceRecord,
+    ModelInvocationRecord,
     OcrJobRecord,
     PdfExtractionRecord,
+    QuotationLineItemAdjustmentRecord,
+    QuotationLineItemInnRecord,
+    QuotationLineItemMarketRecord,
+    QuotationLineItemPriceTierRecord,
+    QuotationLineItemRecord,
+    QuotationLineItemStrengthRecord,
     QuotationRecord,
     ReviewLearningRecord,
     ReviewRecord,
@@ -137,6 +146,7 @@ def ingest_email(
                 "source_document": document.original_filename,
                 "subject": parsed.subject,
                 "body_text": parsed.body_text,
+                "supplier_organization": parsed.supplier_organization,
                 "instruction": "Extract a canonical supplier quotation. Preserve corrections as superseded evidence.",
             }
         ),
@@ -204,7 +214,17 @@ def ingest_pdf(
                     {
                         "native_text_characters": page.native_text_characters,
                         "quality": page.quality,
+                        "text_item_count": len(page.text_items),
                     }
+                ),
+                safe_content_json=json.dumps(
+                    redact_for_model(
+                        {
+                            "liteparse": page.raw_representation,
+                            "text": page.text,
+                            "text_items": list(page.text_items),
+                        }
+                    )
                 ),
             )
         )
@@ -237,7 +257,11 @@ def ingest_pdf(
                     {
                         "source_document": document.original_filename,
                         "pages": [
-                            {"page_number": page.page_number, "text": redact_for_model(page.text)}
+                            {
+                                "page_number": page.page_number,
+                                "liteparse": redact_for_model(page.raw_representation),
+                                "text": redact_for_model(page.text),
+                            }
                             for page in parsed.pages
                         ],
                         "instruction": "Extract a canonical supplier quotation and retain page-level evidence.",
@@ -303,14 +327,313 @@ def ingest_image(
 
 def _upsert_quotation(session: Session, document: DocumentRecord, quotation: CanonicalQuotation) -> QuotationRecord:
     stored = session.scalar(select(QuotationRecord).where(QuotationRecord.document_id == document.id))
-    payload_json = apply_commercial_rules(quotation).model_dump_json()
+    parsed_summary = _safe_parsed_summary(document) or {}
+    quoted = apply_commercial_rules(quotation)
+    payload_json = score_field_confidence(
+        quoted,
+        ConfidenceSignals(
+            source_type=document.source_system,
+            ocr_used=document.source_system == "image" or bool(parsed_summary.get("needs_ocr_pages")),
+            parser_quality="poor" if bool(parsed_summary.get("needs_ocr_pages")) else None,
+        ),
+    ).model_dump_json()
     if stored:
         stored.payload_json = payload_json
         stored.revision += 1
+        _sync_field_evidence(session, document.id, stored, CanonicalQuotation.model_validate_json(payload_json))
+        _sync_normalized_line_items(session, stored.id, CanonicalQuotation.model_validate_json(payload_json))
         return stored
     stored = QuotationRecord(document_id=document.id, payload_json=payload_json)
     session.add(stored)
+    session.flush()
+    _sync_field_evidence(session, document.id, stored, CanonicalQuotation.model_validate_json(payload_json))
+    _sync_normalized_line_items(session, stored.id, CanonicalQuotation.model_validate_json(payload_json))
     return stored
+
+
+def _sync_normalized_line_items(session: Session, quotation_id: str, canonical: CanonicalQuotation) -> None:
+    """Replace the relational line-item projection while retaining the quotation snapshot."""
+
+    line_item_ids = session.scalars(
+        select(QuotationLineItemRecord.id).where(QuotationLineItemRecord.quotation_id == quotation_id)
+    ).all()
+    if line_item_ids:
+        for model in (
+            QuotationLineItemInnRecord,
+            QuotationLineItemStrengthRecord,
+            QuotationLineItemPriceTierRecord,
+            QuotationLineItemAdjustmentRecord,
+            QuotationLineItemMarketRecord,
+        ):
+            session.execute(delete(model).where(model.line_item_id.in_(line_item_ids)))
+        session.execute(delete(QuotationLineItemRecord).where(QuotationLineItemRecord.id.in_(line_item_ids)))
+
+    for position, line in enumerate(canonical.line_items):
+        line_item_id = str(uuid4())
+        session.add(
+            QuotationLineItemRecord(
+                id=line_item_id,
+                quotation_id=quotation_id,
+                position=position,
+                source_key=line.source_key,
+                trade_name=line.product.trade_name,
+                dosage_form=line.product.dosage_form,
+                route=line.product.route,
+                manufacturer=line.product.manufacturer,
+                country_of_origin=line.product.country_of_origin,
+                packaging_description=line.packaging.description,
+                packaging_presentation=line.packaging.presentation,
+                primary_pack=line.packaging.primary_pack,
+                units_per_pack=line.packaging.units_per_pack,
+                unit_label=line.packaging.unit_label,
+                packs_per_shipper=line.packaging.packs_per_shipper,
+                quoted_quantity=line.quantity.quoted_quantity,
+                quoted_quantity_uom=line.quantity.quoted_quantity_uom,
+                quantity_basis=line.quantity.quantity_basis,
+                minimum_order_quantity=line.quantity.minimum_order_quantity,
+                minimum_order_quantity_uom=line.quantity.minimum_order_quantity_uom,
+                currency=line.pricing.currency,
+                quoted_price_amount=line.pricing.quoted_price.amount,
+                quoted_price_uom=line.pricing.quoted_price.uom,
+                pack_price=line.pricing.pack_price,
+                discount=line.pricing.discount,
+                extended_price=line.pricing.extended_price,
+                normalized_price_amount=line.pricing.normalized_price.get("amount"),
+                normalized_price_uom=line.pricing.normalized_price.get("uom"),
+                normalized_price_calculation=line.pricing.normalized_price.get("calculation"),
+                normalized_price_derived=line.pricing.normalized_price.get("derived"),
+                lead_time_days=line.supply.lead_time_days,
+                shelf_life_months=line.supply.shelf_life_months,
+                minimum_remaining_shelf_life_percent=line.supply.minimum_remaining_shelf_life_percent,
+                storage_conditions=line.supply.storage_conditions,
+                cold_chain_required=line.supply.cold_chain_required,
+                who_prequalified=line.regulatory.who_prequalified,
+                who_pq_reference=line.regulatory.who_pq_reference,
+                registration_reference=line.regulatory.registration_reference,
+                regulatory_status=line.regulatory.regulatory_status,
+                hs_code=line.regulatory.hs_code,
+                atc_code=line.regulatory.atc_code,
+            )
+        )
+        session.flush()
+        session.add_all(
+            [
+                QuotationLineItemInnRecord(id=str(uuid4()), line_item_id=line_item_id, position=index, value=value)
+                for index, value in enumerate(line.product.inn)
+            ]
+            + [
+                QuotationLineItemStrengthRecord(
+                    id=str(uuid4()),
+                    line_item_id=line_item_id,
+                    position=index,
+                    ingredient=value.ingredient,
+                    value=value.value,
+                    unit=value.unit,
+                    per_value=value.per_value,
+                    per_unit=value.per_unit,
+                )
+                for index, value in enumerate(line.product.strength)
+            ]
+            + [
+                QuotationLineItemPriceTierRecord(
+                    id=str(uuid4()),
+                    line_item_id=line_item_id,
+                    position=index,
+                    min_quantity=value.min_quantity,
+                    max_quantity=value.max_quantity,
+                    quantity_uom=value.quantity_uom,
+                    price=value.price,
+                    price_uom=value.price_uom,
+                )
+                for index, value in enumerate(line.pricing.price_tiers)
+            ]
+            + [
+                QuotationLineItemAdjustmentRecord(
+                    id=str(uuid4()),
+                    line_item_id=line_item_id,
+                    position=index,
+                    type=value.type,
+                    value=value.value,
+                    value_type=value.value_type,
+                    condition=value.condition,
+                )
+                for index, value in enumerate(line.pricing.adjustments)
+            ]
+            + [
+                QuotationLineItemMarketRecord(id=str(uuid4()), line_item_id=line_item_id, position=index, market=value)
+                for index, value in enumerate(line.regulatory.registered_markets)
+            ]
+        )
+
+
+def _normalized_line_items(session: Session, quotation_id: str) -> list[dict[str, Any]] | None:
+    """Read line items from normalized tables and return API-compatible JSON values."""
+
+    rows = session.scalars(
+        select(QuotationLineItemRecord)
+        .where(QuotationLineItemRecord.quotation_id == quotation_id)
+        .order_by(QuotationLineItemRecord.position)
+    ).all()
+    if not rows:
+        return None
+    line_item_ids = [row.id for row in rows]
+
+    def grouped(model):
+        result: dict[str, list[Any]] = {line_item_id: [] for line_item_id in line_item_ids}
+        values = session.scalars(select(model).where(model.line_item_id.in_(line_item_ids))).all()
+        for value in values:
+            result[value.line_item_id].append(value)
+        for value_list in result.values():
+            value_list.sort(key=lambda value: value.position)
+        return result
+
+    inns = grouped(QuotationLineItemInnRecord)
+    strengths = grouped(QuotationLineItemStrengthRecord)
+    price_tiers = grouped(QuotationLineItemPriceTierRecord)
+    adjustments = grouped(QuotationLineItemAdjustmentRecord)
+    markets = grouped(QuotationLineItemMarketRecord)
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        result.append(
+            {
+                "source_key": row.source_key,
+                "product": {
+                    "trade_name": row.trade_name,
+                    "inn": [value.value for value in inns[row.id]],
+                    "strength": [
+                        {
+                            "ingredient": value.ingredient,
+                            "value": value.value,
+                            "unit": value.unit,
+                            "per_value": value.per_value,
+                            "per_unit": value.per_unit,
+                        }
+                        for value in strengths[row.id]
+                    ],
+                    "dosage_form": row.dosage_form,
+                    "route": row.route,
+                    "manufacturer": row.manufacturer,
+                    "country_of_origin": row.country_of_origin,
+                },
+                "packaging": {
+                    "description": row.packaging_description,
+                    "presentation": row.packaging_presentation,
+                    "primary_pack": row.primary_pack,
+                    "units_per_pack": row.units_per_pack,
+                    "unit_label": row.unit_label,
+                    "packs_per_shipper": row.packs_per_shipper,
+                },
+                "quantity": {
+                    "quoted_quantity": row.quoted_quantity,
+                    "quoted_quantity_uom": row.quoted_quantity_uom,
+                    "quantity_basis": row.quantity_basis,
+                    "minimum_order_quantity": row.minimum_order_quantity,
+                    "minimum_order_quantity_uom": row.minimum_order_quantity_uom,
+                },
+                "pricing": {
+                    "currency": row.currency,
+                    "quoted_price": {"amount": row.quoted_price_amount, "uom": row.quoted_price_uom},
+                    "pack_price": row.pack_price,
+                    "discount": row.discount,
+                    "extended_price": row.extended_price,
+                    "price_tiers": [
+                        {
+                            "min_quantity": value.min_quantity,
+                            "max_quantity": value.max_quantity,
+                            "quantity_uom": value.quantity_uom,
+                            "price": value.price,
+                            "price_uom": value.price_uom,
+                        }
+                        for value in price_tiers[row.id]
+                    ],
+                    "adjustments": [
+                        {
+                            "type": value.type,
+                            "value": value.value,
+                            "value_type": value.value_type,
+                            "condition": value.condition,
+                        }
+                        for value in adjustments[row.id]
+                    ],
+                    "normalized_price": {
+                        "amount": row.normalized_price_amount,
+                        "uom": row.normalized_price_uom,
+                        "calculation": row.normalized_price_calculation,
+                        "derived": row.normalized_price_derived,
+                    },
+                },
+                "supply": {
+                    "lead_time_days": row.lead_time_days,
+                    "shelf_life_months": row.shelf_life_months,
+                    "minimum_remaining_shelf_life_percent": row.minimum_remaining_shelf_life_percent,
+                    "storage_conditions": row.storage_conditions,
+                    "cold_chain_required": row.cold_chain_required,
+                },
+                "regulatory": {
+                    "who_prequalified": row.who_prequalified,
+                    "who_pq_reference": row.who_pq_reference,
+                    "registered_markets": [value.market for value in markets[row.id]],
+                    "registration_reference": row.registration_reference,
+                    "regulatory_status": row.regulatory_status,
+                    "hs_code": row.hs_code,
+                    "atc_code": row.atc_code,
+                },
+                "evidence": [],
+            }
+        )
+    return json.loads(json.dumps(result, default=str))
+
+
+def _restore_snapshot_number_format(value: Any, snapshot: Any) -> Any:
+    """Keep API number formatting stable while relational Numeric columns remain queryable."""
+
+    if isinstance(value, dict) and isinstance(snapshot, dict):
+        return {
+            key: _restore_snapshot_number_format(item, snapshot[key]) if key in snapshot else item
+            for key, item in value.items()
+        }
+    if isinstance(value, list) and isinstance(snapshot, list):
+        return [
+            _restore_snapshot_number_format(item, snapshot[index]) if index < len(snapshot) else item
+            for index, item in enumerate(value)
+        ]
+    if isinstance(value, str) and isinstance(snapshot, (str, int, float)) and not isinstance(snapshot, bool):
+        try:
+            Decimal(value)
+            if isinstance(snapshot, str):
+                Decimal(snapshot)
+                return snapshot
+            return str(snapshot)
+        except InvalidOperation:
+            pass
+    return value
+
+
+def _sync_field_evidence(
+    session: Session, document_id: str, quotation: QuotationRecord, canonical: CanonicalQuotation
+) -> None:
+    """Persist field provenance separately from business values for review and audit queries."""
+
+    session.execute(delete(FieldEvidenceRecord).where(FieldEvidenceRecord.quotation_id == quotation.id))
+    evidence_with_paths = [(evidence, "") for evidence in canonical.evidence]
+    evidence_with_paths.extend(
+        (evidence, f"line_items[{index}].")
+        for index, line in enumerate(canonical.line_items)
+        for evidence in line.evidence
+    )
+    for evidence, prefix in evidence_with_paths:
+        session.add(
+            FieldEvidenceRecord(
+                document_id=document_id,
+                quotation_id=quotation.id,
+                canonical_field=f"{prefix}{evidence.canonical_field}",
+                source_path=evidence.source_path,
+                source_location=evidence.source_location,
+                extraction_method=evidence.extraction_method,
+                confidence=str(evidence.confidence),
+                supersedes_source_path=evidence.supersedes_source_path,
+            )
+        )
 
 
 def apply_review_action(session: Session, document_id: str, action: str, command: dict[str, Any]) -> DocumentRecord:
@@ -355,7 +678,7 @@ def apply_review_action(session: Session, document_id: str, action: str, command
                 raise ReviewValidationError(str(error)) from error
             current[segments[-1]] = value
             line_evidence = payload["line_items"][line_index]["evidence"]
-            prior_evidence = next(
+            prior_evidence: dict[str, Any] = next(
                 (evidence for evidence in line_evidence if evidence["canonical_field"] == field.canonical_field),
                 {},
             )
@@ -363,6 +686,7 @@ def apply_review_action(session: Session, document_id: str, action: str, command
                 {
                     "canonical_field": field.canonical_field,
                     "source_path": f"review:{request_id}",
+                    "source_location": "human review",
                     "extraction_method": "human_corrected",
                     "confidence": "1.00",
                     "supersedes_source_path": prior_evidence.get("source_path"),
@@ -387,7 +711,7 @@ def apply_review_action(session: Session, document_id: str, action: str, command
         )
         .values(payload_json=payload_json, review_status=next_review_status, revision=next_revision)
     )
-    if transition.rowcount != 1:
+    if transition.rowcount != 1:  # type: ignore[attr-defined]
         session.rollback()
         replay = session.scalar(
             select(ReviewRecord).where(ReviewRecord.document_id == document_id, ReviewRecord.request_id == request_id)
@@ -395,6 +719,10 @@ def apply_review_action(session: Session, document_id: str, action: str, command
         if replay:
             return session.get(DocumentRecord, document_id)  # type: ignore[return-value]
         raise ValueError("The quotation changed before this decision could be applied; reload and try again.")
+    if action == "corrected":
+        session.flush()
+        _sync_field_evidence(session, document_id, quotation, canonical)
+        _sync_normalized_line_items(session, quotation.id, canonical)
     review = ReviewRecord(
         document_id=document_id,
         request_id=request_id,
@@ -568,6 +896,24 @@ def ingest_json(
         session.commit()
         return document
 
+    session.add(
+        ModelInvocationRecord(
+            document_id=document.id,
+            operation="schema_mapping",
+            provider=proposal.provider,
+            model=None,
+            prompt_version="schema-mapping-v1",
+            status="completed",
+            duration_ms=proposal.duration_ms,
+            input_tokens=proposal.input_tokens,
+            output_tokens=proposal.output_tokens,
+            estimated_cost_usd=None if proposal.estimated_cost_usd is None else str(proposal.estimated_cost_usd),
+            safe_metadata_json=json.dumps(
+                {"source_system": source_system, "schema_fingerprint": schema_fingerprint}, sort_keys=True
+            ),
+        )
+    )
+
     if mapping is None:
         mapping = SchemaMappingRecord(
             source_system=source_system,
@@ -634,7 +980,15 @@ def confirm_mapping(session: Session, document_id: str, settings: Settings) -> D
 def serialize_document(session: Session, document: DocumentRecord) -> dict[str, Any]:
     quotation = session.scalar(select(QuotationRecord).where(QuotationRecord.document_id == document.id))
     quotation_payload = None if quotation is None else json.loads(quotation.payload_json)
-    if quotation_payload is not None:
+    if quotation_payload is not None and quotation is not None:
+        normalized_items = _normalized_line_items(session, quotation.id)
+        if normalized_items is not None:
+            snapshot_items = quotation_payload.get("line_items", [])
+            normalized_items = _restore_snapshot_number_format(normalized_items, snapshot_items)
+            for index, line_item in enumerate(normalized_items):
+                if index < len(snapshot_items):
+                    line_item["evidence"] = snapshot_items[index].get("evidence", [])
+            quotation_payload["line_items"] = normalized_items
         quotation_payload["revision"] = quotation.revision
         quotation_payload["review_status"] = quotation.review_status
     mapping = None
@@ -736,7 +1090,11 @@ def _safe_parsed_summary(document: DocumentRecord) -> dict[str, Any] | None:
         "email": {"subject", "message_id"},
         "pdf": {"page_count", "needs_ocr_pages"},
     }
-    return {key: value for key, value in summary.items() if key in allowed_by_source.get(document.source_system, set())}
+    return {
+        key: value
+        for key, value in summary.items()
+        if key in allowed_by_source.get(document.source_system or "", set())
+    }
 
 
 def ingest_failed_document(

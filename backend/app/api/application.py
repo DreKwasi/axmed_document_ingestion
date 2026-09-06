@@ -37,6 +37,7 @@ from app.domain.schema_mapping import (
     ChainedSemanticMappingProvider,
     LangChainSemanticMappingProvider,
     RecordedSemanticMappingProvider,
+    SemanticMappingProvider,
 )
 from app.infrastructure.database import create_sqlite_engine, run_migrations
 from app.infrastructure.models import (
@@ -80,7 +81,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         autocommit=False,
         expire_on_commit=False,
     )
-    mapping_providers = []
+    mapping_providers: list[SemanticMappingProvider] = []
     if active_settings.resolved_gemini_api_key:
         mapping_providers.append(
             LangChainSemanticMappingProvider(
@@ -280,6 +281,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ):
         return await _process_upload_file(session, file, batch_id=batch_id, isolate_failures=False)
 
+    @app.get("/api/v1/documents")
+    def list_documents(session: SessionDep):
+        documents = session.scalars(select(DocumentRecord).order_by(DocumentRecord.created_at.desc())).all()
+        return [serialize_document(session, document) for document in documents]
+
     @app.post("/api/v1/batches", status_code=201)
     async def upload_batch(
         session: SessionDep,
@@ -471,6 +477,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "model": invocation.model,
                     "status": invocation.status,
                     "duration_ms": invocation.duration_ms,
+                    "input_tokens": invocation.input_tokens,
+                    "output_tokens": invocation.output_tokens,
+                    "estimated_cost_usd": invocation.estimated_cost_usd,
                     "metadata": json.loads(invocation.safe_metadata_json),
                     "created_at": invocation.created_at,
                 }

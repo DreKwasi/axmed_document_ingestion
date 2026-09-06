@@ -1,7 +1,8 @@
 from datetime import datetime
+from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.database import Base
@@ -69,6 +70,116 @@ class QuotationRecord(Base):
     document: Mapped[DocumentRecord] = relationship(back_populates="quotation")
 
 
+class QuotationLineItemRecord(Base):
+    """Normalized, queryable representation of one extracted quotation line."""
+
+    __tablename__ = "quotation_line_items"
+    __table_args__ = (UniqueConstraint("quotation_id", "position", name="uq_quotation_line_item_position"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    quotation_id: Mapped[str] = mapped_column(ForeignKey("quotations.id"), index=True)
+    position: Mapped[int] = mapped_column(Integer)
+    source_key: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    trade_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    dosage_form: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    route: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    manufacturer: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    country_of_origin: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    packaging_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    packaging_presentation: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    primary_pack: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    units_per_pack: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    unit_label: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    packs_per_shipper: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    quoted_quantity: Mapped[Decimal | None] = mapped_column(Numeric(50, 30), nullable=True)
+    quoted_quantity_uom: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    quantity_basis: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    minimum_order_quantity: Mapped[Decimal | None] = mapped_column(Numeric(50, 30), nullable=True)
+    minimum_order_quantity_uom: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    currency: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    quoted_price_amount: Mapped[Decimal | None] = mapped_column(Numeric(50, 30), nullable=True)
+    quoted_price_uom: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    pack_price: Mapped[Decimal | None] = mapped_column(Numeric(50, 30), nullable=True)
+    discount: Mapped[Decimal | None] = mapped_column(Numeric(50, 30), nullable=True)
+    extended_price: Mapped[Decimal | None] = mapped_column(Numeric(50, 30), nullable=True)
+    normalized_price_amount: Mapped[Decimal | None] = mapped_column(Numeric(50, 30), nullable=True)
+    normalized_price_uom: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    normalized_price_calculation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    normalized_price_derived: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    lead_time_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    shelf_life_months: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    minimum_remaining_shelf_life_percent: Mapped[Decimal | None] = mapped_column(Numeric(50, 30), nullable=True)
+    storage_conditions: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cold_chain_required: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    who_prequalified: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    who_pq_reference: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    registration_reference: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    regulatory_status: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    hs_code: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    atc_code: Mapped[str | None] = mapped_column(String(120), nullable=True)
+
+
+class QuotationLineItemInnRecord(Base):
+    __tablename__ = "quotation_line_item_inn"
+    __table_args__ = (UniqueConstraint("line_item_id", "position", name="uq_line_item_inn_position"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    line_item_id: Mapped[str] = mapped_column(ForeignKey("quotation_line_items.id"), index=True)
+    position: Mapped[int] = mapped_column(Integer)
+    value: Mapped[str] = mapped_column(String(255))
+
+
+class QuotationLineItemStrengthRecord(Base):
+    __tablename__ = "quotation_line_item_strengths"
+    __table_args__ = (UniqueConstraint("line_item_id", "position", name="uq_line_item_strength_position"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    line_item_id: Mapped[str] = mapped_column(ForeignKey("quotation_line_items.id"), index=True)
+    position: Mapped[int] = mapped_column(Integer)
+    ingredient: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    value: Mapped[Decimal | None] = mapped_column(Numeric(50, 30), nullable=True)
+    unit: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    per_value: Mapped[Decimal | None] = mapped_column(Numeric(50, 30), nullable=True)
+    per_unit: Mapped[str | None] = mapped_column(String(120), nullable=True)
+
+
+class QuotationLineItemPriceTierRecord(Base):
+    __tablename__ = "quotation_line_item_price_tiers"
+    __table_args__ = (UniqueConstraint("line_item_id", "position", name="uq_line_item_price_tier_position"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    line_item_id: Mapped[str] = mapped_column(ForeignKey("quotation_line_items.id"), index=True)
+    position: Mapped[int] = mapped_column(Integer)
+    min_quantity: Mapped[Decimal | None] = mapped_column(Numeric(50, 30), nullable=True)
+    max_quantity: Mapped[Decimal | None] = mapped_column(Numeric(50, 30), nullable=True)
+    quantity_uom: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    price: Mapped[Decimal | None] = mapped_column(Numeric(50, 30), nullable=True)
+    price_uom: Mapped[str | None] = mapped_column(String(120), nullable=True)
+
+
+class QuotationLineItemAdjustmentRecord(Base):
+    __tablename__ = "quotation_line_item_adjustments"
+    __table_args__ = (UniqueConstraint("line_item_id", "position", name="uq_line_item_adjustment_position"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    line_item_id: Mapped[str] = mapped_column(ForeignKey("quotation_line_items.id"), index=True)
+    position: Mapped[int] = mapped_column(Integer)
+    type: Mapped[str] = mapped_column(String(120))
+    value: Mapped[Decimal | None] = mapped_column(Numeric(50, 30), nullable=True)
+    value_type: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    condition: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class QuotationLineItemMarketRecord(Base):
+    __tablename__ = "quotation_line_item_markets"
+    __table_args__ = (UniqueConstraint("line_item_id", "position", name="uq_line_item_market_position"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    line_item_id: Mapped[str] = mapped_column(ForeignKey("quotation_line_items.id"), index=True)
+    position: Mapped[int] = mapped_column(Integer)
+    market: Mapped[str] = mapped_column(String(120))
+
+
 class ReviewRecord(Base):
     __tablename__ = "reviews"
     __table_args__ = (UniqueConstraint("document_id", "request_id", name="uq_review_request"),)
@@ -120,6 +231,7 @@ class DocumentArtifactRecord(Base):
     kind: Mapped[str] = mapped_column(String(80))
     page_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    safe_content_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -178,8 +290,29 @@ class ModelInvocationRecord(Base):
     model: Mapped[str | None] = mapped_column(String(120), nullable=True)
     prompt_version: Mapped[str] = mapped_column(String(40))
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    estimated_cost_usd: Mapped[str | None] = mapped_column(String(40), nullable=True)
     status: Mapped[str] = mapped_column(String(40))
     safe_metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class FieldEvidenceRecord(Base):
+    __tablename__ = "field_evidence"
+    __table_args__ = (
+        UniqueConstraint("quotation_id", "canonical_field", "source_path", name="uq_field_evidence_source"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    document_id: Mapped[str] = mapped_column(ForeignKey("documents.id"), index=True)
+    quotation_id: Mapped[str] = mapped_column(ForeignKey("quotations.id"), index=True)
+    canonical_field: Mapped[str] = mapped_column(String(255))
+    source_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    source_location: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    extraction_method: Mapped[str] = mapped_column(String(80))
+    confidence: Mapped[str] = mapped_column(String(40))
+    supersedes_source_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
