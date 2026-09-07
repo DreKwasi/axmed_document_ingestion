@@ -3,11 +3,15 @@
 import argparse
 import base64
 import json
-import os
 import statistics
 import time
 from pathlib import Path
 from urllib.request import Request, urlopen
+
+try:
+    from config import OCR_SERVICE_TOKEN, OCR_SERVICE_URL
+except ImportError:
+    from modal.config import OCR_SERVICE_TOKEN, OCR_SERVICE_URL
 
 
 def percentile(values: list[float], fraction: float) -> float:
@@ -57,11 +61,11 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("file", type=Path)
     parser.add_argument("--runs", type=int, default=3)
-    parser.add_argument("--endpoint", default=os.environ.get("AXMED_OCR_SERVICE_URL"))
-    parser.add_argument("--token", default=os.environ.get("AXMED_OCR_SERVICE_TOKEN"))
+    parser.add_argument("--endpoint", default=OCR_SERVICE_URL)
+    parser.add_argument("--token", default=OCR_SERVICE_TOKEN)
     args = parser.parse_args()
     if not args.endpoint or not args.token:
-        parser.error("AXMED_OCR_SERVICE_URL and AXMED_OCR_SERVICE_TOKEN are required.")
+        parser.error("OCR_SERVICE_URL and OCR_SERVICE_TOKEN are required.")
     if args.runs < 1:
         parser.error("--runs must be at least 1.")
     if not args.file.is_file():

@@ -103,8 +103,8 @@ npx playwright test --ui
 - **Field-Level Provenance**: Hover or click any field to inspect the exact source text, page bounds, and extraction method (e.g. `deterministic_mapping`, `langchain-gemini`).
 
 ### 4. Human-in-the-Loop Review Controls
-- **Novel Schema Confirmation**: Review and confirm newly proposed schema mappings. Once approved, the mapping is saved to SQLite schema memory so future uploads require **0 LLM calls**.
-- **Inline Field Corrections**: Correct any misread field; records an immutable revision trail and triggers review learning.
+- **Source-grounded JSON extraction**: JSON uploads are interpreted independently. Correctly recovered facts are retained even when they do not yet have a certain canonical destination.
+- **Inline Field Corrections**: Correct any misread canonical field and retain an immutable revision trail.
 - **Decision Boundary**: Explicitly Approve or Reject quotations before export.
 
 ---

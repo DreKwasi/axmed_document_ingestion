@@ -40,9 +40,9 @@ ocr(bytes, media_type, selected_original_pages, idempotency_key, deadline) ->
 
 The caller sends only pages selected by `ParseQualityPolicy`. The response is provider evidence, not a canonical quotation; normalization and semantic interpretation remain inside the Axmed pipeline.
 
-The checked-in `app.domain.ocr_contract` now enforces this response shape locally. The reference service's text-only response is therefore a benchmark input, not a deployable Axmed contract; the Axmed-owned service must add bounds, confidence, dimensions, DPI, version, and safe execution metadata before it can be wired in.
+The checked-in `app.extraction.ocr_contract` now enforces this response shape locally. The reference service's text-only response is therefore a benchmark input, not a deployable Axmed contract; the Axmed-owned service must add bounds, confidence, dimensions, DPI, version, and safe execution metadata before it can be wired in.
 
-`app.workers.ocr_client` sends this contract with a bounded deadline, idempotency key, selected original pages, and optional backend-to-service bearer credential. `app.workers.ocr` is the retrying queue boundary: it retains only redacted OCR evidence, emits safe stage events, and does not pretend OCR succeeded when no endpoint is configured.
+`app.extraction.ocr_client` sends this contract with a bounded deadline, idempotency key, selected original pages, and optional backend-to-service bearer credential. `app.extraction.image_processing` runs the OCR step in-process: it retains only redacted OCR evidence, emits safe stage events, and does not pretend OCR succeeded when no endpoint is configured.
 
 ## Deployment and benchmark gate
 
