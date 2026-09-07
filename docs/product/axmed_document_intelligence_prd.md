@@ -6,6 +6,7 @@
 **Context:** Axmed AI Engineer Take-Home Assignment 
 **Primary stack:** Python / FastAPI + Vue 3 
 **Document status:** Working implementation specification
+**Canonical specification:** This is the sole versioned PRD for this repository. Historical drafts are source material, not parallel requirements.
 
 ---
 
@@ -1490,45 +1491,55 @@ Conceptually:
 
 ---
 
-# 45. Confidence, coverage, and review policy
+# 45. Confidence and extraction correctness
 
-The product must not expose a document-level percentage called `confidence`. A percentage conflates two different questions: how much of the quotation was recovered and how trustworthy each recovered value is.
+Confidence answers one question: **how confidently did the system recover a value that the source actually states?** It does not measure schema completeness, commercial completeness, or whether normalization mapped a source fact to the right internal field.
 
 The system keeps three separate concepts:
 
 ```text
-extraction coverage  = how many key fields were recovered
-field reliability    = High | Medium | Low | Not extracted
-review decision      = system routing and human outcome
+field confidence       = trustworthiness of an extracted source fact
+commercial availability = whether the information required to review an offer is available
+review decision         = system routing and human outcome
 ```
 
-## 45.1 Extraction coverage
+## 45.1 Field-level confidence
 
-Coverage is based on key quotation fields, not every property in the canonical schema. The UI presents an interpretable count such as `5 of 8 key fields extracted`; it does not present that count as an accuracy percentage. High coverage does not imply high reliability, and low coverage does not invalidate reliable fields that were recovered.
+Every extracted source fact is persisted with its numeric evidence, provenance, categorical **Confidence**, and safe reason. Numeric evidence supports policy and evaluation but is not a calibrated probability and is never displayed as a confidence percentage.
 
-## 45.2 Field reliability
+The reviewer sees one of these categories:
 
-Every persisted extracted field has a categorical reliability and a safe reason. Reliability is derived from observable evidence, never solely from the model's self-assessment.
+```text
+High    direct or strongly corroborated source evidence with no material warning
+Medium  usable source evidence that needs ordinary verification
+Low     an extracted value has weak OCR evidence, ambiguity, conflict, or poor parser quality
+```
 
-Signals include direct JSON values, trusted/human-verified mappings, native parser quality, OCR quality, ambiguity, derivation, correction/revision signals, arithmetic reconciliation, missing units, validation errors, and conflicting source evidence. A numeric score may exist internally for policy evaluation but is not a calibrated probability and is not shown as a percentage.
+Confidence is derived from observable evidence: direct JSON, native PDF text, OCR quality, clear table/row association, explicit email text, parser agreement, conflicting values, and correction/revision signals. A conflict is never averaged away; the affected extracted field is Low and is routed to review.
 
-## 45.3 Critical fields and conflict policy
+## 45.2 Missing information and commercial availability
 
-Critical commercial fields are product identity/INN, strength, dosage form, quoted price, price UOM, currency, and quoted quantity where applicable. Important fields include pack size, MOQ, Incoterm, discount, and lead time.
+A missing value is **not** a confidence category. If a supplier never states an MOQ, route, manufacturer, shelf life, or regulatory status, that does not reduce the confidence of the values that were recovered.
 
-A missing or non-High critical field, a deterministic validation error, material OCR/parser warning, or conflicting evidence forces review. A conflict is not averaged away: the affected field is Low with a conflict reason and the record is routed to review.
+The quotation review still requires seven commercial fields where applicable: product identity/INN, strength, dosage form, currency, quoted price, price UOM, and quoted quantity. Their presence is shown separately as an availability count such as `5 of 7 key fields available`.
+
+If one is unavailable, the product is sent to review because the offer cannot safely be evaluated or derived—not because another extracted value is less trustworthy. The **Review issues** column names the unavailable field. `Not extracted` may appear only as a field-availability state in detailed inspection; it is never shown as a product's Confidence and never lowers confidence in a different extracted field.
+
+## 45.3 Confidence is not schema-mapping correctness
+
+If the source clearly states `MOQ: 5,000 boxes`, recovering that label, number, and unit can have High confidence. Mapping it incorrectly to `quoted_quantity` is a normalization defect, not evidence that the source extraction was Low confidence.
 
 ## 45.4 Document and row summaries
 
-Document summaries describe operational state and coverage, for example:
+The document header does not show a generic percentage. It reports operational state, for example:
 
 ```text
-5 of 8 key fields extracted
-1 product requires review
-Review required
+5 products extracted
+5 of 7 key fields available
+1 field requires review
 ```
 
-Rows display their own reliability so one damaged product does not make every product suspect. Raw document confidence percentages are not displayed.
+Rows display the lowest confidence among their extracted fields only. The adjacent **Review issues** column separately names missing commercial values, conflicts, and validation failures.
 
 ---
 
@@ -1541,9 +1552,9 @@ SYSTEM DECISION: auto_accepted | needs_review
 HUMAN OUTCOME:  unreviewed | approved | corrected | rejected
 ```
 
-`auto_accepted` means the system judged the result safe enough to bypass the default manual queue; it does not mean a human approved it. It requires complete and High-reliability critical fields, passing deterministic checks, no material parser/OCR uncertainty, and no conflicts.
+`auto_accepted` means the system judged the result safe enough to bypass the default manual queue; it does not mean a human approved it. It requires every required commercial value to be available, the extracted facts to meet the configured confidence policy, passing deterministic checks, no material parser/OCR uncertainty, and no conflicts.
 
-`needs_review` is the exception route. It is selected for missing/unreliable critical values, validation errors, conflicts, ambiguity, poor OCR/parser quality, or unsafe derivation. The default review queue shows these exceptions, while auto-accepted records remain available in the broader source list.
+`needs_review` is the exception route. It is selected for unavailable commercial values, Low-confidence extracted facts, validation errors, conflicts, ambiguity, poor OCR/parser quality, or unsafe derivation. The default review queue shows these exceptions, while auto-accepted records remain available in the broader source list.
 
 `approved` means a reviewer inspected and accepted the record. An approval note is optional. `corrected` means a reviewer changed one or more values; the audit trail stores before/after values and an optional note. `rejected` requires a structured reason and permits an optional note.
 
@@ -1562,11 +1573,11 @@ other
 
 # 47. Review experience
 
-The review workspace is exception-based. It tells a reviewer what was extracted, why it was routed to review, each field's source/reliability, and whether a value is supplier-provided or derived. It prioritizes suspicious fields and does not ask reviewers to inspect every auto-accepted record.
+The review workspace is exception-based. It tells a reviewer what was extracted, why it was routed to review, each field's source/confidence, and whether a value is supplier-provided or derived. It prioritizes suspicious fields and does not ask reviewers to inspect every auto-accepted record.
 
 Example:
 
-| Product | Quantity | Price | Basis | Reliability | Issue |
+| Product | Quantity | Price | Basis | Confidence | Review issues |
 |---|---:|---:|---|---|---|
 | Azimax 250 | — | €0.134 | tablet | High | corrected later in email |
 | Sanotri-TLD | — | €0.035 | tablet | High | derived from pack price |
