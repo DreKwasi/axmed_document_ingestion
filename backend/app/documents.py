@@ -16,9 +16,10 @@ from app.events import record_event
 from app.extraction.commercial import apply_commercial_rules
 from app.extraction.confidence import (
     ConfidenceSignals,
-    ReviewAssessment,
-    assess_review_readiness,
-    field_confidence_for_path,
+    MappingAssessment,
+    assess_extraction_confidence,
+    assess_mapping_confidence,
+    mapping_confidence_for_path,
 )
 from app.extraction.contracts import CanonicalQuotation
 from app.extraction.email_parser import parse_email
@@ -36,6 +37,7 @@ from app.models import (
     EmailExtractionRecord,
     ExtractedSourceFactRecord,
     FieldEvidenceRecord,
+    ImageExtractionAttemptRecord,
     ModelInvocationRecord,
     OcrJobRecord,
     PdfExtractionRecord,
@@ -69,9 +71,6 @@ REJECTION_REASONS = {
     "not_a_quotation",
     "other",
 }
-
-
-
 
 
 def validate_json_upload(filename: str, content_type: str | None, data: bytes, settings: Config) -> None:
@@ -316,18 +315,18 @@ def ingest_image(
     return document
 
 
-def _upsert_quotation(session: Session, document: DocumentRecord, quotation: CanonicalQuotation) -> QuotationRecord:
+def _upsert_quotation(
+    session: Session, document: DocumentRecord, quotation: CanonicalQuotation
+) -> QuotationRecord | None:
+    if not quotation.line_items:
+        _clear_document_quotation(session, document.id)
+        document.status = "failed"
+        document.failure_reason = "No products could be extracted from this source."
+        return None
+
     stored = session.scalar(select(QuotationRecord).where(QuotationRecord.document_id == document.id))
-    parsed_summary = _safe_parsed_summary(document) or {}
     quoted = apply_commercial_rules(quotation)
-    assessment = assess_review_readiness(
-        quoted,
-        ConfidenceSignals(
-            source_type=document.source_system,
-            ocr_used=document.source_system == "image" or bool(parsed_summary.get("needs_ocr_pages")),
-            parser_quality="poor" if bool(parsed_summary.get("needs_ocr_pages")) else None,
-        ),
-    )
+    assessment = assess_mapping_confidence(quoted)
     payload_json = quoted.model_dump_json()
     if stored:
         stored.payload_json = payload_json
@@ -367,6 +366,42 @@ def _upsert_quotation(session: Session, document: DocumentRecord, quotation: Can
     return stored
 
 
+def begin_image_extraction_review(session: Session, document_id: str, approach: str) -> DocumentRecord:
+    """Make one peer image result available for ordinary human quotation review.
+
+    This is a reviewer action, not extraction-time result selection.  The other
+    result remains stored unchanged for comparison and audit.
+    """
+
+    document = session.get(DocumentRecord, document_id)
+    if document is None:
+        raise LookupError("Document not found.")
+    attempt = session.scalar(
+        select(ImageExtractionAttemptRecord).where(
+            ImageExtractionAttemptRecord.document_id == document_id,
+            ImageExtractionAttemptRecord.approach == approach,
+        )
+    )
+    if attempt is None:
+        raise LookupError("Image extraction result not found.")
+    if attempt.status != "completed" or not attempt.result_json:
+        raise ValueError("This image extraction result is not available for review.")
+
+    quotation = CanonicalQuotation.model_validate_json(attempt.result_json)
+    stored = _upsert_quotation(session, document, quotation)
+    if stored is None:
+        session.commit()
+        raise ValueError("This image extraction result has no products to review.")
+    record_event(
+        session,
+        document_id=document_id,
+        stage="image_extraction_opened_for_review",
+        metadata={"approach": approach, "line_item_count": len(quotation.line_items)},
+    )
+    session.commit()
+    return document
+
+
 def reassess_persisted_confidence(session: Session) -> int:
     """Reapply the current confidence policy without re-extracting source content.
 
@@ -382,15 +417,7 @@ def reassess_persisted_confidence(session: Session) -> int:
         if quotation is None:
             continue
         canonical = CanonicalQuotation.model_validate_json(quotation.payload_json)
-        parsed_summary = _safe_parsed_summary(document) or {}
-        assessment = assess_review_readiness(
-            canonical,
-            ConfidenceSignals(
-                source_type=document.source_system,
-                ocr_used=document.source_system == "image" or bool(parsed_summary.get("needs_ocr_pages")),
-                parser_quality="poor" if bool(parsed_summary.get("needs_ocr_pages")) else None,
-            ),
-        )
+        assessment = assess_mapping_confidence(canonical)
         quotation.system_decision = "pending_review"
         if quotation.review_status in {"unreviewed", "corrected"}:
             quotation.review_status = "pending_review"
@@ -745,7 +772,7 @@ def _canonical_fact_is_populated(payload: dict[str, Any], canonical_field: str) 
 def _sync_extracted_source_facts(
     session: Session,
     document_id: str,
-    quotation_id: str,
+    quotation_id: str | None,
     facts: list[JsonSourceFact],
 ) -> None:
     session.execute(delete(ExtractedSourceFactRecord).where(ExtractedSourceFactRecord.document_id == document_id))
@@ -763,7 +790,7 @@ def _sync_extracted_source_facts(
                 confidence_reason=fact.confidence_reason,
                 normalization_status=fact.normalization_status,
                 canonical_field=fact.canonical_field,
-                review_status="pending_review",
+                review_status="pending_review" if quotation_id is not None else "not_reviewable",
             )
             for fact in facts
         ]
@@ -793,7 +820,7 @@ def _sync_field_values(
     canonical: CanonicalQuotation,
     *,
     corrected_fields: set[str] | None = None,
-    assessment: ReviewAssessment | None = None,
+    assessment: MappingAssessment | None = None,
 ) -> None:
     """Persist every non-null extracted leaf with review state, confidence, and provenance."""
 
@@ -848,7 +875,7 @@ def _sync_field_values(
         line_item_position = None
         if field_path.startswith("line_items["):
             line_item_position = int(field_path.split("[", 1)[1].split("]", 1)[0])
-        confidence_assessment = field_confidence_for_path(field_path, assessment) if assessment else None
+        confidence_assessment = mapping_confidence_for_path(field_path, assessment) if assessment else None
         session.add(
             QuotationFieldValueRecord(
                 document_id=document_id,
@@ -861,7 +888,7 @@ def _sync_field_values(
                 reliability_reason=(
                     confidence_assessment.reason
                     if confidence_assessment
-                    else "Derived value; extraction confidence does not apply"
+                    else "Derived value; mapping confidence does not apply"
                 ),
                 confidence=Decimal(str(matching_evidence.confidence)) if matching_evidence else Decimal("0.00"),
                 extraction_method=matching_evidence.extraction_method if matching_evidence else "unattributed",
@@ -880,6 +907,45 @@ def _set_field_review_status(session: Session, quotation_id: str, status: str) -
 
 
 _READ_ONLY_FIELDS = {"normalized_price", "evidence", "review_issues"}
+_EDITABLE_LINE_ITEM_FIELDS = {
+    "product.trade_name",
+    "product.inn",
+    "product.strength",
+    "product.dosage_form",
+    "product.manufacturer",
+    "product.country_of_origin",
+    "pricing.currency",
+    "pricing.quoted_price.amount",
+    "pricing.quoted_price.uom",
+    "pricing.pack_price",
+    "pricing.discount",
+    "pricing.extended_price",
+    "pricing.price_tiers",
+    "pricing.adjustments",
+    "quantity.quoted_quantity",
+    "quantity.quoted_quantity_uom",
+    "quantity.quantity_basis",
+    "quantity.minimum_order_quantity",
+    "quantity.minimum_order_quantity_uom",
+    "packaging.description",
+    "packaging.presentation",
+    "packaging.primary_pack",
+    "packaging.units_per_pack",
+    "packaging.unit_label",
+    "packaging.packs_per_shipper",
+    "supply.lead_time_days",
+    "supply.lead_time_min_days",
+    "supply.lead_time_max_days",
+    "supply.shelf_life_months",
+    "supply.minimum_remaining_shelf_life_percent",
+    "supply.storage_conditions",
+    "supply.cold_chain_required",
+    "regulatory.who_prequalified",
+    "regulatory.who_pq_reference",
+    "regulatory.registered_markets",
+    "regulatory.registration_reference",
+    "regulatory.regulatory_status",
+}
 
 
 def _apply_field_patch(
@@ -899,6 +965,11 @@ def _apply_field_patch(
     if any(s in _READ_ONLY_FIELDS for s in segments):
         raise ReviewValidationError("Correction field is not supported.")
 
+    if segments[0] == "line_items" and len(segments) > 2 and isinstance(segments[1], int):
+        field_name = ".".join(str(s) for s in segments[2:])
+        if field_name not in _EDITABLE_LINE_ITEM_FIELDS:
+            raise ReviewValidationError("Correction field is not supported.")
+
     current: Any = payload
     for segment in segments[:-1]:
         if isinstance(segment, int):
@@ -917,9 +988,9 @@ def _apply_field_patch(
         before = current[last]
         current[last] = new_value
     else:
-        if not isinstance(current, dict) or last not in current:
+        if not isinstance(current, dict):
             raise ReviewValidationError(f"Correction path does not exist: {raw_path}")
-        before = current[last]
+        before = current.get(last)
         current[last] = new_value
 
     if segments[0] == "line_items" and len(segments) > 1 and isinstance(segments[1], int):
@@ -991,9 +1062,7 @@ def apply_review_action(session: Session, document_id: str, action: str, command
     if action == "corrected":
         for patch in patches:
             raw_path = patch.get("path", "")
-            before, after, canonical_field_path = _apply_field_patch(
-                payload, raw_path, patch.get("value"), request_id
-            )
+            before, after, canonical_field_path = _apply_field_patch(payload, raw_path, patch.get("value"), request_id)
             corrected_field_paths.add(canonical_field_path)
             audit_patches.append({"path": raw_path, "before": before, "after": after})
         try:
@@ -1044,10 +1113,7 @@ def apply_review_action(session: Session, document_id: str, action: str, command
             quotation,
             canonical,
             corrected_fields=corrected_field_paths,
-            assessment=assess_review_readiness(
-                canonical,
-                ConfidenceSignals(source_type=document.source_system),
-            ),
+            assessment=assess_mapping_confidence(canonical),
         )
     else:
         _set_field_review_status(session, quotation.id, next_review_status)
@@ -1170,17 +1236,12 @@ def _extract_json_document(
             retry = None
         if retry is not None:
             retry_facts, _ = validate_source_facts(payload, retry.extraction.source_facts)
+
             def fact_identity(fact: JsonSourceFact) -> tuple[str, str | None, str]:
                 return fact.source_path, fact.canonical_field, json.dumps(fact.value, default=str, sort_keys=True)
 
-            known = {
-                fact_identity(fact) for fact in valid_facts
-            }
-            valid_facts.extend(
-                fact
-                for fact in retry_facts
-                if fact_identity(fact) not in known
-            )
+            known = {fact_identity(fact) for fact in valid_facts}
+            valid_facts.extend(fact for fact in retry_facts if fact_identity(fact) not in known)
             proposal = retry
 
     if not valid_facts:
@@ -1196,7 +1257,7 @@ def _extract_json_document(
     quotation = apply_commercial_rules(quotation)
     record_event(session, document_id=document.id, stage="json_quotation_normalizing")
     stored = _upsert_quotation(session, document, quotation)
-    _sync_extracted_source_facts(session, document.id, stored.id, valid_facts)
+    _sync_extracted_source_facts(session, document.id, None if stored is None else stored.id, valid_facts)
     session.add(
         ModelInvocationRecord(
             document_id=document.id,
@@ -1214,7 +1275,12 @@ def _extract_json_document(
             ),
         )
     )
-    record_event(session, document_id=document.id, stage="json_extraction_completed")
+    record_event(
+        session,
+        document_id=document.id,
+        stage="json_extraction_completed" if stored is not None else "json_extraction_failed",
+        metadata={} if stored is not None else {"reason": "no_products_extracted"},
+    )
     session.commit()
     return document
 
@@ -1263,6 +1329,7 @@ def delete_document(session: Session, document_id: str, settings: Config) -> Non
     session.execute(delete(EmailExtractionRecord).where(EmailExtractionRecord.document_id == document.id))
     session.execute(delete(PdfExtractionRecord).where(PdfExtractionRecord.document_id == document.id))
     session.execute(delete(OcrJobRecord).where(OcrJobRecord.document_id == document.id))
+    session.execute(delete(ImageExtractionAttemptRecord).where(ImageExtractionAttemptRecord.document_id == document.id))
 
     _clear_document_quotation(session, document.id)
     session.execute(delete(ExtractedSourceFactRecord).where(ExtractedSourceFactRecord.document_id == document.id))
@@ -1287,9 +1354,7 @@ def delete_document(session: Session, document_id: str, settings: Config) -> Non
 def _clear_document_quotation(session: Session, document_id: str) -> None:
     """Remove a mutable quotation projection while retaining its source receipt."""
 
-    quotation_ids = session.scalars(
-        select(QuotationRecord.id).where(QuotationRecord.document_id == document_id)
-    ).all()
+    quotation_ids = session.scalars(select(QuotationRecord.id).where(QuotationRecord.document_id == document_id)).all()
     if not quotation_ids:
         return
     line_item_ids = session.scalars(
@@ -1313,19 +1378,12 @@ def _clear_document_quotation(session: Session, document_id: str) -> None:
 
 def serialize_document(session: Session, document: DocumentRecord) -> dict[str, Any]:
     quotation = session.scalar(select(QuotationRecord).where(QuotationRecord.document_id == document.id))
-    quotation_payload = None if quotation is None else json.loads(quotation.payload_json)
+    stored_quotation_payload = None if quotation is None else json.loads(quotation.payload_json)
+    quotation_payload = None if document.status == "failed" else stored_quotation_payload
     field_values: list[QuotationFieldValueRecord] = []
     assessment = None
     if quotation_payload is not None and quotation is not None:
-        assessment = assess_review_readiness(
-            CanonicalQuotation.model_validate(quotation_payload),
-            ConfidenceSignals(
-                source_type=document.source_system,
-                ocr_used=document.source_system == "image"
-                or bool((_safe_parsed_summary(document) or {}).get("needs_ocr_pages")),
-                parser_quality="poor" if bool((_safe_parsed_summary(document) or {}).get("needs_ocr_pages")) else None,
-            ),
-        )
+        assessment = assess_mapping_confidence(CanonicalQuotation.model_validate(quotation_payload))
         normalized_items = _normalized_line_items(session, quotation.id)
         if normalized_items is not None:
             snapshot_items = quotation_payload.get("line_items", [])
@@ -1338,21 +1396,28 @@ def serialize_document(session: Session, document: DocumentRecord) -> dict[str, 
         quotation_payload["system_decision"] = quotation.system_decision
         quotation_payload["review_status"] = quotation.review_status
         quotation_payload["has_corrections"] = quotation.has_corrections
-        field_values = list(session.scalars(
-            select(QuotationFieldValueRecord)
-            .where(QuotationFieldValueRecord.quotation_id == quotation.id)
-            .order_by(QuotationFieldValueRecord.canonical_field)
-        ))
+        field_values = list(
+            session.scalars(
+                select(QuotationFieldValueRecord)
+                .where(QuotationFieldValueRecord.quotation_id == quotation.id)
+                .order_by(QuotationFieldValueRecord.canonical_field)
+            )
+        )
         quotation_payload["field_reviews"] = [
             {
                 "field_path": field_value.canonical_field,
                 "value": json.loads(field_value.value_json),
                 "review_status": field_value.review_status,
-                "confidence_band": (
+                "mapping_confidence_band": (
                     None if field_value.reliability == "Not applicable" else field_value.reliability
                 ),
-                "confidence_reason": field_value.reliability_reason,
-                "confidence": str(field_value.confidence),
+                "mapping_confidence_score": (
+                    None
+                    if field_value.reliability == "Not applicable"
+                    else _mapping_score_for_path(field_value.canonical_field, assessment)
+                ),
+                "mapping_confidence_reason": field_value.reliability_reason,
+                "source_evidence_score": str(field_value.confidence),
                 "extraction_method": field_value.extraction_method,
                 "source_path": field_value.source_path,
                 "source_location": field_value.source_location,
@@ -1366,18 +1431,59 @@ def serialize_document(session: Session, document: DocumentRecord) -> dict[str, 
             .order_by(ExtractedSourceFactRecord.created_at, ExtractedSourceFactRecord.id)
         )
     )
+    extraction_confidence = assess_extraction_confidence(
+        _extraction_confidence_signals(
+            session,
+            document,
+            field_values,
+            has_extracted_result=bool((stored_quotation_payload or {}).get("line_items")),
+        )
+    )
     return {
         "id": document.id,
         "filename": document.original_filename,
-        "source_name": _source_name(document, quotation_payload),
+        "source_name": _source_name(document, stored_quotation_payload),
         "status": document.status,
         "failure_reason": document.failure_reason,
         "source_system": document.source_system,
         "schema_version": document.schema_version,
         "parsed_summary": _safe_parsed_summary(document),
-        "system_decision": None if quotation is None else quotation.system_decision,
-        "confidence_summary": _confidence_summary(field_values),
-        "review_reasons": [] if assessment is None else list(assessment.review_reasons),
+        "system_decision": None if quotation_payload is None or quotation is None else quotation.system_decision,
+        "extraction_confidence": None
+        if extraction_confidence is None
+        else {
+            "score": extraction_confidence.score,
+            "band": extraction_confidence.band,
+            "factors": [
+                {
+                    "key": factor.key,
+                    "label": factor.label,
+                    "weight": factor.weight,
+                    "score": factor.score,
+                    "reason": factor.reason,
+                }
+                for factor in extraction_confidence.factors
+            ],
+        },
+        "mapping_confidence": None
+        if assessment is None
+        else {
+            "score": assessment.score,
+            "band": assessment.band,
+            "issue_count": len(assessment.issues),
+        },
+        "mapping_issues": []
+        if assessment is None
+        else [
+            {
+                "field_path": issue.field_path,
+                "section": issue.section,
+                "code": issue.code,
+                "message": issue.message,
+                "severity": issue.severity,
+            }
+            for issue in assessment.issues
+        ],
         "product_counts": _product_counts(document, quotation_payload),
         "notes": _document_notes(document, quotation_payload),
         "artifacts": [
@@ -1425,6 +1531,25 @@ def serialize_document(session: Session, document: DocumentRecord) -> dict[str, 
         "email_extraction": _serialize_email_extraction(session, document.id),
         "pdf_extraction": _serialize_pdf_extraction(session, document.id),
         "ocr": _serialize_ocr_job(session, document.id),
+        "image_extraction_attempts": [
+            {
+                "approach": attempt.approach,
+                "status": attempt.status,
+                "result": json.loads(attempt.result_json) if attempt.result_json else None,
+                "product_count": len(json.loads(attempt.result_json).get("line_items", []))
+                if attempt.result_json
+                else 0,
+                "failure_reason": attempt.failure_reason,
+                "provider": attempt.provider,
+                "model": attempt.model,
+                "duration_ms": attempt.duration_ms,
+            }
+            for attempt in session.scalars(
+                select(ImageExtractionAttemptRecord)
+                .where(ImageExtractionAttemptRecord.document_id == document.id)
+                .order_by(ImageExtractionAttemptRecord.approach)
+            )
+        ],
     }
 
 
@@ -1439,12 +1564,82 @@ def _source_name(document: DocumentRecord, quotation_payload: dict[str, Any] | N
     return filename.title() or "Untitled source"
 
 
-def _confidence_summary(field_values: list[QuotationFieldValueRecord]) -> dict[str, int]:
-    summary = {"High": 0, "Medium": 0, "Low": 0}
-    for field in field_values:
-        if field.reliability in summary:
-            summary[field.reliability] += 1
-    return summary
+def _mapping_score_for_path(field_path: str, assessment: MappingAssessment) -> int | None:
+    confidence = mapping_confidence_for_path(field_path, assessment)
+    return None if confidence is None else confidence.score
+
+
+def _extraction_confidence_signals(
+    session: Session,
+    document: DocumentRecord,
+    field_values: list[QuotationFieldValueRecord],
+    *,
+    has_extracted_result: bool,
+) -> ConfidenceSignals:
+    """Build source-recovery signals from persisted parser, OCR, and evidence records."""
+
+    source_type = (document.source_system or "").casefold()
+    if source_type not in {"json", "email", "pdf", "image"}:
+        suffix = Path(document.original_filename).suffix.casefold()
+        source_type = {
+            ".json": "json",
+            ".eml": "email",
+            ".pdf": "pdf",
+            ".png": "image",
+            ".jpg": "image",
+            ".jpeg": "image",
+        }.get(suffix, "unknown")
+
+    artifacts = list(
+        session.scalars(
+            select(DocumentArtifactRecord)
+            .where(DocumentArtifactRecord.document_id == document.id)
+            .order_by(DocumentArtifactRecord.page_number)
+        )
+    )
+    page_qualities = [
+        str(json.loads(artifact.metadata_json).get("quality"))
+        for artifact in artifacts
+        if artifact.kind == "native_pdf_page" and json.loads(artifact.metadata_json).get("quality")
+    ]
+    if source_type in {"json", "email"}:
+        parser_quality = "good"
+    elif page_qualities and all(quality == "good" for quality in page_qualities):
+        parser_quality = "good"
+    elif page_qualities and any(quality == "poor" for quality in page_qualities):
+        parser_quality = "mixed" if any(quality == "good" for quality in page_qualities) else "poor"
+    elif source_type == "image":
+        parser_quality = "mixed"
+    else:
+        parser_quality = None
+
+    ocr_job = session.scalar(select(OcrJobRecord).where(OcrJobRecord.document_id == document.id))
+    ocr_scores: tuple[float, ...] = ()
+    if ocr_job and ocr_job.safe_result_json:
+        ocr_scores = tuple(_confidence_values(json.loads(ocr_job.safe_result_json)))
+    evidence_scores = tuple(
+        float(field.confidence)
+        for field in field_values
+        if field.extraction_method not in {"unattributed", "derived"} and field.confidence > 0
+    )
+    parsed_summary = _safe_parsed_summary(document) or {}
+    return ConfidenceSignals(
+        source_type=source_type,
+        ocr_used=source_type == "image" or bool(parsed_summary.get("needs_ocr_pages")),
+        parser_quality=parser_quality,
+        evidence_scores=evidence_scores,
+        ocr_scores=ocr_scores,
+        has_extracted_result=has_extracted_result,
+    )
+
+
+def _confidence_values(value: Any) -> list[float]:
+    if isinstance(value, dict):
+        values = [float(value["confidence"])] if isinstance(value.get("confidence"), int | float) else []
+        return values + [score for child in value.values() for score in _confidence_values(child)]
+    if isinstance(value, list):
+        return [score for child in value for score in _confidence_values(child)]
+    return []
 
 
 def _product_counts(document: DocumentRecord, quotation_payload: dict[str, Any] | None) -> dict[str, int]:
