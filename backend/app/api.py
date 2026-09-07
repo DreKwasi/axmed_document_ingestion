@@ -18,6 +18,7 @@ from app.documents import (
     ReviewValidationError,
     UploadValidationError,
     apply_review_action,
+    begin_image_extraction_review,
     delete_document,
     ingest_email,
     ingest_failed_document,
@@ -387,6 +388,16 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
     def reextract_document(document_id: str, session: SessionDep):
         try:
             document = reextract_json_document(session, document_id, active_settings, extractor)
+            return serialize_document(session, document)
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.post("/api/v1/documents/{document_id}/image-extractions/{approach}/review")
+    def open_image_extraction_for_review(document_id: str, approach: str, session: SessionDep):
+        try:
+            document = begin_image_extraction_review(session, document_id, approach)
             return serialize_document(session, document)
         except LookupError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error

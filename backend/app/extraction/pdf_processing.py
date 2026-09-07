@@ -196,11 +196,10 @@ def consume_pdf_extraction(session: Session, extraction_id: str, settings: Confi
         record_event(session, document_id=document.id, stage="pdf_quotation_normalizing")
         session.commit()
         quotation = apply_commercial_rules(quotation)
-        extraction.status = "completed"
-        extraction.error_message = None
         extraction.result_json = quotation.model_dump_json()
-        document.status = "pending_review"
-        _upsert_quotation(session, document, quotation)
+        stored = _upsert_quotation(session, document, quotation)
+        extraction.status = "completed" if stored is not None else "failed"
+        extraction.error_message = None if stored is not None else "no_products_extracted"
         _upsert_invocation(
             session,
             extraction,
@@ -218,14 +217,19 @@ def consume_pdf_extraction(session: Session, extraction_id: str, settings: Confi
         record_event(
             session,
             document_id=document.id,
-            stage="pdf_extraction_completed",
-            metadata={"line_item_count": len(quotation.line_items), "model": settings.gemini_model},
+            stage="pdf_extraction_completed" if stored is not None else "pdf_extraction_failed",
+            metadata={
+                "line_item_count": len(quotation.line_items),
+                "model": settings.gemini_model,
+                **({} if stored is not None else {"reason": "no_products_extracted"}),
+            },
         )
         session.commit()
         logger.info(
-            "[PDF %s] Extraction COMPLETED -> %d line items, status=pending_review",
+            "[PDF %s] Extraction finished -> %d line items, status=%s",
             document.id[:8],
             len(quotation.line_items),
+            document.status,
         )
         return
 
