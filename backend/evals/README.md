@@ -13,7 +13,7 @@
 
 - `golden_dataset.json` — versioned cases and rubric.
 - `golden_outputs/` — reviewed expected canonical outputs.
-- `recorded_mappings/` — immutable mapping responses for offline regression checks.
+- `recorded_json_extractions/` — immutable per-document semantic fact responses for offline regression checks.
 - `fixtures/documents/` — document inputs used by the current golden cases.
 - `fixtures/ocr/` — real degraded image inputs for the OCR layer.
 
