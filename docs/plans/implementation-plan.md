@@ -4,7 +4,7 @@
 > Status: approved for full scope; publish dependency-ordered work into `TODOS.md` before implementation.
 > Strategy: ship tracer-bullet vertical slices, each demoable through the running FastAPI and Vue application.
 > Critical thesis: deterministic extraction and remembered mappings handle known structure; AI handles novelty and ambiguity.
-> Trust boundary: the system may auto-accept only clean high-reliability records; human approval is recorded only when a person reviews. Missing or unreadable values remain explicit.
+> Trust boundary: the system may auto-accept only records whose extracted facts meet the evidence-based confidence policy and deterministic checks; human approval is recorded only when a person reviews. Missing commercial values remain separate availability exceptions.
 > Source: `docs/product/axmed_document_intelligence_prd.md` and the checked-in synthetic corpus in `sample_documents/`.
 
 ## 1. Outcome and scope
@@ -111,7 +111,7 @@ system decision: auto_accepted | needs_review
 human outcome:   unreviewed → approved | corrected | rejected
 ```
 
-The system decision is made after extraction from critical-field coverage, observable field reliability, deterministic validation, conflicts, and OCR/parser warnings; it is not a model-confidence average. The default review queue contains only `needs_review` + `unreviewed` exceptions, while `auto_accepted` records remain visible in the source list. Approval requires no note. A correction is a terminal, audited human outcome with before/after patches. Rejection requires one structured reason (`unreadable_source`, `incorrect_extraction`, `unsupported_document`, `duplicate`, `not_a_quotation`, or `other`) and may include a note. Commands are idempotent by request key and stale revisions conflict.
+The system decision is made after extraction from per-field source clarity, association certainty, independent validation, conflict checks, commercial availability, and OCR/parser warnings; these signals are evaluated as a decision rule rather than averaged. Derived values keep formula and validation status and receive no extraction-confidence band. The default review queue contains only `needs_review` + `unreviewed` exceptions, while `auto_accepted` records remain visible in the source list. Approval requires no note. A correction is a terminal, audited human outcome with before/after patches. Rejection requires one structured reason (`unreadable_source`, `incorrect_extraction`, `unsupported_document`, `duplicate`, `not_a_quotation`, or `other`) and may include a note. Commands are idempotent by request key and stale revisions conflict.
 
 ### Local data and privacy boundary
 

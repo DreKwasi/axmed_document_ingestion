@@ -1507,17 +1507,57 @@ review decision         = system routing and human outcome
 
 Every extracted source fact is persisted with its numeric evidence, provenance, categorical **Confidence**, and safe reason. Numeric evidence supports policy and evaluation but is not a calibrated probability and is never displayed as a confidence percentage.
 
+Confidence is decided independently for each extracted field from three factors:
+
+```text
+source evidence         how clearly the value was recovered
+association certainty   how clearly it belongs to the field, row, product, or source path
+independent validation  whether same-source evidence supports or contradicts it
+```
+
+Confidence is not an arithmetic average. A material conflict overrides otherwise strong signals.
+
+## 45.2 Source evidence
+
+Strong source evidence includes a direct JSON value, clean native PDF text, clear email text, high-quality unambiguous OCR, or parser/OCR agreement. Glare, blur, cropping, damaged scans, uncertain OCR characters, and partially missing text weaken source evidence.
+
+The internal OCR/provider number is one input to source-evidence quality, not the final confidence and not a calibrated probability.
+
+## 45.3 Association certainty
+
+Strong association means the value has an unambiguous JSON path or clearly belongs to the expected table header, row, column, product, or email statement. Merged cells, multiline reconstruction, indirect prose references, overlapping OCR boxes, and ambiguous column alignment weaken association.
+
+## 45.4 Independent validation
+
+Where available, deterministic same-source checks support or contradict extraction correctness:
+
+```text
+quantity × unit price × (1 - discount) ≈ extended price
+unit price × units per pack ≈ pack price
+parser value = OCR value
+issue date <= valid-until date
+value exists at the mapped structured-source path
+```
+
+A passing check can strengthen usable evidence to High. A failed check makes affected fields Low and routes review. Lack of an applicable validation does not prevent High when source evidence and association are independently strong.
+
+## 45.5 Decision rule
+
 The reviewer sees one of these categories:
 
 ```text
-High    direct or strongly corroborated source evidence with no material warning
-Medium  usable source evidence that needs ordinary verification, including clean native PDF text without a leaf source location
-Low     an extracted value has weak OCR evidence, ambiguity, conflict, or poor parser quality
+High    strong source evidence + strong association, or usable evidence strengthened by passed validation; no unresolved conflict
+Medium  the value is probably correct, but source/association has meaningful uncertainty and validation is limited
+Low     substantial risk that the value does not match the source because of weak evidence, ambiguity, conflict, or poor parsing
 ```
 
-Confidence is derived from observable evidence: direct JSON, native PDF text, OCR quality, clear table/row association, explicit email text, parser agreement, conflicting values, and correction/revision signals. A conflict is never averaged away; the affected extracted field is Low and is routed to review.
+The stored reason exposes all three inputs, for example:
 
-## 45.2 Missing information and commercial availability
+```text
+source evidence: usable; association: strong; independent validation: passed
+```
+
+## 45.6 Missing information and commercial availability
 
 A missing value is **not** a confidence category. If a supplier never states an MOQ, route, manufacturer, shelf life, or regulatory status, that does not reduce the confidence of the values that were recovered.
 
@@ -1525,11 +1565,21 @@ The quotation review still requires seven commercial fields where applicable: pr
 
 If one is unavailable, the product is sent to review because the offer cannot safely be evaluated or derived—not because another extracted value is less trustworthy. The **Review issues** column names the unavailable field. `Not extracted` may appear only as a field-availability state in detailed inspection; it is never shown as a product's Confidence and never lowers confidence in a different extracted field.
 
-## 45.3 Confidence is not schema-mapping correctness
+## 45.7 Confidence is not schema-mapping correctness
 
 If the source clearly states `MOQ: 5,000 boxes`, recovering that label, number, and unit can have High confidence. Mapping it incorrectly to `quoted_quantity` is a normalization defect, not evidence that the source extraction was Low confidence.
 
-## 45.4 Document and row summaries
+## 45.8 Derived values
+
+A system-calculated value is not an extracted source fact and receives no extraction-confidence band. It instead persists its origin, formula, and deterministic validation status:
+
+```text
+origin = derived
+calculation = 3.15 / 90
+validation_status = passed
+```
+
+## 45.9 Document and row summaries
 
 The document header does not show a generic percentage. It reports operational state, for example:
 
