@@ -71,7 +71,6 @@ export type DocumentResponse = {
   mapping_source?: string | null;
   parsed_summary?: { subject?: string; message_id?: string | null; page_count?: number; needs_ocr_pages?: number[] } | null;
   system_decision?: "auto_accepted" | "needs_review" | null;
-  extraction_coverage?: { extracted: number; expected: number } | null;
   confidence_summary?: Record<"High" | "Medium" | "Low", number>;
   review_reasons?: string[];
   product_counts?: { extracted: number; failed: number };

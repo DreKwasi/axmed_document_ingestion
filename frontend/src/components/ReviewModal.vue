@@ -80,9 +80,6 @@ function onReject() {
         <p><span class="font-semibold text-slate-700">File:</span> {{ document.filename }}</p>
         <p v-if="document.quotation">
           <span class="font-semibold text-slate-700">Products:</span> {{ document.quotation.line_items.length }} extracted
-          <span v-if="document.extraction_coverage" class="ml-2 font-semibold text-slate-700">
-            · {{ document.extraction_coverage.extracted }} of {{ document.extraction_coverage.expected }} key fields extracted
-          </span>
         </p>
       </div>
 

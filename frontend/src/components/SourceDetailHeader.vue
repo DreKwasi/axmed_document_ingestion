@@ -46,9 +46,13 @@ const sourceTitle = computed(() => {
   return filename.replace(/\b\w/g, (c) => c.toUpperCase()) || "Untitled source";
 });
 
-const coverage = computed(() => {
-  const value = props.document.extraction_coverage;
-  return value ? `${value.extracted} of ${value.expected} key fields extracted` : "Extraction pending";
+const confidence = computed(() => {
+  const summary = props.document.confidence_summary;
+  if (!summary) return "Confidence pending";
+  if (summary.Low) return "Low confidence";
+  if (summary.Medium) return "Medium confidence";
+  if (summary.High) return "High confidence";
+  return "Confidence unavailable";
 });
 
 const formatBadge = computed(() => {
@@ -122,9 +126,9 @@ const statusDotClass = computed(() => {
 
             <span class="text-slate-300">·</span>
 
-            <!-- Critical-field coverage -->
+            <!-- Source confidence is the lowest extracted-field band, not an average. -->
             <span class="font-medium text-slate-600">
-              {{ coverage }}
+              {{ confidence }}
             </span>
 
             <span class="text-slate-300">·</span>

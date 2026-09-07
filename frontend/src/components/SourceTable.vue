@@ -24,10 +24,13 @@ function sourceName(doc: DocumentResponse) {
   return filename.replace(/\b\w/g, (c) => c.toUpperCase()) || "Untitled source";
 }
 
-function coverage(doc: DocumentResponse) {
-  const extracted = doc.extraction_coverage?.extracted;
-  const expected = doc.extraction_coverage?.expected;
-  return extracted === undefined || expected === undefined ? "—" : `${extracted} of ${expected}`;
+function sourceConfidence(doc: DocumentResponse) {
+  const summary = doc.confidence_summary;
+  if (!summary) return "—";
+  if (summary.Low) return "Low";
+  if (summary.Medium) return "Medium";
+  if (summary.High) return "High";
+  return "—";
 }
 
 function documentIssueCount(doc: DocumentResponse) {
@@ -124,8 +127,8 @@ const batchProcessedCount = computed(() => {
           <thead class="bg-slate-50 text-[10px] font-bold uppercase tracking-wider text-slate-500 border-b border-slate-100">
             <tr>
               <th class="px-6 py-3.5">Source</th>
-              <th class="px-4 py-3.5">Key fields</th>
-              <th class="px-4 py-3.5">Issues</th>
+              <th class="px-4 py-3.5">Confidence</th>
+              <th class="px-4 py-3.5">Review issues</th>
               <th class="px-4 py-3.5">Products</th>
               <th class="px-4 py-3.5">Status</th>
               <th class="px-6 py-3.5 text-right"><span class="sr-only">Open</span></th>
@@ -171,10 +174,10 @@ const batchProcessedCount = computed(() => {
                 </div>
               </td>
 
-              <!-- Critical-field coverage -->
+              <!-- Lowest field confidence summarizes the source without averaging. -->
               <td class="px-4 py-4 align-top">
-                <span class="font-bold text-slate-800">{{ coverage(doc) }}</span>
-                <span class="block text-[10px] text-slate-500">key fields available</span>
+                <span class="font-bold text-slate-800">{{ sourceConfidence(doc) }}</span>
+                <span class="block text-[10px] text-slate-500">lowest field band</span>
               </td>
 
               <!-- Issues -->
