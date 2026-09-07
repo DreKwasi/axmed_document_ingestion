@@ -100,6 +100,7 @@ class CommercialTerms(BaseModel):
     currency: str | None = None
     incoterm: str | None = None
     incoterm_named_place: str | None = None
+    incoterm_country: str | None = None
     payment_terms: str | None = None
     price_basis: str | None = None
 

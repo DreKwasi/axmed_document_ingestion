@@ -42,7 +42,9 @@ def assess_review_readiness(quotation: CanonicalQuotation, signals: ConfidenceSi
     fields: dict[str, FieldConfidence] = {}
     review_reasons: list[str] = []
     if not quotation.line_items:
-        return ReviewAssessment("needs_review", fields, ("no_line_items",))
+        # A document without products still enters the same human-review queue;
+        # the reason tells the reviewer why it needs attention.
+        return ReviewAssessment("pending_review", fields, ("no_line_items",))
 
     issues = tuple(quotation.review_issues)
     quotation_evidence = {item.canonical_field: item for item in quotation.evidence}
@@ -78,7 +80,8 @@ def assess_review_readiness(quotation: CanonicalQuotation, signals: ConfidenceSi
 
     deduplicated_reasons = tuple(dict.fromkeys(review_reasons))
     return ReviewAssessment(
-        system_decision="auto_accepted" if not deduplicated_reasons else "needs_review",
+        # V9: confidence prioritizes human attention; every completed record waits for review.
+        system_decision="pending_review",
         fields=fields,
         review_reasons=deduplicated_reasons,
     )

@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from app.domain.contracts import CanonicalQuotation
 from app.domain.schema_mapping import MappingProposal
 
-CANONICAL_QUOTATION_PROMPT_VERSION = "canonical-quotation-v4"
+CANONICAL_QUOTATION_PROMPT_VERSION = "canonical-quotation-v5"
 
 
 class ProposedMappingSchema(BaseModel):
@@ -83,7 +83,19 @@ class LangChainSemanticExtractor:
             "moiety name for the corresponding strength. Keep packaging.primary_pack as "
             "the complete named container/material phrase (for example `PVC/Alu blister`), while packaging.description "
             "retains the full pack text and packaging.presentation contains only the form qualifier.\n"
-            "Use the supplier header for supplier country and the complete named place, including any code "
+            "For a supplier quotation, keep `quotation_reference` (the supplier's own quotation number) "
+            "separate from `rfq_reference` (the buyer enquiry/request it answers). Search document metadata, "
+            "header tables, body text, and correspondence for both rather than treating either as a fallback for "
+            "the other. Extract supplier.country from an explicit supplier address/header. Set a line item's "
+            "product.country_of_origin only when the source explicitly connects manufacture/origin to that country. "
+            "When the source states that all items or products are manufactured at a named supplier facility and the "
+            "supplier header or address identifies the country of that same facility, you MUST set every affected "
+            "line item's product.country_of_origin to that country and cite both source locations in evidence. "
+            "Do not infer product origin from an address without an explicit manufacture/origin statement. "
+            "Extract the named Incoterm place and its country separately in commercial_terms.incoterm_named_place "
+            "and commercial_terms.incoterm_country when the document or a standard location code identifies it. "
+            "A delivery place is commercial context, not proof "
+            "of product origin. Use the supplier header for the complete named incoterm place, including any code "
             "in parentheses, "
             "for incoterms. Derive dosage_form from the pharmaceutical form phrase, never from a container or UOM; "
             "for example, `Pressurised inhalation suspension` has dosage_form `suspension`.\n"
