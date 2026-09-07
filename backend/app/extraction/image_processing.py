@@ -1,21 +1,20 @@
-"""Durable OCR stage: provider evidence only, never a canonical quotation."""
+"""In-process OCR stage: provider evidence only, never a canonical quotation."""
 
 import json
 import time
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
-from app.application.processing_events import record_event
-from app.core.settings import Settings
-from app.infrastructure.database import create_sqlite_engine
-from app.infrastructure.models import DocumentRecord, OcrJobRecord
+from app.config import Config
+from app.events import record_event
+from app.extraction.ocr_client import request_ocr
+from app.models import DocumentRecord, OcrJobRecord
 from app.security.redaction import redact_for_model
-from app.workers.ocr_client import request_ocr
 
 
-def consume_ocr(session: Session, job_id: str, settings: Settings) -> None:
+def consume_ocr(session: Session, job_id: str, settings: Config) -> None:
     job = session.get(OcrJobRecord, job_id)
     if job is None or job.status in {"completed", "awaiting_service_configuration"}:
         return
@@ -64,15 +63,16 @@ def consume_ocr(session: Session, job_id: str, settings: Settings) -> None:
         stage="ocr_completed",
         metadata={"page_count": len(result.pages), "duration_ms": int((time.perf_counter() - started) * 1000)},
     )
-    if settings.resolved_gemini_api_key:
-        from app.application.documents import _upsert_quotation
-        from app.domain.commercial_rules import apply_commercial_rules
-        from app.domain.langchain_extractor import LangChainSemanticExtractor
-        from app.infrastructure.models import ModelInvocationRecord
+    if settings.gemini_api_key:
+        from app.documents import _upsert_quotation
+        from app.extraction.commercial import apply_commercial_rules
+        from app.extraction.llm import LangChainSemanticExtractor
+        from app.models import ModelInvocationRecord
 
         extractor = LangChainSemanticExtractor(
-            api_key=settings.resolved_gemini_api_key,
-            model=settings.resolved_gemini_model,
+            api_key=settings.gemini_api_key,
+            model=settings.gemini_model,
+            request_timeout_seconds=settings.gemini_request_timeout_seconds,
         )
         try:
             quotation, telemetry = extractor.extract_canonical_quotation(
@@ -83,12 +83,11 @@ def consume_ocr(session: Session, job_id: str, settings: Settings) -> None:
             document.status = "pending_review"
             _upsert_quotation(session, document, quotation)
             invocation = ModelInvocationRecord(
-                learning_id=None,
                 email_extraction_id=None,
                 document_id=document.id,
                 operation="ocr_quotation_extraction",
                 provider="google-gemini",
-                model=settings.resolved_gemini_model,
+                model=settings.gemini_model,
                 prompt_version="ocr-extraction-v1",
                 status="completed",
                 duration_ms=telemetry.get("duration_ms"),
@@ -104,7 +103,7 @@ def consume_ocr(session: Session, job_id: str, settings: Settings) -> None:
                 session,
                 document_id=document.id,
                 stage="ocr_extraction_completed",
-                metadata={"line_item_count": len(quotation.line_items), "model": settings.resolved_gemini_model},
+                metadata={"line_item_count": len(quotation.line_items), "model": settings.gemini_model},
             )
         except Exception as error:
             document.status = "needs_semantic_extraction"
@@ -117,23 +116,3 @@ def consume_ocr(session: Session, job_id: str, settings: Settings) -> None:
     else:
         document.status = "needs_semantic_extraction"
     session.commit()
-
-
-def run_ocr_job(
-    job_id: str,
-    database_url: str,
-    task_database_path: str,
-    upload_dir: str,
-    service_url: str | None = None,
-    service_token: str | None = None,
-) -> None:
-    settings = Settings(
-        database_url=database_url,
-        task_database_path=Path(task_database_path),
-        upload_dir=Path(upload_dir),
-        ocr_service_url=service_url,
-        ocr_service_token=service_token,
-    )
-    engine = create_sqlite_engine(settings.database_url)
-    with sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)() as session:
-        consume_ocr(session, job_id, settings)

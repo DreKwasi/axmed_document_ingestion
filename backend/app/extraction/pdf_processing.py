@@ -1,22 +1,21 @@
-"""Durable structured extraction of safely parsed native PDFs."""
+"""In-process structured extraction of safely parsed native PDFs."""
 
 import json
+import logging
 import time
-from pathlib import Path
 from typing import Any
-from urllib.error import HTTPError, URLError
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
-from app.application.documents import _upsert_quotation
-from app.application.processing_events import record_event
-from app.core.settings import Settings
-from app.domain.commercial_rules import apply_commercial_rules
-from app.infrastructure.database import create_sqlite_engine
-from app.infrastructure.models import DocumentRecord, ModelInvocationRecord, PdfExtractionRecord
+from app.config import Config
+from app.documents import _upsert_quotation
+from app.events import record_event
+from app.extraction.commercial import apply_commercial_rules
+from app.models import DocumentRecord, ModelInvocationRecord, PdfExtractionRecord
 from app.security.redaction import redact_for_model
-from app.workers.resolver import provider_name, request_canonical_quotation
+
+logger = logging.getLogger("app.extraction.pdf")
 
 
 def _semantic_pdf_context(stored_context: dict[str, Any]) -> dict[str, Any]:
@@ -85,7 +84,6 @@ def _upsert_invocation(
     )
     if invocation is None:
         invocation = ModelInvocationRecord(
-            learning_id=None,
             email_extraction_id=None,
             document_id=extraction.document_id,
             operation="pdf_quotation_extraction",
@@ -111,7 +109,7 @@ def _upsert_invocation(
     invocation.safe_metadata_json = json.dumps(metadata, sort_keys=True)
 
 
-def consume_pdf_extraction(session: Session, extraction_id: str, settings: Settings) -> None:
+def consume_pdf_extraction(session: Session, extraction_id: str, settings: Config) -> None:
     extraction = session.get(PdfExtractionRecord, extraction_id)
     if extraction is None or extraction.status in {"completed", "awaiting_model_configuration"}:
         return
@@ -123,40 +121,61 @@ def consume_pdf_extraction(session: Session, extraction_id: str, settings: Setti
         return
     started = time.perf_counter()
     safe_context = _semantic_pdf_context(redact_for_model(json.loads(extraction.safe_context_json)))
+    page_count = len(safe_context.get("pages", []))
     extraction.status = "running"
     document.status = "semantic_extraction_running"
+    logger.info("[PDF %s] Processing document '%s' (%d pages)", document.id[:8], document.original_filename, page_count)
     record_event(session, document_id=document.id, stage="pdf_extraction_started")
-    if settings.resolved_gemini_api_key:
+    if settings.gemini_api_key:
         _upsert_invocation(
             session,
             extraction,
             provider="google-gemini",
-            model=settings.resolved_gemini_model,
+            model=settings.gemini_model,
             status="running",
             duration_ms=None,
-            metadata={"source_type": "pdf", "page_count": len(safe_context.get("pages", []))},
+            metadata={"source_type": "pdf", "page_count": page_count},
         )
         session.commit()
-        from app.domain.langchain_extractor import LangChainSemanticExtractor, merge_semantic_enrichment
+        from app.extraction.llm import LangChainSemanticExtractor, merge_semantic_enrichment
 
         record_event(
             session,
             document_id=document.id,
             stage="pdf_extraction_prepared",
-            metadata={"page_count": len(safe_context.get("pages", []))},
+            metadata={"page_count": page_count},
         )
         record_event(session, document_id=document.id, stage="pdf_semantic_extraction_started")
         session.commit()
         try:
             extractor = LangChainSemanticExtractor(
-                api_key=settings.resolved_gemini_api_key,
-                model=settings.resolved_gemini_model,
+                api_key=settings.gemini_api_key,
+                model=settings.gemini_model,
+                request_timeout_seconds=settings.gemini_request_timeout_seconds,
+            )
+            logger.info(
+                "[PDF %s] Calling Gemini (%s) for canonical quotation extraction...",
+                document.id[:8],
+                settings.gemini_model,
             )
             quotation, telemetry = extractor.extract_canonical_quotation(safe_context, source_type="pdf")
+            logger.info(
+                "[PDF %s] Extracted quotation in %d ms (%d line items)",
+                document.id[:8],
+                telemetry.get("duration_ms", 0),
+                len(quotation.line_items),
+            )
+
+            logger.info("[PDF %s] Enriching line items from narrative sections...", document.id[:8])
             enrichment, enrichment_telemetry = extractor.enrich_line_items_from_semantic_sections(
                 safe_context, quotation
             )
             quotation = merge_semantic_enrichment(quotation, enrichment)
+            logger.info(
+                "[PDF %s] Enrichment finished in %d ms",
+                document.id[:8],
+                enrichment_telemetry.get("duration_ms", 0),
+            )
         except Exception as error:
             extraction.status = "failed"
             extraction.error_message = f"langchain_extraction_failed: {error}"
@@ -165,13 +184,14 @@ def consume_pdf_extraction(session: Session, extraction_id: str, settings: Setti
                 session,
                 extraction,
                 provider="google-gemini",
-                model=settings.resolved_gemini_model,
+                model=settings.gemini_model,
                 status="failed",
                 duration_ms=int((time.perf_counter() - started) * 1000),
                 metadata={"source_type": "pdf", "error": str(error)},
             )
             record_event(session, document_id=document.id, stage="pdf_extraction_failed")
             session.commit()
+            logger.exception("[PDF %s] LangChain Gemini extraction failed: %s", document.id[:8], error)
             raise
         record_event(session, document_id=document.id, stage="pdf_quotation_normalizing")
         session.commit()
@@ -185,7 +205,7 @@ def consume_pdf_extraction(session: Session, extraction_id: str, settings: Setti
             session,
             extraction,
             provider="google-gemini",
-            model=settings.resolved_gemini_model,
+            model=settings.gemini_model,
             status="completed",
             duration_ms=(telemetry.get("duration_ms") or 0) + (enrichment_telemetry.get("duration_ms") or 0),
             metadata={"source_type": "pdf", "line_item_count": len(quotation.line_items)},
@@ -199,112 +219,30 @@ def consume_pdf_extraction(session: Session, extraction_id: str, settings: Setti
             session,
             document_id=document.id,
             stage="pdf_extraction_completed",
-            metadata={"line_item_count": len(quotation.line_items), "model": settings.resolved_gemini_model},
+            metadata={"line_item_count": len(quotation.line_items), "model": settings.gemini_model},
         )
         session.commit()
+        logger.info(
+            "[PDF %s] Extraction COMPLETED -> %d line items, status=pending_review",
+            document.id[:8],
+            len(quotation.line_items),
+        )
         return
 
-    if not settings.semantic_resolver_url:
-        extraction.status = "awaiting_model_configuration"
-        document.status = "needs_semantic_extraction"
-        _upsert_invocation(
-            session,
-            extraction,
-            provider="unconfigured",
-            model=settings.semantic_resolver_model,
-            status="awaiting_configuration",
-            duration_ms=int((time.perf_counter() - started) * 1000),
-            metadata={"source_type": "pdf", "page_count": len(safe_context.get("pages", []))},
-        )
-        record_event(session, document_id=document.id, stage="pdf_extraction_awaiting_model_configuration")
-        session.commit()
-        return
+    logger.warning("[PDF %s] Gemini API key is not configured", document.id[:8])
+    extraction.status = "awaiting_model_configuration"
+    document.status = "needs_semantic_extraction"
     _upsert_invocation(
         session,
         extraction,
-        provider=provider_name(settings.semantic_resolver_url),
-        model=settings.semantic_resolver_model,
-        status="running",
-        duration_ms=None,
-        metadata={"source_type": "pdf", "page_count": len(safe_context.get("pages", []))},
-    )
-    session.commit()
-    record_event(
-        session,
-        document_id=document.id,
-        stage="pdf_extraction_prepared",
-        metadata={"page_count": len(safe_context.get("pages", []))},
-    )
-    record_event(session, document_id=document.id, stage="pdf_semantic_extraction_started")
-    session.commit()
-    try:
-        quotation = request_canonical_quotation(
-            settings.semantic_resolver_url,
-            operation="pdf_quotation_extraction",
-            prompt_version="pdf-extraction-v1",
-            context=safe_context,
-            token=settings.semantic_resolver_token,
-        )
-    except (HTTPError, URLError, TimeoutError, ValueError, json.JSONDecodeError):
-        extraction.status = "failed"
-        extraction.error_message = "resolver_request_failed"
-        document.status = "needs_semantic_extraction"
-        _upsert_invocation(
-            session,
-            extraction,
-            provider=provider_name(settings.semantic_resolver_url),
-            model=settings.semantic_resolver_model,
-            status="failed",
-            duration_ms=int((time.perf_counter() - started) * 1000),
-            metadata={"source_type": "pdf", "page_count": len(safe_context.get("pages", []))},
-        )
-        record_event(session, document_id=document.id, stage="pdf_extraction_failed")
-        session.commit()
-        raise
-    record_event(session, document_id=document.id, stage="pdf_quotation_normalizing")
-    session.commit()
-    quotation = apply_commercial_rules(quotation)
-    extraction.status = "completed"
-    extraction.error_message = None
-    extraction.result_json = quotation.model_dump_json()
-    document.status = "pending_review"
-    _upsert_quotation(session, document, quotation)
-    _upsert_invocation(
-        session,
-        extraction,
-        provider=provider_name(settings.semantic_resolver_url),
-        model=settings.semantic_resolver_model,
-        status="completed",
+        provider="unconfigured",
+        model=settings.gemini_model,
+        status="awaiting_configuration",
         duration_ms=int((time.perf_counter() - started) * 1000),
-        metadata={"source_type": "pdf", "line_item_count": len(quotation.line_items)},
+        metadata={"source_type": "pdf", "page_count": page_count},
     )
-    record_event(
-        session,
-        document_id=document.id,
-        stage="pdf_extraction_completed",
-        metadata={"line_item_count": len(quotation.line_items)},
-    )
+    record_event(session, document_id=document.id, stage="pdf_extraction_awaiting_model_configuration")
     session.commit()
-
-
-def run_pdf_extraction_job(
-    extraction_id: str,
-    database_url: str,
-    task_database_path: str,
-    resolver_url: str | None = None,
-    resolver_token: str | None = None,
-    resolver_model: str | None = None,
-) -> None:
-    settings = Settings(
-        database_url=database_url,
-        task_database_path=Path(task_database_path),
-        semantic_resolver_url=resolver_url,
-        semantic_resolver_token=resolver_token,
-        semantic_resolver_model=resolver_model,
-    )
-    engine = create_sqlite_engine(settings.database_url)
-    with sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)() as session:
-        consume_pdf_extraction(session, extraction_id, settings)
 
 
 def _cost_text(value: Any) -> str | None:
