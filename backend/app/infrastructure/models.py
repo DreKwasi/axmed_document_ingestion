@@ -107,6 +107,7 @@ class QuotationLineItemRecord(Base):
     normalized_price_uom: Mapped[str | None] = mapped_column(String(120), nullable=True)
     normalized_price_calculation: Mapped[str | None] = mapped_column(Text, nullable=True)
     normalized_price_derived: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    normalized_price_validation_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
     lead_time_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     shelf_life_months: Mapped[int | None] = mapped_column(Integer, nullable=True)
     minimum_remaining_shelf_life_percent: Mapped[Decimal | None] = mapped_column(Numeric(50, 30), nullable=True)

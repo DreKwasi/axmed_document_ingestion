@@ -46,13 +46,18 @@ def test_startup_applies_checked_in_alembic_migration(tmp_path: Path):
             row[1] for row in database.execute("PRAGMA table_info(quotation_field_values)").fetchall()
         }
         review_columns = {row[1] for row in database.execute("PRAGMA table_info(reviews)").fetchall()}
-    assert revision == ("20260907_15",)
+    assert revision == ("20260907_16",)
     assert mapping_schema is not None
     assert "UNIQUE (source_system, source_schema_version, schema_fingerprint)" in mapping_schema[0]
     assert batches_schema is not None
     assert "system_decision" in quotation_columns
     assert {"reliability", "reliability_reason"}.issubset(field_value_columns)
     assert "rejection_reason" in review_columns
+    with sqlite3.connect(database_path) as database:
+        line_item_columns = {
+            row[1] for row in database.execute("PRAGMA table_info(quotation_line_items)").fetchall()
+        }
+    assert "normalized_price_validation_status" in line_item_columns
 
 
 def test_startup_upgrades_a_pre_alembic_slice_one_database(tmp_path: Path):
@@ -75,7 +80,7 @@ def test_startup_upgrades_a_pre_alembic_slice_one_database(tmp_path: Path):
         review_learning = database.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'review_learning'"
         ).fetchone()
-    assert revision == ("20260907_15",)
+    assert revision == ("20260907_16",)
     assert review_learning is not None
 
 
@@ -101,7 +106,7 @@ def test_startup_repairs_an_interrupted_review_learning_migration(tmp_path: Path
         review_learning = database.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'review_learning'"
         ).fetchone()
-    assert revision == ("20260907_15",)
+    assert revision == ("20260907_16",)
     assert review_learning is not None
 
 
