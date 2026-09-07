@@ -48,40 +48,9 @@ function confidenceBadgeClass(confidence: string): string {
 
 function reviewIssuesForLine(index: number) {
   const prefix = `line_items[${index}]`;
-  const extractedIssues = props.reviewIssues
+  return props.reviewIssues
     .filter((issue) => issue.field_path.startsWith(prefix))
     .map((issue) => ({ key: `${issue.field_path}:${issue.code}`, message: issue.message }));
-  const policyIssues = props.fieldReviews
-    ?.filter((field) => field.field_path.startsWith(prefix) && field.confidence_band === "Low")
-    .map((field) => ({
-      key: field.field_path,
-      message: `${fieldLabel(field.field_path)}: ${field.confidence_reason ?? "requires review"}`,
-    })) ?? [];
-  const sourcePolicyIssues = props.reviewReasons
-    ?.filter((reason) => reason.startsWith(prefix))
-    .map((reason) => {
-      const [fieldPath, message] = reason.split(": ", 2);
-      return { key: fieldPath, message: `${fieldLabel(fieldPath)}: ${message ?? "requires review"}` };
-    }) ?? [];
-  return [...extractedIssues, ...policyIssues, ...sourcePolicyIssues].filter(
-    (issue, position, issues) => issues.findIndex((candidate) => candidate.key === issue.key) === position
-  );
-}
-
-function fieldLabel(path: string) {
-  const labels: Record<string, string> = {
-    "product.inn": "Product / INN",
-    "product.strength": "Strength",
-    "product.dosage_form": "Dosage form",
-    "pricing.currency": "Currency",
-    "pricing.quoted_price.amount": "Quoted price",
-    "pricing.quoted_price.uom": "Price unit",
-    "quantity.quoted_quantity": "Quoted quantity",
-  };
-  const suffix = path.replace(/^line_items\[\d+\]\./, "");
-  if (labels[suffix]) return labels[suffix];
-  const field = suffix.split(".").at(-1)?.replace(/\[\d+\]/g, "") ?? "Field";
-  return field.replace(/_/g, " ").replace(/\b\w/g, (character) => character.toUpperCase());
 }
 </script>
 

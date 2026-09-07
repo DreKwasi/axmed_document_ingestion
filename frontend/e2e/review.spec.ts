@@ -5,12 +5,10 @@ const sanovaFixture = fileURLToPath(
   new URL("../../backend/evals/fixtures/documents/sanova_offer_export_2026-08-03.json", import.meta.url)
 );
 
-test("a reviewer confirms and corrects an extracted offer", async ({ page }) => {
+test("a reviewer corrects a source-grounded extracted offer", async ({ page }) => {
   await page.goto("/");
   await page.locator('input[type="file"]').setInputFiles(sanovaFixture);
-  await expect(page.getByText(/new source structure detected/i)).toBeVisible();
 
-  await page.getByRole("button", { name: "Confirm mapping" }).click();
   await expect(page.getByText("Pending human review", { exact: true })).toBeVisible();
   await expect(page.getByText("0.035", { exact: false }).first()).toBeVisible();
 

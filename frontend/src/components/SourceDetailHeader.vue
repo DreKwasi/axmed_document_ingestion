@@ -11,7 +11,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (event: "back"): void;
   (event: "openReview"): void;
-  (event: "confirmMapping"): void;
+  (event: "reextract"): void;
 }>();
 
 function statusKey(doc: DocumentResponse): "ready" | "review" | "needs_attention" | "processing" {
@@ -23,6 +23,8 @@ function statusKey(doc: DocumentResponse): "ready" | "review" | "needs_attention
 }
 
 const statusLabel = computed(() => {
+  if (props.document.status === "failed") return "Extraction failed";
+  if (props.document.status === "rejected" || props.document.quotation?.review_status === "rejected") return "Rejected";
   if (props.document.status === "pending_review" && props.document.quotation?.has_corrections) return "Pending review after correction";
   const map = {
     ready: "Ready",
@@ -93,6 +95,23 @@ const statusDotClass = computed(() => {
 
 <template>
   <div class="space-y-4">
+    <div
+      v-if="document.status === 'failed' && document.failure_reason"
+      class="rounded-2xl border border-rose-200 bg-rose-50 px-5 py-4 text-sm text-rose-950"
+    >
+      <p class="font-bold">Extraction failed</p>
+      <p class="mt-1 text-rose-800">{{ document.failure_reason }}</p>
+      <button
+        v-if="document.filename.toLowerCase().endsWith('.json')"
+        type="button"
+        class="mt-3 rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-xs font-bold text-rose-800 hover:bg-rose-100 disabled:opacity-50"
+        :disabled="busy"
+        @click="emit('reextract')"
+      >
+        Extract again
+      </button>
+    </div>
+
     <!-- Back link -->
     <div>
       <button
@@ -228,27 +247,6 @@ const statusDotClass = computed(() => {
           </div>
         </div>
       </div>
-    </div>
-
-    <!-- Mapping Confirmation Checkpoint Banner (if new schema detected) -->
-    <div
-      v-if="document.status === 'needs_mapping_confirmation'"
-      class="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-900"
-    >
-      <div>
-        <p class="font-bold text-amber-950">New source structure detected</p>
-        <p class="mt-0.5 text-amber-800">
-          The system proposed a mapping for {{ document.source_system || 'this schema' }}. Confirm the mapping to proceed with review.
-        </p>
-      </div>
-      <button
-        type="button"
-        class="rounded-xl bg-amber-800 px-4 py-2 font-bold text-white hover:bg-amber-900 transition disabled:opacity-50"
-        :disabled="busy"
-        @click="emit('confirmMapping')"
-      >
-        Confirm mapping
-      </button>
     </div>
   </div>
 </template>
