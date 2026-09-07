@@ -236,3 +236,44 @@ def test_correction_registry_rejects_unknown_canonical_fields(client, sanova_byt
 
     assert response.status_code == 422
     assert "not supported" in response.json()["detail"]
+
+
+def test_reviewer_can_correct_any_canonical_field_with_note(client, sanova_bytes):
+    document = confirmed_sanova(client, sanova_bytes)
+    revision = document["quotation"]["revision"]
+    note_text = "Verified with supplier: trade name is Paracetamol Forte, supplier is Sanova Global AG."
+    response = client.post(
+        f"/api/v1/documents/{document['id']}/reviews/correct",
+        json={
+            "request_id": "review-any-field-1",
+            "expected_revision": revision,
+            "patches": [
+                {"path": "supplier.name", "value": "Sanova Global AG"},
+                {"path": "line_items.0.product.trade_name", "value": "Paracetamol Forte"},
+                {"path": "commercial_terms.payment_terms", "value": "Net 60 days"},
+            ],
+            "note": note_text,
+        },
+    )
+
+    assert response.status_code == 200
+    corrected = response.json()
+    assert corrected["quotation"]["revision"] == revision + 1
+    assert corrected["quotation"]["supplier"]["name"] == "Sanova Global AG"
+    assert corrected["quotation"]["line_items"][0]["product"]["trade_name"] == "Paracetamol Forte"
+    assert corrected["quotation"]["commercial_terms"]["payment_terms"] == "Net 60 days"
+
+    # Verify audit trail tracks before/after and reviewer note
+    review_record = corrected["reviews"][0]
+    assert review_record["action"] == "corrected"
+    assert review_record["note"] == note_text
+    paths_audited = {p["path"]: p for p in review_record["patches"]}
+    assert paths_audited["supplier.name"]["before"] == "Sanova Laboratories Pvt. Ltd."
+    assert paths_audited["supplier.name"]["after"] == "Sanova Global AG"
+    assert paths_audited["line_items.0.product.trade_name"]["before"] == "Sanotri-TLD"
+    assert paths_audited["line_items.0.product.trade_name"]["after"] == "Paracetamol Forte"
+    assert (
+        paths_audited["commercial_terms.payment_terms"]["before"]
+        == "30% advance with PO, 70% against copy of Bill of Lading"
+    )
+    assert paths_audited["commercial_terms.payment_terms"]["after"] == "Net 60 days"

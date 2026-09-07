@@ -3,7 +3,13 @@ from pathlib import Path
 
 from sqlalchemy.orm import sessionmaker
 
-from app.application.evaluations import run_live_email_evaluation, run_live_ocr_evaluation, run_live_pdf_evaluation
+from app.application.evaluations import (
+    run_live_email_evaluation,
+    run_live_ocr_evaluation,
+    run_live_pdf_evaluation,
+    run_recorded_evaluation,
+    seed_evaluation_cases,
+)
 from app.domain.contracts import CanonicalQuotation
 from app.domain.ocr_contract import OcrLine, OcrPage, OcrResult
 from app.infrastructure.database import create_sqlite_engine
@@ -37,6 +43,59 @@ def test_recorded_evaluation_is_persisted_and_reports_rubric_scores(client):
     assert result["scores"]["cold_duration_ms"] >= 1
     assert result["scores"]["warm_duration_ms"] >= 1
     assert after["runs"][0]["results"][1]["status"] == "not_run"
+
+
+def test_recorded_evaluation_allows_one_source_change_to_update_multiple_canonical_fields(
+    tmp_path, client_settings
+):
+    _, configured_settings = client_settings
+    dataset_path = tmp_path / "one-recorded-case.json"
+    fixture_path = PROJECT_ROOT / "backend/evals/fixtures/documents/sanova_offer_export_2026-08-03.json"
+    mapping_path = PROJECT_ROOT / "backend/evals/recorded_mappings"
+    dataset_path.write_text(
+        json.dumps(
+            {
+                "rubric_version": "test",
+                "rubric": [],
+                "cases": [
+                    {
+                        "id": "one-recorded-case",
+                        "title": "One source price with two canonical representations",
+                        "input_fixture": str(fixture_path),
+                        "expected": {
+                            "source_system": "SanovaERP",
+                            "quotation_reference": "SNV/EXP/2026/0771",
+                            "line_item_count": 3,
+                            "warm_mutation": {
+                                "source_path": "offer.products.0.commercials.price_per_pack",
+                                "value": 3.33,
+                                "canonical_paths": [
+                                    "line_items.0.pricing.pack_price",
+                                    "line_items.0.pricing.quoted_price.amount",
+                                ],
+                            },
+                        },
+                    }
+                ],
+            }
+        )
+    )
+
+    from app.domain.schema_mapping import RecordedSemanticMappingProvider
+
+    engine = create_sqlite_engine(configured_settings.database_url)
+    session_factory = sessionmaker(engine)
+    with session_factory() as session:
+        seed_evaluation_cases(session, dataset_path)
+        run = run_recorded_evaluation(
+            session,
+            project_root=PROJECT_ROOT,
+            golden_dataset_path=dataset_path,
+            provider=RecordedSemanticMappingProvider(mapping_path),
+        )
+        summary = run.summary_json
+
+    assert json.loads(summary)["passed"] == 1
 
 
 def test_live_pdf_evaluation_counts_the_selected_cases_and_persists_a_failure(tmp_path, client_settings, monkeypatch):

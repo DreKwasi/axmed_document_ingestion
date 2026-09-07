@@ -182,14 +182,26 @@ def test_diagnostics_exposes_only_safe_worker_facts(client_settings, sanova_byte
 
     assert diagnostics["stage_counts"]["learning_queued"] == 1
     assert diagnostics["stage_counts"]["learning_awaiting_model_configuration"] == 1
-    assert diagnostics["invocations"] == [
-        {
-            "operation": "correction_interpretation",
-            "provider": "unconfigured",
-            "model": None,
-            "status": "awaiting_configuration",
-            "duration_ms": diagnostics["invocations"][0]["duration_ms"],
-            "metadata": {"corrected_field_count": 1},
-            "created_at": diagnostics["invocations"][0]["created_at"],
-        }
-    ]
+    learning_invocation = next(
+        invocation
+        for invocation in diagnostics["invocations"]
+        if invocation["operation"] == "correction_interpretation"
+    )
+    assert learning_invocation == {
+        "operation": "correction_interpretation",
+        "provider": "unconfigured",
+        "model": None,
+        "status": "awaiting_configuration",
+        "duration_ms": learning_invocation["duration_ms"],
+        "input_tokens": None,
+        "output_tokens": None,
+        "estimated_cost_usd": None,
+        "metadata": {"corrected_field_count": 1},
+        "created_at": learning_invocation["created_at"],
+    }
+    mapping_invocation = next(
+        invocation for invocation in diagnostics["invocations"] if invocation["operation"] == "schema_mapping"
+    )
+    assert mapping_invocation["input_tokens"] == 724
+    assert mapping_invocation["output_tokens"] == 418
+    assert mapping_invocation["estimated_cost_usd"] == "0.00214"
