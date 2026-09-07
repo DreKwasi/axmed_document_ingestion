@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from app.domain.confidence import ConfidenceSignals, assess_review_readiness
+from app.domain.confidence import ConfidenceSignals, assess_review_readiness, field_confidence_for_path
 from app.domain.contracts import (
     CanonicalQuotation,
     Evidence,
@@ -96,3 +96,96 @@ def test_clean_native_pdf_without_leaf_provenance_is_medium_not_a_review_failure
     assert result.system_decision == "auto_accepted"
     assert {field.band for field in result.fields.values()} == {"Medium"}
     assert not result.review_reasons
+
+
+def test_clear_ocr_with_strong_row_association_is_high_confidence():
+    line_item = complete_line_item("ocr")
+    for evidence in line_item.evidence:
+        evidence.confidence = Decimal("0.95")
+        evidence.source_location = "page 1, table 1, row 2, matching column"
+
+    result = assess_review_readiness(
+        CanonicalQuotation(line_items=[line_item]), ConfidenceSignals(source_type="image", ocr_used=True)
+    )
+
+    assert {field.band for field in result.fields.values()} == {"High"}
+    assert result.system_decision == "auto_accepted"
+
+
+def test_imperfect_ocr_with_clear_association_is_medium_without_corroboration():
+    line_item = complete_line_item("ocr")
+    for evidence in line_item.evidence:
+        evidence.confidence = Decimal("0.80")
+        evidence.source_location = "page 1, table 1, row 2, matching column"
+
+    result = assess_review_readiness(
+        CanonicalQuotation(line_items=[line_item]), ConfidenceSignals(source_type="image", ocr_used=True)
+    )
+
+    assert result.fields["line_items[0].pricing.quoted_price.amount"].band == "Medium"
+    assert "independent validation: unavailable" in result.fields[
+        "line_items[0].pricing.quoted_price.amount"
+    ].reason
+
+
+def test_exact_commercial_arithmetic_strengthens_imperfect_ocr_to_high():
+    line_item = complete_line_item("ocr")
+    line_item.pricing.discount = Decimal("0")
+    line_item.pricing.extended_price = Decimal("125")
+    for evidence in line_item.evidence:
+        evidence.confidence = Decimal("0.80")
+        evidence.source_location = "page 1, table 1, row 2, matching column"
+
+    result = assess_review_readiness(
+        CanonicalQuotation(line_items=[line_item]), ConfidenceSignals(source_type="image", ocr_used=True)
+    )
+
+    price = result.fields["line_items[0].pricing.quoted_price.amount"]
+    assert price.band == "High"
+    assert "independent validation: passed" in price.reason
+
+
+def test_derived_value_has_no_extraction_confidence():
+    result = assess_review_readiness(
+        CanonicalQuotation(line_items=[complete_line_item()]), ConfidenceSignals(source_type="json")
+    )
+
+    assert field_confidence_for_path("line_items[0].pricing.normalized_price.amount", result) is None
+
+
+def test_commercial_arithmetic_conflict_forces_low_confidence():
+    line_item = complete_line_item("direct_json")
+    line_item.pricing.discount = Decimal("0")
+    line_item.pricing.extended_price = Decimal("999")
+
+    result = assess_review_readiness(
+        CanonicalQuotation(line_items=[line_item]), ConfidenceSignals(source_type="json")
+    )
+
+    price = result.fields["line_items[0].pricing.quoted_price.amount"]
+    assert price.band == "Low"
+    assert "independent validation: conflicting" in price.reason
+    assert result.system_decision == "needs_review"
+
+
+def test_every_extracted_source_field_receives_factorized_confidence():
+    line_item = complete_line_item("direct_json")
+    line_item.product.trade_name = "Amoxil"
+    line_item.evidence.append(
+        Evidence(
+            canonical_field="product.trade_name",
+            extraction_method="direct_json",
+            source_location="items[0].trade_name",
+            confidence=Decimal("1"),
+        )
+    )
+
+    result = assess_review_readiness(
+        CanonicalQuotation(line_items=[line_item]), ConfidenceSignals(source_type="json")
+    )
+
+    confidence = result.fields["line_items[0].product.trade_name"]
+    assert confidence.band == "High"
+    assert confidence.reason == (
+        "source evidence: strong; association: strong; independent validation: unavailable"
+    )
