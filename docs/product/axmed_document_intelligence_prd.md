@@ -441,6 +441,15 @@ The document parser should recover the best representation it can. The LLM then 
 
 Deterministic logic returns after semantic extraction to validate commercial relationships.
 
+For native PDFs, the model must not stop at the visual price schedule. The pipeline keeps LiteParse's
+deterministic layout representation for exact table-row and column association, then runs a compact text-only
+semantic enrichment pass across the PDF reading order for facts that tables routinely omit. This pass applies explicitly scoped
+notes—single item, item list/range, exception, or all other items—to the relevant canonical line items.
+
+Examples include shelf life, minimum remaining shelf life, storage and cold-chain conditions, MOQ, registration
+references/status, and registered markets. A stated percentage is persisted in percentage points (`80`, not `0.80`).
+The enrichment pass fills omitted values only; it never replaces a table-derived price, quantity, or product fact.
+
 ---
 
 # 11. OCR architecture
