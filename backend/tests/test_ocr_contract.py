@@ -3,8 +3,8 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from app.domain.ocr_contract import OcrResult
-from app.workers.ocr_client import request_ocr
+from app.extraction.ocr_client import request_ocr
+from app.extraction.ocr_contract import OcrResult
 
 
 def test_ocr_contract_requires_page_level_evidence_and_provider_metadata():
@@ -91,7 +91,7 @@ def test_ocr_client_sends_bounded_authenticated_versioned_request(monkeypatch):
         submitted.append((request, timeout))
         return _Response()
 
-    monkeypatch.setattr("app.workers.ocr_client.urlopen", fake_urlopen)
+    monkeypatch.setattr("app.extraction.ocr_client.urlopen", fake_urlopen)
     result = request_ocr(
         "https://ocr.example/v1/ocr",
         data=b"png-data",

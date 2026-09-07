@@ -8,9 +8,10 @@ from unittest.mock import MagicMock, patch
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
-from app.application.documents import ingest_email, ingest_json
-from app.core.settings import Settings
-from app.domain.contracts import (
+from app.config import Config
+from app.database import create_sqlite_engine, run_migrations
+from app.documents import ingest_email
+from app.extraction.contracts import (
     CanonicalQuotation,
     CommercialTerms,
     LineItem,
@@ -22,24 +23,21 @@ from app.domain.contracts import (
     Supplier,
     Supply,
 )
-from app.domain.langchain_extractor import (
+from app.extraction.email_processing import consume_email_extraction
+from app.extraction.json import JsonSemanticExtraction, JsonSourceFact
+from app.extraction.llm import (
     LangChainSemanticExtractor,
-    ProposedMappingSchema,
     SemanticEnrichment,
     SemanticLineItemEnrichment,
     merge_semantic_enrichment,
 )
-from app.domain.schema_mapping import LangChainSemanticMappingProvider
-from app.infrastructure.database import create_sqlite_engine, run_migrations
-from app.infrastructure.models import (
+from app.models import (
     DocumentRecord,
     EmailExtractionRecord,
     ModelInvocationRecord,
     QuotationLineItemRecord,
     QuotationRecord,
-    SchemaMappingRecord,
 )
-from app.workers.email_extraction import consume_email_extraction
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 EMAIL_FIXTURE = PROJECT_ROOT / "backend/evals/fixtures/documents/RE_RFQ-2026-0244_Novara_quotation.eml"
@@ -160,31 +158,36 @@ def test_langchain_email_extraction_resolves_corrections_and_supersession():
     assert "extraction_method `llm_extraction`, never `manual`" in system_prompt
 
 
-def test_langchain_schema_mapping_proposal():
+def test_langchain_json_extraction_returns_source_grounded_facts():
     extractor = LangChainSemanticExtractor(api_key="test-fake-key", model="gemini-3.1-flash-lite")
 
-    mock_mapping = ProposedMappingSchema(
-        required_fields={"quotation_reference": "ref"},
-        quotation={"quotation_reference": "ref", "issue_date": "date"},
-        supplier={"name": "vendor"},
-        commercial_terms={"currency": "cur"},
-        line_items={"collection_path": "items[]", "fields": {"trade_name": "name"}},
+    result = JsonSemanticExtraction(
+        quotation={"quotation_reference": "Q-123", "supplier": {"name": "Acme"}},
+        source_facts=[
+            JsonSourceFact(
+                label="Quotation reference",
+                value="Q-123",
+                source_path="$.ref",
+                canonical_field="quotation_reference",
+            )
+        ],
     )
 
     mock_llm_chain = MagicMock()
-    mock_llm_chain.invoke.return_value = mock_mapping
+    mock_llm_chain.invoke.return_value = result
     extractor._llm = MagicMock()
     extractor._llm.with_structured_output.return_value = mock_llm_chain
 
-    proposal = extractor.propose_schema_mapping(
-        unmapped_payload={"ref": "Q-123", "vendor": "Acme", "cur": "USD"},
-        schema_fingerprint="abc123fingerprint",
-        source_system="TestERP",
+    extraction, telemetry = extractor.extract_json_quotation(
+        {"ref": "Q-123", "vendor": "Acme", "cur": "USD"},
+        {"paths": [], "candidate_collections": []},
+        source_document="source.json",
+        invalid_source_paths=[],
     )
 
-    assert proposal.provider == "google-gemini/gemini-3.1-flash-lite"
-    assert proposal.mapping["quotation"]["quotation_reference"] == "ref"
-    assert proposal.mapping["supplier"]["name"] == "vendor"
+    assert telemetry["provider"] == "google-gemini"
+    assert extraction.quotation.quotation_reference == "Q-123"
+    assert extraction.source_facts[0].source_path == "$.ref"
 
 
 def test_email_worker_executes_langchain_when_gemini_configured(tmp_path):
@@ -192,7 +195,7 @@ def test_email_worker_executes_langchain_when_gemini_configured(tmp_path):
     db_url = f"sqlite:///{db_path}"
     run_migrations(db_url, PROJECT_ROOT)
 
-    settings = Settings(
+    settings = Config(
         database_url=db_url,
         upload_dir=tmp_path / "uploads",
         gemini_api_key="test-api-key",
@@ -229,7 +232,7 @@ def test_email_worker_executes_langchain_when_gemini_configured(tmp_path):
         ],
     )
 
-    with patch("app.domain.langchain_extractor.LangChainSemanticExtractor.extract_canonical_quotation") as mock_extract:
+    with patch("app.extraction.llm.LangChainSemanticExtractor.extract_canonical_quotation") as mock_extract:
         mock_extract.return_value = (mock_quotation, {"duration_ms": 120, "model": "gemini-3.1-flash-lite"})
         with session_factory() as session:
             consume_email_extraction(session, extraction_id, settings)
@@ -248,69 +251,16 @@ def test_email_worker_executes_langchain_when_gemini_configured(tmp_path):
         assert invocation.status == "completed"
 
 
-def test_schema_memory_bypasses_langchain_for_known_schema(tmp_path):
-    db_path = tmp_path / "app.db"
-    db_url = f"sqlite:///{db_path}"
-    run_migrations(db_url, PROJECT_ROOT)
-
-    settings = Settings(
-        database_url=db_url,
-        upload_dir=tmp_path / "uploads",
-        gemini_api_key="test-api-key",
-        gemini_model="gemini-3.1-flash-lite",
-    )
-
-    engine = create_sqlite_engine(db_url)
-    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
-
-    # Seed a trusted schema mapping in SQLite
-    fixture_json = json.loads((PROJECT_ROOT / "backend/evals/recorded_mappings/sanova_erp_2_4_1.json").read_text())
-    with session_factory() as session:
-        mapping = SchemaMappingRecord(
-            source_system=fixture_json["source_system"],
-            source_schema_version="2.4.1",
-            schema_fingerprint=fixture_json["schema_fingerprint"],
-            mapping_json=json.dumps(fixture_json["mapping"]),
-            trust_state="trusted",
-            human_verified=True,
-            times_seen=1,
-            times_confirmed=1,
-        )
-        session.add(mapping)
-        session.commit()
-
-    # LangChain provider is passed, but should NEVER be called on a trusted cache hit
-    mock_extractor = MagicMock()
-    provider = LangChainSemanticMappingProvider(api_key="test-api-key", model="gemini-3.1-flash-lite")
-    provider.extractor = mock_extractor
-
-    json_data = (PROJECT_ROOT / "backend/evals/fixtures/documents/sanova_offer_export_2026-08-03.json").read_bytes()
-    with session_factory() as session:
-        doc = ingest_json(
-            session,
-            filename="sanova.json",
-            content_type="application/json",
-            data=json_data,
-            settings=settings,
-            provider=provider,
-        )
-
-        assert doc.status == "pending_review"
-        assert doc.mapping_source == "trusted_cache"
-        # Zero LLM calls!
-        mock_extractor.propose_schema_mapping.assert_not_called()
-
-
 def test_pdf_worker_executes_langchain_when_gemini_configured(tmp_path):
-    from app.application.documents import ingest_pdf
-    from app.infrastructure.models import PdfExtractionRecord
-    from app.workers.pdf_extraction import consume_pdf_extraction
+    from app.documents import ingest_pdf
+    from app.extraction.pdf_processing import consume_pdf_extraction
+    from app.models import PdfExtractionRecord
 
     db_path = tmp_path / "app.db"
     db_url = f"sqlite:///{db_path}"
     run_migrations(db_url, PROJECT_ROOT)
 
-    settings = Settings(
+    settings = Config(
         database_url=db_url,
         upload_dir=tmp_path / "uploads",
         gemini_api_key="test-api-key",
@@ -354,10 +304,10 @@ def test_pdf_worker_executes_langchain_when_gemini_configured(tmp_path):
         ],
     )
 
-    with patch("app.domain.langchain_extractor.LangChainSemanticExtractor.extract_canonical_quotation") as mock_extract:
+    with patch("app.extraction.llm.LangChainSemanticExtractor.extract_canonical_quotation") as mock_extract:
         mock_extract.return_value = (mock_quotation, {"duration_ms": 145, "model": "gemini-3.1-flash-lite"})
         with patch(
-            "app.domain.langchain_extractor.LangChainSemanticExtractor.enrich_line_items_from_semantic_sections"
+            "app.extraction.llm.LangChainSemanticExtractor.enrich_line_items_from_semantic_sections"
         ) as mock_enrich:
             mock_enrich.return_value = (SemanticEnrichment(), {"duration_ms": 20})
             with session_factory() as session:
@@ -393,15 +343,15 @@ def test_pdf_worker_executes_langchain_when_gemini_configured(tmp_path):
 
 
 def test_ocr_worker_executes_langchain_when_gemini_configured(tmp_path):
-    from app.domain.ocr_contract import OcrLine, OcrPage, OcrResult
-    from app.infrastructure.models import OcrJobRecord
-    from app.workers.ocr import consume_ocr
+    from app.extraction.image_processing import consume_ocr
+    from app.extraction.ocr_contract import OcrLine, OcrPage, OcrResult
+    from app.models import OcrJobRecord
 
     db_path = tmp_path / "app.db"
     db_url = f"sqlite:///{db_path}"
     run_migrations(db_url, PROJECT_ROOT)
 
-    settings = Settings(
+    settings = Config(
         database_url=db_url,
         upload_dir=tmp_path / "uploads",
         gemini_api_key="test-api-key",
@@ -467,8 +417,8 @@ def test_ocr_worker_executes_langchain_when_gemini_configured(tmp_path):
         line_items=[],
     )
 
-    with patch("app.workers.ocr.request_ocr", return_value=mock_ocr_result):
-        with patch("app.domain.langchain_extractor.LangChainSemanticExtractor.extract_canonical_quotation") as mock_ex:
+    with patch("app.extraction.image_processing.request_ocr", return_value=mock_ocr_result):
+        with patch("app.extraction.llm.LangChainSemanticExtractor.extract_canonical_quotation") as mock_ex:
             mock_ex.return_value = (mock_quotation, {"duration_ms": 110, "model": "gemini-3.1-flash-lite"})
             with session_factory() as session:
                 consume_ocr(session, job_id, settings)
@@ -493,11 +443,10 @@ def test_langchain_offline_fallback_when_unconfigured(tmp_path):
     db_url = f"sqlite:///{db_path}"
     run_migrations(db_url, PROJECT_ROOT)
 
-    settings = Settings(
+    settings = Config(
         database_url=db_url,
         upload_dir=tmp_path / "uploads",
         gemini_api_key=None,  # No key configured
-        semantic_resolver_url=None,
     )
 
     engine = create_sqlite_engine(db_url)

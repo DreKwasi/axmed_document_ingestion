@@ -3,46 +3,51 @@ from pathlib import Path
 
 from sqlalchemy.orm import sessionmaker
 
-from app.application.evaluations import (
+from app.database import create_sqlite_engine, run_migrations
+from app.evaluations import (
     run_live_email_evaluation,
     run_live_ocr_evaluation,
     run_live_pdf_evaluation,
     run_recorded_evaluation,
     seed_evaluation_cases,
 )
-from app.domain.contracts import CanonicalQuotation
-from app.domain.ocr_contract import OcrLine, OcrPage, OcrResult
-from app.infrastructure.database import create_sqlite_engine
-from app.infrastructure.models import EvaluationCaseRecord
+from app.extraction.contracts import CanonicalQuotation
+from app.extraction.json import RecordedJsonSemanticExtractor
+from app.extraction.ocr_contract import OcrLine, OcrPage, OcrResult
+from app.models import EvaluationCaseRecord, EvaluationResultRecord
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_recorded_evaluation_is_persisted_and_reports_rubric_scores(client):
-    before = client.get("/api/v1/evaluations")
-    assert before.status_code == 200
-    assert before.json()["runs"] == []
-    assert len(before.json()["cases"]) == 6
+def test_recorded_evaluation_is_persisted_and_reports_rubric_scores(tmp_path):
+    database_url = f"sqlite:///{tmp_path / 'evaluations.db'}"
+    run_migrations(database_url, PROJECT_ROOT)
+    session_factory = sessionmaker(create_sqlite_engine(database_url))
+    dataset_path = PROJECT_ROOT / "backend/evals/golden_dataset.json"
 
-    created = client.post("/api/v1/evaluations/runs")
+    with session_factory() as session:
+        seed_evaluation_cases(session, dataset_path)
+        run = run_recorded_evaluation(
+            session,
+            project_root=PROJECT_ROOT,
+            golden_dataset_path=dataset_path,
+            extractor=RecordedJsonSemanticExtractor(PROJECT_ROOT / "backend/evals/recorded_json_extractions"),
+        )
+        summary = json.loads(run.summary_json)
+        results = list(session.query(EvaluationResultRecord).filter_by(run_id=run.id).all())
 
-    assert created.status_code == 201
-    assert created.json()["summary"]["passed"] == 1
-    assert created.json()["summary"]["not_run"] == 5
-    after = client.get("/api/v1/evaluations").json()
-    result = after["runs"][0]["results"][0]
-    assert result["status"] == "passed"
-    assert result["scores"]["canonical_fidelity"] == 1.0
-    assert result["scores"]["mapping_efficiency"] == 1.0
-    assert result["scores"]["input_tokens"] == 724
-    assert result["scores"]["output_tokens"] == 418
-    assert result["scores"]["estimated_cost_usd"] == "0.00214"
-    assert result["scores"]["warm_input_tokens"] == 0
-    assert result["scores"]["warm_output_tokens"] == 0
-    assert result["scores"]["warm_estimated_cost_usd"] == "0"
-    assert result["scores"]["cold_duration_ms"] >= 1
-    assert result["scores"]["warm_duration_ms"] >= 1
-    assert after["runs"][0]["results"][1]["status"] == "not_run"
+    passed = next(result for result in results if result.status == "passed")
+    scores = json.loads(passed.scores_json)
+    assert summary["passed"] == 1
+    assert summary["not_run"] == 5
+    assert scores["canonical_fidelity"] == 1.0
+    assert scores["source_grounding"] == 1.0
+    assert scores["input_tokens"] == 724
+    assert scores["output_tokens"] == 418
+    assert scores["estimated_cost_usd"] == "0.00214"
+    assert scores["semantic_extraction_calls"] == 1
+    assert scores["duration_ms"] >= 1
+    assert sum(result.status == "not_run" for result in results) == 5
 
 
 def test_recorded_evaluation_allows_one_source_change_to_update_multiple_canonical_fields(
@@ -51,7 +56,7 @@ def test_recorded_evaluation_allows_one_source_change_to_update_multiple_canonic
     _, configured_settings = client_settings
     dataset_path = tmp_path / "one-recorded-case.json"
     fixture_path = PROJECT_ROOT / "backend/evals/fixtures/documents/sanova_offer_export_2026-08-03.json"
-    mapping_path = PROJECT_ROOT / "backend/evals/recorded_mappings"
+    extraction_path = PROJECT_ROOT / "backend/evals/recorded_json_extractions"
     dataset_path.write_text(
         json.dumps(
             {
@@ -66,22 +71,12 @@ def test_recorded_evaluation_allows_one_source_change_to_update_multiple_canonic
                             "source_system": "SanovaERP",
                             "quotation_reference": "SNV/EXP/2026/0771",
                             "line_item_count": 3,
-                            "warm_mutation": {
-                                "source_path": "offer.products.0.commercials.price_per_pack",
-                                "value": 3.33,
-                                "canonical_paths": [
-                                    "line_items.0.pricing.pack_price",
-                                    "line_items.0.pricing.quoted_price.amount",
-                                ],
-                            },
                         },
                     }
                 ],
             }
         )
     )
-
-    from app.domain.schema_mapping import RecordedSemanticMappingProvider
 
     engine = create_sqlite_engine(configured_settings.database_url)
     session_factory = sessionmaker(engine)
@@ -91,7 +86,7 @@ def test_recorded_evaluation_allows_one_source_change_to_update_multiple_canonic
             session,
             project_root=PROJECT_ROOT,
             golden_dataset_path=dataset_path,
-            provider=RecordedSemanticMappingProvider(mapping_path),
+            extractor=RecordedJsonSemanticExtractor(extraction_path),
         )
         summary = run.summary_json
 
@@ -137,7 +132,7 @@ def test_live_pdf_evaluation_counts_the_selected_cases_and_persists_a_failure(tm
                 "prompt_version": "test-prompt-v1",
             }
 
-    import app.domain.langchain_extractor as extractor_module
+    import app.extraction.llm as extractor_module
 
     monkeypatch.setattr(extractor_module, "LangChainSemanticExtractor", FakeExtractor)
     engine = create_sqlite_engine(configured_settings.database_url)
@@ -208,7 +203,7 @@ def test_live_ocr_evaluation_scores_anchor_evidence_without_a_model(tmp_path, cl
             )
         ],
     )
-    monkeypatch.setattr("app.application.evaluations.request_ocr", lambda *_args, **_kwargs: ocr_result)
+    monkeypatch.setattr("app.evaluations.request_ocr", lambda *_args, **_kwargs: ocr_result)
     engine = create_sqlite_engine(configured_settings.database_url)
     session_factory = sessionmaker(engine)
     settings = configured_settings.model_copy(
@@ -269,7 +264,7 @@ def test_live_email_evaluation_persists_final_correction_fidelity(tmp_path, clie
                 line_items=[{"pricing": {"quoted_price": {"amount": "0.134"}}}],
             ), {"duration_ms": 1, "model": "test-model"}
 
-    monkeypatch.setattr("app.domain.langchain_extractor.LangChainSemanticExtractor", FakeExtractor)
+    monkeypatch.setattr("app.extraction.llm.LangChainSemanticExtractor", FakeExtractor)
     engine = create_sqlite_engine(configured_settings.database_url)
     session_factory = sessionmaker(engine)
     settings = configured_settings.model_copy(update={"gemini_api_key": "test-key"})

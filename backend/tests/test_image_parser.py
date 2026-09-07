@@ -4,11 +4,11 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
-from app.core.settings import Settings
-from app.domain.image_parser import ImageParseError, parse_image
-from app.infrastructure.database import create_sqlite_engine
-from app.infrastructure.models import OcrJobRecord, ProcessingEventRecord
-from app.workers.ocr import consume_ocr, run_ocr_job
+from app.config import Config
+from app.database import create_sqlite_engine
+from app.extraction.image_parser import ImageParseError, parse_image
+from app.extraction.image_processing import consume_ocr
+from app.models import OcrJobRecord, ProcessingEventRecord
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 OCR_FIXTURES = PROJECT_ROOT / "backend/evals/fixtures/ocr"
@@ -33,10 +33,10 @@ def test_image_parser_rejects_non_image_content():
 def test_image_upload_creates_an_independent_ocr_job(client):
     source = (OCR_FIXTURES / "scan_02_lowres_fax_andina_p1.png").read_bytes()
 
-    response = client.post("/api/v1/documents", files={"file": ("fax.png", source, "image/png")})
+    response = client.post("/api/v1/documents", files={"files": ("fax.png", source, "image/png")})
 
     assert response.status_code == 201
-    document = response.json()
+    document = response.json()[0]
     assert document["status"] == "needs_ocr"
     assert document["ocr"] == {"id": document["ocr"]["id"], "status": "queued", "selected_pages": [1]}
     assert document["artifacts"][0]["kind"] == "original_image"
@@ -45,7 +45,9 @@ def test_image_upload_creates_an_independent_ocr_job(client):
 def test_ocr_worker_exposes_missing_service_configuration_without_faking_a_result(client_settings):
     client, base_settings = client_settings
     source = (OCR_FIXTURES / "scan_02_lowres_fax_andina_p1.png").read_bytes()
-    document = client.post("/api/v1/documents", files={"file": ("fax.png", source, "image/png")}).json()
+    document = client.post(
+        "/api/v1/documents", files={"files": ("fax.png", source, "image/png")}
+    ).json()[0]
     engine = create_sqlite_engine(base_settings.database_url)
     factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
 
@@ -53,9 +55,8 @@ def test_ocr_worker_exposes_missing_service_configuration_without_faking_a_resul
         consume_ocr(
             session,
             document["ocr"]["id"],
-            Settings(
+            Config(
                 database_url=base_settings.database_url,
-                task_database_path=base_settings.task_database_path,
                 upload_dir=base_settings.upload_dir,
                 ocr_service_url=None,
                 ocr_service_token=None,
@@ -69,22 +70,3 @@ def test_ocr_worker_exposes_missing_service_configuration_without_faking_a_resul
         )
         assert job is not None and job.status == "awaiting_service_configuration"
         assert [event.stage for event in events] == ["ocr_queued", "ocr_started", "ocr_awaiting_service_configuration"]
-
-
-def test_ocr_task_runner_uses_the_upload_directory_supplied_by_the_api(tmp_path, monkeypatch):
-    observed: dict[str, Path] = {}
-
-    def capture_settings(_session, _job_id, settings):
-        observed["upload_dir"] = settings.upload_dir
-
-    monkeypatch.setattr("app.workers.ocr.consume_ocr", capture_settings)
-    upload_dir = tmp_path / "uploads"
-
-    run_ocr_job(
-        "job-1",
-        f"sqlite:///{tmp_path / 'app.db'}",
-        str(tmp_path / "tasks.db"),
-        str(upload_dir),
-    )
-
-    assert observed["upload_dir"] == upload_dir
