@@ -1500,7 +1500,7 @@ The system keeps three separate concepts:
 ```text
 field confidence       = trustworthiness of an extracted source fact
 commercial availability = whether the information required to review an offer is available
-review decision         = system routing and human outcome
+review status           = the human decision on the extracted source
 ```
 
 ## 45.1 Field-level confidence
@@ -1551,17 +1551,17 @@ Medium  the value is probably correct, but source/association has meaningful unc
 Low     substantial risk that the value does not match the source because of weak evidence, ambiguity, conflict, or poor parsing
 ```
 
-The stored reason exposes all three inputs, for example:
-
-```text
-source evidence: usable; association: strong; independent validation: passed
-```
+The stored reason retains all three inputs for audit and evaluation. The reviewer UI translates them into concise
+plain-language evidence summaries, rather than repeating raw internal factor strings for every field.
 
 ## 45.6 Missing information and commercial availability
 
 A missing value is **not** a confidence category. If a supplier never states an MOQ, route, manufacturer, shelf life, price, quantity, or regulatory status, that does not reduce the confidence of the values that were recovered. There is no universal “critical fields” list or key-field completeness gate.
 
 An absent value routes review only when the extraction pipeline has positive evidence of a failure, conflict, unsafe derivation, or source ambiguity. Mere absence is preserved as `null` and is not converted into a confidence or review issue.
+
+An Incoterm and its named place/country are commercial facts and must be extracted independently. A delivery location
+does not by itself establish a product's country of origin; origin requires an explicit manufacture/origin statement.
 
 ## 45.7 Confidence is not schema-mapping correctness
 
@@ -1593,18 +1593,19 @@ Rows display the lowest confidence among their extracted fields only. The adjace
 
 # 46. Review status and human-in-the-loop decisions
 
-System routing and human decisions are distinct, persisted states. Neither is inferred from a successful extraction.
+Every successful extraction requires human review before it can be approved. Confidence directs attention to
+uncertain fields; it never permits approval to be skipped. There is no auto-approval state.
 
 ```text
-SYSTEM DECISION: auto_accepted | needs_review
-HUMAN OUTCOME:  unreviewed | approved | corrected | rejected
+processing → pending_review → approved | rejected
 ```
 
-`auto_accepted` means the system judged the result safe enough to bypass the default manual queue; it does not mean a human approved it. It requires the extracted facts to meet the configured confidence policy, passing applicable deterministic checks, no material parser/OCR uncertainty, and no conflicts.
+`pending_review`, `approved`, and `rejected` are the persisted source lifecycle statuses. A correction is an
+audited action, not a separate terminal status: it preserves each before/after value, sets `has_corrections = true`,
+and keeps the source `pending_review` until a reviewer explicitly approves or rejects it.
 
-`needs_review` is the exception route. It is selected for Low-confidence extracted facts, explicit extraction failures, validation errors, conflicts, ambiguity, poor OCR/parser quality, or unsafe derivation. The default review queue shows these exceptions, while auto-accepted records remain available in the broader source list.
-
-`approved` means a reviewer inspected and accepted the record. An approval note is optional. `corrected` means a reviewer changed one or more values; the audit trail stores before/after values and an optional note. `rejected` requires a structured reason and permits an optional note.
+`approved` means a person inspected and accepted the extracted source. An approval note is optional. `rejected`
+requires a structured reason and permits an optional note.
 
 Allowed rejection reasons are:
 
@@ -1621,7 +1622,10 @@ other
 
 # 47. Review experience
 
-The review workspace is exception-based. It tells a reviewer what was extracted, why it was routed to review, each field's source/confidence, and whether a value is supplier-provided or derived. It prioritizes suspicious fields and does not ask reviewers to inspect every auto-accepted record.
+The review workspace includes every successfully extracted source. It makes full review fast: reviewers can see
+what was extracted, which fields deserve attention, each field's source/confidence, and whether a value is
+supplier-provided or derived. Low-confidence fields and review issues are visually prominent, but no source is
+silently approved.
 
 Example:
 
@@ -1631,7 +1635,8 @@ Example:
 | Sanotri-TLD | — | €0.035 | tablet | High | derived from pack price |
 | Scan item | 50,000 | ? | pack | Low | glare obscures price |
 
-Approval is one click. Corrections preserve before/after values. Rejection requires a structured reason, not mandatory free text.
+Approval is one click. A reviewer may correct values, then explicitly approve the corrected source; corrections
+preserve before/after values. Rejection requires a structured reason, not mandatory free text.
 
 ---
 
