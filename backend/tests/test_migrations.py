@@ -36,6 +36,9 @@ def test_startup_applies_checked_in_alembic_migration(tmp_path: Path):
         source_fact_schema = database.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'extracted_source_facts'"
         ).fetchone()
+        image_attempt_columns = {
+            row[1] for row in database.execute("PRAGMA table_info(image_extraction_attempts)").fetchall()
+        }
         batches_schema = database.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'batches'"
         ).fetchone()
@@ -47,8 +50,10 @@ def test_startup_applies_checked_in_alembic_migration(tmp_path: Path):
             row[1] for row in database.execute("PRAGMA table_info(quotation_field_values)").fetchall()
         }
         review_columns = {row[1] for row in database.execute("PRAGMA table_info(reviews)").fetchall()}
-    assert revision == ("20260907_20",)
+    assert revision == ("20260907_23",)
     assert source_fact_schema is not None
+    assert {"approach", "result_json", "failure_reason"}.issubset(image_attempt_columns)
+    assert "selected" not in image_attempt_columns
     assert "normalization_status" in source_fact_schema[0]
     assert batches_schema is None
     assert "batch_id" not in document_columns
@@ -88,7 +93,7 @@ def test_startup_upgrades_a_pre_alembic_slice_one_database(tmp_path: Path):
         source_facts = database.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'extracted_source_facts'"
         ).fetchone()
-    assert revision == ("20260907_20",)
+    assert revision == ("20260907_23",)
     assert source_facts is not None
 
 
@@ -114,8 +119,66 @@ def test_startup_repairs_an_interrupted_review_learning_migration(tmp_path: Path
         review_learning = database.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'review_learning'"
         ).fetchone()
-    assert revision == ("20260907_20",)
+    assert revision == ("20260907_23",)
     assert review_learning is None
+
+
+def test_empty_extraction_backfill_fails_only_unreviewed_sources(tmp_path: Path):
+    database_path = tmp_path / "empty-extractions.db"
+    command.upgrade(alembic_config(database_path), "20260907_20")
+    empty_payload = json.dumps({"line_items": []})
+    with sqlite3.connect(database_path) as database:
+        for document_id, status, review_status in (
+            ("pending-empty", "pending_review", "pending_review"),
+            ("approved-empty", "approved", "approved"),
+        ):
+            database.execute(
+                "INSERT INTO documents "
+                "(id, original_filename, stored_filename, media_type, content_sha256, status) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    document_id,
+                    f"{document_id}.json",
+                    f"{document_id}.json",
+                    "application/json",
+                    f"hash-{document_id}",
+                    status,
+                ),
+            )
+            database.execute(
+                "INSERT INTO quotations "
+                "(id, document_id, payload_json, schema_version, review_status, revision, system_decision) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    f"quotation-{document_id}",
+                    document_id,
+                    empty_payload,
+                    "1.0",
+                    review_status,
+                    1,
+                    review_status,
+                ),
+            )
+        database.commit()
+
+    command.upgrade(alembic_config(database_path), "head")
+
+    with sqlite3.connect(database_path) as database:
+        pending = database.execute(
+            "SELECT d.status, d.failure_reason, q.review_status "
+            "FROM documents d JOIN quotations q ON q.document_id = d.id WHERE d.id = 'pending-empty'"
+        ).fetchone()
+        approved = database.execute(
+            "SELECT d.status, d.failure_reason, q.review_status "
+            "FROM documents d JOIN quotations q ON q.document_id = d.id WHERE d.id = 'approved-empty'"
+        ).fetchone()
+
+    assert pending == (
+        "failed",
+        "No products could be extracted from this source.",
+        "not_reviewable",
+    )
+    assert approved == ("approved", None, "approved")
 
 
 def test_normalized_line_item_migration_backfills_existing_quotation(tmp_path: Path):
