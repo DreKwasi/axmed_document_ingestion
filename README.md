@@ -53,11 +53,15 @@ If you prefer running services in separate terminal windows:
 
 - **Terminal 1 — Backend Web API**:
   ```bash
-  PYTHONPATH=backend uv run --project backend uvicorn app.api.application:app --host 127.0.0.1 --port 8000 --reload
+  cd backend
+  set -a; source .env; set +a
+  uv run uvicorn main:app --host 127.0.0.1 --port 8000 --reload
   ```
 - **Terminal 2 — Backend Huey Worker**:
   ```bash
-  PYTHONPATH=backend uv run --project backend huey_consumer.py app.workers.tasks.huey
+  cd backend
+  set -a; source .env; set +a
+  uv run huey_consumer.py app.workers.tasks.huey
   ```
 - **Terminal 3 — Frontend Dev Server**:
   ```bash

@@ -69,7 +69,8 @@ PYTHONPATH=backend uv run --project backend python -c 'from pathlib import Path;
 Runs the API server on `http://127.0.0.1:8000` with hot-reload:
 
 ```bash
-PYTHONPATH=backend uv run --project backend uvicorn app.api.application:app --host 127.0.0.1 --port 8000 --reload
+set -a; source .env; set +a
+uv run uvicorn main:app --host 127.0.0.1 --port 8000 --reload
 ```
 - **OpenAPI Interactive Documentation**: Visit [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs) (Swagger UI) or `/redoc`.
 
@@ -77,7 +78,8 @@ PYTHONPATH=backend uv run --project backend uvicorn app.api.application:app --ho
 Listens on `data/tasks.db` to execute async jobs (PII redaction, LangChain reasoning, Modal OCR escalation):
 
 ```bash
-PYTHONPATH=backend uv run --project backend huey_consumer.py app.workers.tasks.huey
+set -a; source .env; set +a
+uv run huey_consumer.py app.workers.tasks.huey
 ```
 
 ---
