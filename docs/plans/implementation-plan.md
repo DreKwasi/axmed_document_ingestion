@@ -50,7 +50,8 @@ Keep orchestration independent of vendors through small ports:
 
 ```text
 DocumentPipeline
-├── DocumentParser       JSON | EML | LiteParse
+├── StructuredIngest     JSON schema recognition + trusted mapping memory
+├── UnstructuredParsers  MIME | LiteParse | PaddleOCR
 ├── ParseQualityPolicy   native text/table quality and OCR decision
 ├── OcrClient            Modal PaddleOCR | fixture fake
 ├── PiiRedactor          Presidio
@@ -176,7 +177,7 @@ Acceptance checks:
 **Blocked by:** Slices 2 and 3  
 **Covers:** US-01, US-03, US-06, US-07
 
-Parse MIME deterministically, deduplicate equivalent bodies, redact irrelevant PII with Presidio, and use structured semantic extraction for commercial meaning. The Novara correction must resolve Azimax to EUR 0.134/tablet while preserving 0.128 as superseded evidence.
+Parse MIME deterministically, deduplicate equivalent bodies, remove contact PII with deterministic parsing and redaction, and use structured semantic extraction for commercial meaning. Presidio remains deferred. The Novara correction must resolve Azimax to EUR 0.134/tablet while preserving 0.128 as superseded evidence.
 
 Acceptance checks:
 
@@ -191,7 +192,7 @@ Acceptance checks:
 **Blocked by:** Slices 2 and 3  
 **Covers:** US-01, US-03, US-06, US-07
 
-Use LiteParse through the parser port for Farmaceutica Andina and Mekong. The gate passes if, within the slice timebox, it recovers required text, tables, page references, and usable reading order for both PDFs. If it fails, document the evidence and substitute a maintained parser behind the same internal contract.
+Use LiteParse as the sole native-PDF parser for Farmaceutica Andina and Mekong. The gate passes if, within the slice timebox, it recovers the source representation, page boundaries, table-like structure, and usable reading order for both PDFs. The application must retain LiteParse output and must not hand-build a universal table parser or treat Markdown as the source of truth.
 
 Acceptance checks:
 

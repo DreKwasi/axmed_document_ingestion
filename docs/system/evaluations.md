@@ -16,7 +16,11 @@ The Sanova case checks a full cold-to-warm contract: an unfamiliar schema receiv
 
 The Farmaceutica Andina and Mekong PDF cases reference source fixtures and source-verified expected canonical JSON under `backend/evals/`. With Gemini configured, an evaluation run executes the live native-PDF pipeline (parse, redact, structured extraction, deterministic commercial rules) and persists field-level diffs in SQLite. Without credentials, those cases are explicitly marked `not_run`; they never count as passing recorded tests.
 
-The Novara EML case uses the same model-evaluation path for email parsing, deterministic PII minimization, structured extraction, correction precedence, and commercial rules. The email fixture is retained as source evidence, but the model context excludes greeting/signature contact material before evaluation.
+The Novara EML case uses the same model-evaluation path for email parsing, deterministic PII minimization, structured extraction, correction precedence, and commercial rules. The email fixture is retained as source evidence, but the model context excludes greeting/signature contact material before evaluation while retaining a legal supplier entity where one is explicitly identified. A source price UOM reconciles model output only when both item and amount match.
+
+## UOM and packaging semantics
+
+`quoted_price.uom` is the source's stated commercial basis, not a normalized inventory unit. A `box`, `pack`, `kit`, `vial`, or supplier-specific term remains exactly that value. Packaging fields independently describe the container and its contents (`primary_pack`, `units_per_pack`, and `unit_label`). Deterministic code may preserve an explicit, item-and-amount-matched source UOM and calculate prices only from established facts; it never invents a fallback UOM. The structured reasoning layer maps unfamiliar price fields and packaging relationships, leaving uncertainty null for review when the source is ambiguous.
 
 ## Growth plan
 

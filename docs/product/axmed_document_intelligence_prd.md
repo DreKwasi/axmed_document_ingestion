@@ -2,9 +2,9 @@
 
 ## Product Requirements Document
 
-**Project:** Supplier Document Intelligence  
-**Context:** Axmed AI Engineer Take-Home Assignment  
-**Primary stack:** Python / FastAPI + Vue 3  
+**Project:** Supplier Document Intelligence 
+**Context:** Axmed AI Engineer Take-Home Assignment 
+**Primary stack:** Python / FastAPI + Vue 3 
 **Document status:** Working implementation specification
 
 ---
@@ -61,8 +61,8 @@ If a JSON field already says:
 
 ```json
 {
-  "price_per_pack": 3.15,
-  "units_per_pack": 90
+ "price_per_pack": 3.15,
+ "units_per_pack": 90
 }
 ```
 
@@ -143,107 +143,53 @@ The canonical model therefore needs to represent both the medicine and the comme
 # 5. High-level architecture
 
 ```text
-┌──────────────────────────────┐
-│            Vue 3             │
-│                              │
-│ Upload                       │
-│ Processing state             │
-│ Review                       │
-│ Source/evidence inspection   │
-└──────────────┬───────────────┘
-               │
-          REST + SSE
-               │
-               ▼
-┌──────────────────────────────┐
-│           FastAPI            │
-│                              │
-│ Ingestion                    │
-│ Fast deterministic parsing   │
-│ Workflow coordination        │
-│ Human-review operations      │
-└──────────────┬───────────────┘
-               │
-               ▼
-┌──────────────────────────────┐
-│    Synchronous Fast Path     │
-│                              │
-│ File validation              │
-│ Type detection               │
-│ JSON parsing                 │
-│ Email parsing                │
-│ LiteParse PDF parsing        │
-│ Parse-quality assessment     │
-│ OCR requirement detection    │
-│ Parsed artifact persistence  │
-└──────────────┬───────────────┘
-               │
-               │ enqueue
-               ▼
-┌──────────────────────────────┐
-│             Huey             │
-│                              │
-│ Durable async jobs           │
-│ Worker execution             │
-│ Retry handling               │
-└──────────────┬───────────────┘
-               ▼
-┌──────────────────────────────┐
-│     Async Intelligence       │
-│                              │
-│ OCR escalation               │
-│ PII detection/redaction      │
-│ Schema recognition           │
-│ Semantic extraction          │
-│ Reconciliation              │
-│ Normalization                │
-│ Validation                   │
-│ Confidence scoring           │
-│ Provenance capture           │
-└──────┬────────────┬──────────┘
-       │            │
-       ▼            ▼
-┌─────────────┐ ┌──────────────────┐
-│ PaddleOCR   │ │ Microsoft       │
-│ on Modal    │ │ Presidio        │
-│             │ │                  │
-│ Images      │ │ PII detection    │
-│ Bad pages   │ │ Redaction        │
-└──────┬──────┘ └────────┬─────────┘
-       │                 │
-       └────────┬────────┘
-                ▼
-       ┌────────────────┐
-       │   LangChain    │
-       │                │
-       │ Lightweight LLM│
-       │ Structured      │
-       │ extraction      │
-       └────────┬───────┘
-                ▼
-┌──────────────────────────────┐
-│            SQLite            │
-│                              │
-│ Documents                    │
-│ Parsed representations       │
-│ Schema mapping memory        │
-│ Quotation data               │
-│ Derived values               │
-│ Confidence                   │
-│ Processing events            │
-│ Review state                 │
-│ Provenance                   │
-└──────────────┬───────────────┘
-               ▼
-┌──────────────────────────────┐
-│        Human Review          │
-│                              │
-│ Review                       │
-│ Correct                      │
-│ Approve                      │
-│ Reject                       │
-└──────────────────────────────┘
+                         INPUT
+                           │
+              ┌────────────┴────────────┐
+              │                         │
+              ▼                         ▼
+        STRUCTURED                 UNSTRUCTURED
+           JSON                PDF / EMAIL / IMAGE
+              │                         │
+              ▼                         ▼
+     Schema recognition         Format-specific parsing
+              │                         │
+              │                  ┌──────┼─────────┐
+              │                  │      │         │
+              │               PDF     Email     Image
+              │                  │      │         │
+              │             LiteParse  MIME    PaddleOCR
+              │                  │      │         │
+              │                  └──────┴─────────┘
+              │                         │
+              │                         ▼
+              │              Parsed document representation
+              │                         │
+              │                         ▼
+              │                   LLM extraction
+              │                         │
+              └──────────────┬──────────┘
+                             ▼
+                    CanonicalQuotation
+                             │
+                             ▼
+                 Deterministic validation
+                     + derivation
+                             │
+                             ▼
+                 Confidence + provenance
+                             │
+                             ▼
+                       Human review
 ```
+
+The core split is based on whether the source already exposes reliable machine-readable structure.
+
+Structured sources are mapped into the canonical quotation schema with deterministic schema recognition wherever possible.
+
+Unstructured sources are first converted into the best available document representation, then interpreted semantically by the LLM.
+
+Both paths converge at the same canonical quotation model and deterministic commercial-rules layer.
 
 ---
 
@@ -316,47 +262,62 @@ That means one bad scan doesn't prevent unrelated clean documents from completin
 
 # 7. Sync vs async processing
 
-We don't want to send everything into the worker simply because workers exist.
+The system should not push all document work into background workers by default.
 
-## Synchronous path
+Fast, deterministic work stays in the normal FastAPI request flow. Slow, remote, model-dependent, or retryable work is handed to Huey.
 
-The normal server process handles operations expected to complete quickly and predictably:
+## Synchronous fast path
+
+Typical synchronous work includes:
 
 ```text
 Upload
  ↓
-Validate
+File validation
  ↓
-Detect document type
+Document type detection
  ↓
-Basic deterministic parsing
- ↓
-Assess parse quality
+JSON parsing / MIME parsing / LiteParse
  ↓
 Persist parsed representation
  ↓
-Queue heavy processing
+Queue semantic extraction if required
  ↓
 Respond
 ```
 
 Examples:
 
-### JSON
+- JSON parsing
+- MIME parsing for email
+- LiteParse for digitally generated PDFs
+- basic image validation
+- schema fingerprint generation
+- known schema lookup
 
-Parse using Python's JSON tooling.
+## Async path
 
-### Email
+Huey handles work where runtime is less predictable:
 
-Parse MIME structure, headers and body deterministically.
+```text
+Parsed source
+      ↓
+OCR escalation if required
+      ↓
+PII detection / redaction
+      ↓
+LLM semantic extraction
+      ↓
+Normalization
+      ↓
+Validation + derivation
+      ↓
+Confidence + provenance
+      ↓
+Persist results
+```
 
-### PDF
-
-Use LiteParse to recover native document structure.
-
-### Images
-
-Perform lightweight file validation and metadata inspection.
+The useful unit of background work is generally one document, not an entire uploaded folder.
 
 ---
 
@@ -366,23 +327,23 @@ Huey handles operations with unpredictable runtime or external dependencies.
 
 ```text
 Parsed document
-      ↓
+ ↓
 OCR if necessary
-      ↓
+ ↓
 PII scan/redaction
-      ↓
+ ↓
 Schema mapping
-      ↓
+ ↓
 LLM semantic extraction
-      ↓
+ ↓
 Reconciliation
-      ↓
+ ↓
 Normalization
-      ↓
+ ↓
 Validation
-      ↓
+ ↓
 Confidence/provenance
-      ↓
+ ↓
 Persist results
 ```
 
@@ -420,19 +381,64 @@ If the browser disconnects, document processing continues normally.
 
 # 10. PDF processing
 
-## Primary parser: LiteParse
+## Primary parser: LiteParse / LlamaIndex document parsing
 
-LiteParse handles digitally generated PDFs.
+For digitally generated PDFs, LiteParse is the primary document-recovery layer.
 
-Its responsibilities include:
+Its job is not to understand the commercial meaning of the quotation. Its job is to recover as much of the document's structure and content as possible, including:
 
-- text extraction
-- structural extraction
-- table recovery
+- page text
+- table-like structure
+- rows and cells where available
 - reading order
-- identifying pages likely to require OCR
+- page boundaries
+- layout information
+- OCR-needed signals where available
 
-The objective is to avoid OCR when usable document information already exists.
+A successful parser output does not need to match the canonical quotation schema.
+
+For example, a supplier presentation may remain as:
+
+```text
+500 mg tablet
+PVC/Alu blister, 20 tablets per pack
+```
+
+The LLM can then separate this into strength, dosage form, packaging, and units-per-pack during semantic extraction.
+
+The parser should preserve relationships and source context rather than attempting to understand procurement semantics.
+
+### Parser output as source representation
+
+The original LiteParse/LlamaIndex representation should be retained.
+
+A Markdown or cleaned text representation may also be generated for LLM prompting and debugging, but Markdown is not the source of truth.
+
+```text
+PDF
+ ↓
+LiteParse
+ ↓
+raw structured representation
+      +
+optional Markdown/text view
+ ↓
+LLM semantic extraction
+ ↓
+CanonicalQuotation
+```
+
+This avoids throwing away page boundaries, cell relationships, layout metadata, or source locations that may later be useful for provenance and review.
+
+### No generic table-reconstruction rules
+
+The application should not attempt to hand-build a universal table parser for arbitrary supplier PDFs.
+
+Supplier documents may contain merged cells, multi-line headers, mixed narrative and tabular content, nested product descriptions, footnotes, irregular row layouts, or visually positioned text rather than true PDF tables.
+
+The document parser should recover the best representation it can. The LLM then interprets that representation into the canonical schema.
+
+Deterministic logic returns after semantic extraction to validate commercial relationships.
 
 ---
 
@@ -440,30 +446,106 @@ The objective is to avoid OCR when usable document information already exists.
 
 **PaddleOCR deployed on Modal**
 
-OCR is an escalation path.
+OCR is a fallback for image-based or degraded content.
 
 ```text
 PDF
  ↓
 LiteParse
  ↓
-quality assessment
- ├── good → continue
+usable text / table representation?
+ ├── yes → LLM extraction
  │
- └── poor page(s)
+ └── no / scanned / garbled
           ↓
        PaddleOCR
+          ↓
+       OCR text + layout
+          ↓
+       LLM extraction
 ```
 
-Images go directly toward the OCR path when necessary.
+Images generally enter through the PaddleOCR path directly.
 
-Only relevant pages should be escalated when a mixed PDF contains both clean and scanned content.
+OCR should preserve layout information such as bounding boxes when available. The goal is to retain relationships between text regions, rows, columns, and labels rather than flattening everything into one string.
 
-Modal is appropriate because OCR inference can scale separately from FastAPI and the implementation already has familiarity with deploying PaddleOCR there.
+The original image remains the ground truth source for review.
 
 ---
 
-# 12. PII handling
+# 12. Unstructured document extraction
+
+PDFs, images, and emails are treated differently from JSON because their source structure is not guaranteed to align with the canonical schema.
+
+The general flow is:
+
+```text
+Unstructured source
+      ↓
+Best available parser
+      ↓
+Parsed document representation
+      ↓
+LLM semantic extraction
+      ↓
+CanonicalQuotation
+      ↓
+Deterministic commercial rules
+```
+
+## PDF
+
+```text
+PDF
+ ↓
+LiteParse
+ ↓
+parsed text / tables / layout
+ ↓
+LLM maps meaning into canonical schema
+```
+
+If LiteParse cannot recover useful content, the affected page or document is escalated to PaddleOCR.
+
+## Email
+
+Email first goes through deterministic MIME parsing.
+
+```text
+EML
+ ↓
+MIME parser
+ ↓
+subject / sender / date / ordered body
+ ↓
+HTML table structure if present
+ ↓
+LLM semantic extraction
+```
+
+If an HTML table exists, its DOM structure should be preserved.
+
+If the message is plain text, the ordered body is passed to the LLM as natural-language evidence.
+
+The LLM is responsible for semantic cases such as corrections, superseded prices, and commercial terms expressed in prose.
+
+## Image
+
+```text
+Image
+ ↓
+PaddleOCR
+ ↓
+text + layout / bounding boxes
+ ↓
+LLM extraction
+```
+
+The system does not require OCR to reconstruct a perfect table before extraction. The LLM receives the recovered text and layout representation and maps it into the canonical quotation model.
+
+---
+
+# 13. PII handling
 
 PII detection occurs before document content is sent to the LLM.
 
@@ -475,13 +557,13 @@ with a lightweight spaCy English pipeline.
 
 ```text
 Parsed / OCR'd content
-        ↓
+ ↓
 Presidio
-        ↓
+ ↓
 Detect PII
-        ↓
+ ↓
 Redact unnecessary information
-        ↓
+ ↓
 LLM
 ```
 
@@ -503,7 +585,7 @@ Only information necessary for extraction should be sent to the model.
 
 ---
 
-# 13. Logging and sensitive information
+# 14. Logging and sensitive information
 
 Raw document contents shouldn't be placed into normal application logs.
 
@@ -532,7 +614,7 @@ Banking details in supplier documents are a good example of information the quot
 
 ---
 
-# 14. Canonical quotation model
+# 15. Canonical quotation model
 
 The schema is divided into:
 
@@ -550,21 +632,21 @@ The schema is divided into:
 
 ---
 
-# 15. Quotation-level schema
+# 16. Quotation-level schema
 
 Conceptually:
 
 ```json
 {
-  "quotation_reference": null,
-  "rfq_reference": null,
-  "document_type": null,
-  "issue_date": null,
-  "valid_until": null,
-  "supplier": {},
-  "commercial_terms": {},
-  "line_items": [],
-  "source": {}
+ "quotation_reference": null,
+ "rfq_reference": null,
+ "document_type": null,
+ "issue_date": null,
+ "valid_until": null,
+ "supplier": {},
+ "commercial_terms": {},
+ "line_items": [],
+ "source": {}
 }
 ```
 
@@ -582,15 +664,15 @@ The distinction matters because a price catalogue doesn't necessarily represent 
 
 ---
 
-# 16. Supplier schema
+# 17. Supplier schema
 
 ```json
 {
-  "name": null,
-  "supplier_code": null,
-  "country": null,
-  "manufacturer": null,
-  "manufacturing_site": null
+ "name": null,
+ "supplier_code": null,
+ "country": null,
+ "manufacturer": null,
+ "manufacturing_site": null
 }
 ```
 
@@ -598,18 +680,18 @@ A product's manufacturer may differ from the quoting supplier, so these concepts
 
 ---
 
-# 17. Commercial terms
+# 18. Commercial terms
 
 ```json
 {
-  "currency": null,
-  "incoterm": null,
-  "incoterm_named_place": null,
-  "payment_terms": null,
-  "freight_included": null,
-  "insurance_included": null,
-  "tax_included": null,
-  "price_basis": null
+ "currency": null,
+ "incoterm": null,
+ "incoterm_named_place": null,
+ "payment_terms": null,
+ "freight_included": null,
+ "insurance_included": null,
+ "tax_included": null,
+ "price_basis": null
 }
 ```
 
@@ -628,25 +710,23 @@ Two apparently identical medicine prices aren't necessarily commercially compara
 
 ---
 
-# 18. Product identity
+# 19. Product identity
 
 ```json
 {
-  "trade_name": null,
-  "inn": [],
-  "strength": [],
-  "dosage_form": null,
-  "route": null,
-  "manufacturer": null,
-  "country_of_origin": null
+ "trade_name": null,
+ "inn": [],
+ "strength": [],
+ "dosage_form": null,
+ "route": null,
+ "manufacturer": null,
+ "country_of_origin": null
 }
 ```
 
-`dosage_form` is the core comparable form (for example, `tablet`, `syrup`, or `suspension`). Preserve qualifying details such as `film-coated`, `chewable`, and `pressurised inhalation` in `packaging.presentation`.
-
 ---
 
-# 19. Structured strength
+# 20. Structured strength
 
 Strength should not be limited to a single string.
 
@@ -656,22 +736,22 @@ Example:
 
 ```json
 {
-  "strength": [
-    {
-      "ingredient": "Amoxicillin",
-      "value": 500,
-      "unit": "mg",
-      "per_value": null,
-      "per_unit": null
-    },
-    {
-      "ingredient": "Clavulanic acid",
-      "value": 125,
-      "unit": "mg",
-      "per_value": null,
-      "per_unit": null
-    }
-  ]
+ "strength": [
+ {
+ "ingredient": "Amoxicillin",
+ "value": 500,
+ "unit": "mg",
+ "per_value": null,
+ "per_unit": null
+ },
+ {
+ "ingredient": "Clavulanic acid",
+ "value": 125,
+ "unit": "mg",
+ "per_value": null,
+ "per_unit": null
+ }
+ ]
 }
 ```
 
@@ -679,26 +759,25 @@ Concentration:
 
 ```json
 {
-  "ingredient": "Oxytocin",
-  "value": 10,
-  "unit": "IU",
-  "per_value": 1,
-  "per_unit": "mL"
+ "ingredient": "Oxytocin",
+ "value": 10,
+ "unit": "IU",
+ "per_value": 1,
+ "per_unit": "mL"
 }
 ```
 
 ---
 
-# 20. Packaging
+# 21. Packaging
 
 ```json
 {
-  "description": null,
-  "presentation": null,
-  "primary_pack": null,
-  "units_per_pack": null,
-  "unit_label": null,
-  "packs_per_shipper": null
+ "description": null,
+ "primary_pack": null,
+ "units_per_pack": null,
+ "unit_label": null,
+ "packs_per_shipper": null
 }
 ```
 
@@ -714,16 +793,16 @@ may yield:
 
 ```json
 {
-  "description": "Alu-Alu blister, 2 x 7 tablets per carton",
-  "primary_pack": "Alu-Alu blister",
-  "units_per_pack": 14,
-  "unit_label": "tablet"
+ "description": "Alu-Alu blister, 2 x 7 tablets per carton",
+ "primary_pack": "Alu-Alu blister",
+ "units_per_pack": 14,
+ "unit_label": "tablet"
 }
 ```
 
 ---
 
-# 21. Quantity
+# 22. Quantity
 
 Quantity is explicitly part of the canonical schema.
 
@@ -731,11 +810,11 @@ But it must distinguish different quantity concepts.
 
 ```json
 {
-  "quoted_quantity": null,
-  "quoted_quantity_uom": null,
-  "quantity_basis": null,
-  "minimum_order_quantity": null,
-  "minimum_order_quantity_uom": null
+ "quoted_quantity": null,
+ "quoted_quantity_uom": null,
+ "quantity_basis": null,
+ "minimum_order_quantity": null,
+ "minimum_order_quantity_uom": null
 }
 ```
 
@@ -762,29 +841,29 @@ indicative RFQ quantity
 
 ---
 
-# 22. Pricing
+# 23. Pricing
 
 Pricing is deliberately split between original and derived values.
 
 ```json
 {
-  "currency": null,
-  "quoted_price": {
-    "amount": null,
-    "uom": null
-  },
-  "pack_price": null,
-  "discount": null,
-  "extended_price": null,
-  "price_tiers": [],
-  "adjustments": [],
-  "normalized_price": {}
+ "currency": null,
+ "quoted_price": {
+ "amount": null,
+ "uom": null
+ },
+ "pack_price": null,
+ "discount": null,
+ "extended_price": null,
+ "price_tiers": [],
+ "adjustments": [],
+ "normalized_price": {}
 }
 ```
 
 ---
 
-# 23. Quoted price
+# 24. Quoted price
 
 This records what the supplier actually stated.
 
@@ -792,8 +871,8 @@ Example:
 
 ```json
 {
-  "amount": 3.15,
-  "uom": "pack"
+ "amount": 3.15,
+ "uom": "pack"
 }
 ```
 
@@ -801,18 +880,18 @@ The value should not be replaced merely because another unit is easier to compar
 
 ---
 
-# 24. Price normalization
+# 25. Price normalization
 
 Derived pricing lives separately:
 
 ```json
 {
-  "normalized_price": {
-    "amount": 0.035,
-    "uom": "tablet",
-    "calculation": "3.15 / 90",
-    "derived": true
-  }
+ "normalized_price": {
+ "amount": 0.035,
+ "uom": "tablet",
+ "calculation": "3.15 / 90",
+ "derived": true
+ }
 }
 ```
 
@@ -828,28 +907,28 @@ This is a system-derived value.
 
 ---
 
-# 25. Price tiers
+# 26. Price tiers
 
 Price tiers require their own data structure.
 
 ```json
 {
-  "price_tiers": [
-    {
-      "min_quantity": 100,
-      "max_quantity": 999,
-      "quantity_uom": "pack",
-      "price": 41.50,
-      "price_uom": "pack"
-    },
-    {
-      "min_quantity": 1000,
-      "max_quantity": 4999,
-      "quantity_uom": "pack",
-      "price": 37.90,
-      "price_uom": "pack"
-    }
-  ]
+ "price_tiers": [
+ {
+ "min_quantity": 100,
+ "max_quantity": 999,
+ "quantity_uom": "pack",
+ "price": 41.50,
+ "price_uom": "pack"
+ },
+ {
+ "min_quantity": 1000,
+ "max_quantity": 4999,
+ "quantity_uom": "pack",
+ "price": 37.90,
+ "price_uom": "pack"
+ }
+ ]
 }
 ```
 
@@ -857,7 +936,7 @@ Flattening quantity-dependent prices to a single unit price would lose commercia
 
 ---
 
-# 26. Discounts and adjustments
+# 27. Discounts and adjustments
 
 Don't reduce commercial adjustments to one discount column.
 
@@ -865,14 +944,14 @@ Use:
 
 ```json
 {
-  "adjustments": [
-    {
-      "type": "discount",
-      "value": 5,
-      "value_type": "percentage",
-      "condition": null
-    }
-  ]
+ "adjustments": [
+ {
+ "type": "discount",
+ "value": 5,
+ "value_type": "percentage",
+ "condition": null
+ }
+ ]
 }
 ```
 
@@ -890,15 +969,15 @@ other
 
 ---
 
-# 27. Supply information
+# 28. Supply information
 
 ```json
 {
-  "lead_time_days": null,
-  "shelf_life_months": null,
-  "minimum_remaining_shelf_life_percent": null,
-  "storage_conditions": null,
-  "cold_chain_required": null
+ "lead_time_days": null,
+ "shelf_life_months": null,
+ "minimum_remaining_shelf_life_percent": null,
+ "storage_conditions": null,
+ "cold_chain_required": null
 }
 ```
 
@@ -906,17 +985,17 @@ This becomes particularly relevant for temperature-sensitive products such as in
 
 ---
 
-# 28. Regulatory information
+# 29. Regulatory information
 
 ```json
 {
-  "who_prequalified": null,
-  "who_pq_reference": null,
-  "registered_markets": [],
-  "registration_reference": null,
-  "regulatory_status": null,
-  "hs_code": null,
-  "atc_code": null
+ "who_prequalified": null,
+ "who_pq_reference": null,
+ "registered_markets": [],
+ "registration_reference": null,
+ "regulatory_status": null,
+ "hs_code": null,
+ "atc_code": null
 }
 ```
 
@@ -926,7 +1005,7 @@ The architecture should allow extraction even if the first review table exposes 
 
 ---
 
-# 29. Source and provenance
+# 30. Source and provenance
 
 Each resulting line must be traceable back to its source.
 
@@ -934,8 +1013,8 @@ At minimum:
 
 ```json
 {
-  "document_name": null,
-  "document_format": null
+ "document_name": null,
+ "document_format": null
 }
 ```
 
@@ -945,18 +1024,18 @@ For a field:
 
 ```json
 {
-  "canonical_field": "pricing.quoted_price.amount",
-  "value": 0.134,
-  "source_document": "RE_RFQ-2026-0244_Novara_quotation.eml",
-  "source_location": "P.S. correction",
-  "extraction_method": "llm",
-  "confidence": 0.99
+ "canonical_field": "pricing.quoted_price.amount",
+ "value": 0.134,
+ "source_document": "RE_RFQ-2026-0244_Novara_quotation.eml",
+ "source_location": "P.S. correction",
+ "extraction_method": "llm",
+ "confidence": 0.99
 }
 ```
 
 ---
 
-# 30. Extracted vs derived values
+# 31. Extracted vs derived values
 
 This distinction should exist throughout the system.
 
@@ -987,7 +1066,7 @@ Human reviewers should be able to see this difference.
 
 ---
 
-# 31. JSON schema recognition
+# 32. JSON schema recognition
 
 JSON should use a progressive field-mapping system: simple and known cases should be handled cheaply and deterministically, while ambiguous cases should receive progressively stronger interpretation.
 
@@ -995,25 +1074,25 @@ Fuzzy similarity should not be treated as authoritative. It is only used to gene
 
 ```text
 Incoming JSON
-     ↓
+ ↓
 Flatten / discover paths
-     ↓
+ ↓
 Normalize key names
-     ↓
+ ↓
 Look up known supplier/schema mappings
-     ↓
+ ↓
 Apply deterministic canonical matches
-     ↓
+ ↓
 Apply small global alias set
-     ↓
+ ↓
 Generate fuzzy candidates for unresolved fields
-     ↓
+ ↓
 LLM resolves ambiguous mappings using field context
-     ↓
+ ↓
 Validate
-     ↓
+ ↓
 Human correction where required
-     ↓
+ ↓
 Persist successful mappings
 ```
 
@@ -1040,7 +1119,7 @@ This keeps the LLM focused on semantic ambiguity rather than repeatedly rediscov
 
 ---
 
-# 32. Key normalization
+# 33. Key normalization
 
 Supplier naming conventions vary:
 
@@ -1057,7 +1136,7 @@ This is cheap and deterministic.
 
 ---
 
-# 33. Small global alias layer
+# 34. Small global alias layer
 
 Maintain only a small set of obvious universal aliases.
 
@@ -1076,7 +1155,7 @@ A large alias registry quickly becomes brittle and supplier-specific. The goal i
 
 ---
 
-# 34. Fuzzy matching as candidate generation
+# 35. Fuzzy matching as candidate generation
 
 Fuzzy matching should not automatically accept a canonical mapping on first encounter.
 
@@ -1121,7 +1200,7 @@ unless later evaluation shows that a threshold is safe for a narrowly defined fi
 
 ---
 
-# 35. Supplier-specific schema memory
+# 36. Supplier-specific schema memory
 
 SQLite stores successful mappings.
 
@@ -1161,7 +1240,7 @@ offer.products[].commercials.price_per_pack
 
 ---
 
-# 36. Schema fingerprinting
+# 37. Schema fingerprinting
 
 Not every supplier provides an explicit schema version.
 
@@ -1187,7 +1266,7 @@ If the supplier silently changes its ERP export structure, the fingerprint chang
 
 ---
 
-# 37. Learning from uploads
+# 38. Learning from uploads
 
 The model itself isn't being retrained.
 
@@ -1195,19 +1274,19 @@ The application builds **mapping memory**.
 
 ```text
 First encounter
-      ↓
+ ↓
 unknown fields
-      ↓
+ ↓
 LLM-assisted mapping
-      ↓
+ ↓
 validation / review
-      ↓
+ ↓
 persist mapping
 
 Future encounter
-      ↓
+ ↓
 mapping found
-      ↓
+ ↓
 deterministic extraction
 ```
 
@@ -1217,7 +1296,7 @@ The LLM increasingly handles only novelty.
 
 ---
 
-# 38. Human corrections improve schema recognition
+# 39. Human corrections improve schema recognition
 
 Suppose the system maps:
 
@@ -1239,7 +1318,7 @@ Human review therefore improves future extraction.
 
 ---
 
-# 39. Mapping trust
+# 40. Mapping trust
 
 A mapping shouldn't automatically become permanently trusted because the LLM used it once.
 
@@ -1269,7 +1348,7 @@ Changed fingerprint
 
 ---
 
-# 40. Deterministic derived calculations
+# 41. Deterministic derived calculations
 
 Several calculations should never require an LLM.
 
@@ -1299,7 +1378,7 @@ These formulas can both derive missing values and validate extracted ones.
 
 ---
 
-# 41. Deterministic validation
+# 42. Deterministic validation
 
 Examples:
 
@@ -1355,7 +1434,7 @@ These rules give us confidence signals that don't depend on the model's self-ass
 
 ---
 
-# 42. LLM responsibilities
+# 43. LLM responsibilities
 
 Use LangChain as the model abstraction and structured-output layer.
 
@@ -1374,7 +1453,7 @@ The LLM should return structured Pydantic-compatible output.
 
 ---
 
-# 43. Email extraction
+# 44. Email extraction
 
 Email requires chronology and discourse interpretation.
 
@@ -1403,15 +1482,15 @@ Conceptually:
 
 ```json
 {
-  "value": 0.134,
-  "supersedes": 0.128,
-  "reason": "supplier correction later in message"
+ "value": 0.134,
+ "supersedes": 0.128,
+ "reason": "supplier correction later in message"
 }
 ```
 
 ---
 
-# 44. Confidence model
+# 45. Confidence model
 
 Do not rely solely on:
 
@@ -1449,7 +1528,7 @@ Field-level confidence is preferable to one document-wide score.
 
 ---
 
-# 45. Review status
+# 46. Review status
 
 Useful states might conceptually include:
 
@@ -1467,7 +1546,7 @@ Exact implementation naming can be decided during development.
 
 ---
 
-# 46. Review experience
+# 47. Review experience
 
 The user should be able to quickly answer:
 
@@ -1493,7 +1572,7 @@ The reviewer shouldn't have to manually inspect every field when 95% of the extr
 
 ---
 
-# 47. Evidence view
+# 48. Evidence view
 
 For structured text sources, display the relevant source snippet.
 
@@ -1517,7 +1596,7 @@ should be able to inspect the source location that caused the extraction.
 
 ---
 
-# 48. Processing events
+# 49. Processing events
 
 Maintain a lightweight processing-event history.
 
@@ -1542,7 +1621,7 @@ These events support both SSE updates and operational debugging.
 
 ---
 
-# 49. Failure handling
+# 50. Failure handling
 
 Failures should be explicit.
 
@@ -1577,7 +1656,7 @@ Store null and flag.
 
 ---
 
-# 50. File batches
+# 51. File batches
 
 A folder upload is represented conceptually as a batch containing documents.
 
@@ -1605,7 +1684,7 @@ without treating the whole batch as failed.
 
 ---
 
-# 51. Model strategy
+# 52. Model strategy
 
 Prefer a lightweight model.
 
@@ -1619,7 +1698,7 @@ Clean JSON should trend toward near-zero LLM usage as mappings accumulate.
 
 ---
 
-# 52. Evaluation framework
+# 53. Evaluation framework
 
 Evaluation should be a first-class component.
 
@@ -1668,7 +1747,7 @@ Are ingredients and strengths kept correctly paired?
 
 ---
 
-# 53. Cost evaluation
+# 54. Cost evaluation
 
 Track model usage:
 
@@ -1699,7 +1778,7 @@ This is a meaningful product characteristic rather than just a benchmark.
 
 ---
 
-# 54. Latency evaluation
+# 55. Latency evaluation
 
 Track time spent in:
 
@@ -1717,7 +1796,7 @@ This will show where the actual bottlenecks are.
 
 ---
 
-# 55. Production considerations
+# 56. Production considerations
 
 The take-home remains local, but the design should acknowledge what changes in a real deployment.
 
@@ -1747,7 +1826,7 @@ Production use should require suitable contractual data handling, retention and 
 
 ---
 
-# 56. Security and regulated-data considerations
+# 57. Security and regulated-data considerations
 
 A production version should include:
 
@@ -1767,7 +1846,7 @@ Raw source documents should have tighter access control than normalized commerci
 
 ---
 
-# 57. CI/CD
+# 58. CI/CD
 
 The repository should support reproducible setup and testing.
 
@@ -1796,7 +1875,7 @@ A small deterministic fixture set can run continuously, with fuller LLM evaluati
 
 ---
 
-# 58. Repository structure
+# 59. Repository structure
 
 A sensible high-level repository might be:
 
@@ -1804,29 +1883,29 @@ A sensible high-level repository might be:
 axmed-document-intelligence/
 
 ├── backend/
-│   ├── app/
-│   │   ├── ingestion/
-│   │   ├── parsers/
-│   │   ├── ocr/
-│   │   ├── privacy/
-│   │   ├── extraction/
-│   │   ├── schema_mapping/
-│   │   ├── normalization/
-│   │   ├── validation/
-│   │   ├── confidence/
-│   │   ├── provenance/
-│   │   ├── review/
-│   │   ├── workers/
-│   │   └── models/
-│   │
-│   └── tests/
+│ ├── app/
+│ │ ├── ingestion/
+│ │ ├── parsers/
+│ │ ├── ocr/
+│ │ ├── privacy/
+│ │ ├── extraction/
+│ │ ├── schema_mapping/
+│ │ ├── normalization/
+│ │ ├── validation/
+│ │ ├── confidence/
+│ │ ├── provenance/
+│ │ ├── review/
+│ │ ├── workers/
+│ │ └── models/
+│ │
+│ └── tests/
 │
 ├── frontend/
 │
-├── backend/evals/
-│   ├── fixtures/
-│   ├── ground_truth/
-│   └── reports/
+├── evals/
+│ ├── fixtures/
+│ ├── ground_truth/
+│ └── reports/
 │
 ├── sample_documents/
 │
@@ -1841,7 +1920,7 @@ This is directional, not a requirement to split every concept into its own packa
 
 ---
 
-# 59. Deliverables
+# 60. Deliverables
 
 The final repository should contain:
 
@@ -1885,7 +1964,7 @@ Cover:
 
 ---
 
-# 60. What we're deliberately not doing
+# 61. What we're deliberately not doing
 
 A few things should stay out unless they prove necessary.
 
@@ -1935,7 +2014,8 @@ The retrieval-like memory in this project is the SQLite-backed supplier/schema m
 
 ---
 
-# 61. Core technical thesis
+
+# 62. Core technical thesis
 
 The interesting part of the submission isn't that an LLM can turn a quotation into JSON.
 
@@ -1943,19 +2023,19 @@ The system should demonstrate something stronger:
 
 ```text
 Messy supplier input
-        ↓
+ ↓
 Use structure when structure exists
-        ↓
+ ↓
 Remember supplier schemas we've already understood
-        ↓
+ ↓
 Escalate only ambiguous content to AI
-        ↓
+ ↓
 Preserve source evidence
-        ↓
+ ↓
 Derive comparable commercial information deterministically
-        ↓
+ ↓
 Expose uncertainty instead of hiding it
-        ↓
+ ↓
 Let a human make the final decision
 ```
 
