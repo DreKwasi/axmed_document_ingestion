@@ -4,6 +4,7 @@ Provides structured Pydantic extraction across email threads, native PDFs, OCR s
 and per-document JSON semantic fact extraction.
 """
 
+import base64
 import json
 import time
 from decimal import Decimal
@@ -16,7 +17,7 @@ from pydantic import BaseModel, Field
 from app.extraction.contracts import CanonicalQuotation, Regulatory, Supply
 from app.extraction.json import JsonSemanticExtraction
 
-CANONICAL_QUOTATION_PROMPT_VERSION = "canonical-quotation-v7"
+CANONICAL_QUOTATION_PROMPT_VERSION = "canonical-quotation-v8"
 JSON_SEMANTIC_EXTRACTION_PROMPT_VERSION = "json-semantic-extraction-v1"
 
 
@@ -56,6 +57,8 @@ class LangChainSemanticExtractor:
         context: dict[str, Any],
         *,
         source_type: str = "email",
+        source_media: bytes | None = None,
+        source_media_type: str | None = None,
     ) -> tuple[CanonicalQuotation, dict[str, Any]]:
         """Extract a structured CanonicalQuotation from sanitized text context."""
         started_at = time.perf_counter()
@@ -125,8 +128,9 @@ class LangChainSemanticExtractor:
             "minimum_remaining_shelf_life_percent, lead_time_days, lead_time_min_days, lead_time_max_days, "
             "storage_conditions, and cold_chain_required; "
             "also extract stated MOQ, regulatory registration/reference/status, and registered markets. Do not leave "
-            "one of those fields null merely because it appears outside the price table. Treat a stated transit or "
-            "shipping time as delivery lead time. Preserve an explicit range in lead_time_min_days and "
+            "one of those fields null merely because it appears outside the price table. Do not treat transit, "
+            "shipping, or delivery duration as product lead time unless the source explicitly identifies it as lead "
+            "time. Preserve an explicit lead-time range in lead_time_min_days and "
             "lead_time_max_days rather than collapsing it to one number; apply a document-wide shipping term to every "
             "applicable line item. Store a source percentage in percentage points "
             "(for example, 80 percent as 80, not 0.80). When a note supplies a registration or variation identifier, "
@@ -139,9 +143,9 @@ class LangChainSemanticExtractor:
             "have a different commercial basis; leave an absent basis null and retain the packaging facts needed "
             "for a reviewer to assess it.\n"
             "Preserve all line items in source order.\n"
-            "5. Canonical normalization: Emit document_type as lowercase snake_case. Set dosage_form to the "
-            "core pharmaceutical form only (for example `tablet`, not `film-coated tablet`). Put qualifiers "
-            "such as `film-coated`, `chewable`, or `pressurised inhalation` in packaging.presentation. Use the "
+            "5. Canonical normalization: Emit document_type as lowercase snake_case. Preserve the complete "
+            "pharmaceutical dosage-form phrase, such as `film-coated tablet`, `chewable tablet`, or "
+            "`solution for injection`. Do not split a dosage form into route or packaging presentation. Use the "
             "table's pack description as primary_pack and retain its stated unit label.\n"
             "6. Provenance: For every extracted value, emit an Evidence entry at the quotation or line-item level.\n"
             "Include the canonical field, extraction method, confidence based on observed source quality, "
@@ -149,6 +153,17 @@ class LangChainSemanticExtractor:
             "such as `page 1` or `email body`. Do not claim a page or confidence that the context cannot support.\n"
             "7. Accuracy: Do NOT invent or hallucinate data. If a field is not present or unknown, leave it as null.\n"
         )
+        if source_type == "ocr":
+            system_prompt += (
+                "For OCR-assisted sources, use the supplied OCR page text as transcription aid only. OCR text may "
+                "be incomplete or out of sequence. Interpret it semantically; do not assume transcription line "
+                "order defines table rows or field relationships.\n"
+            )
+        if source_type == "image_vision":
+            system_prompt += (
+                "For direct image vision, the attached original image is authoritative. Read the visual document "
+                "semantically and recover its quotation fields directly; do not rely on an inferred OCR row map.\n"
+            )
 
         user_content = json.dumps(
             {
@@ -160,10 +175,22 @@ class LangChainSemanticExtractor:
 
         structured_llm = self._llm.with_structured_output(CanonicalQuotation, include_raw=True)
         user_prompt = f"Please extract the canonical quotation from the following context:\n\n{user_content}"
+        human_content: str | list[str | dict[Any, Any]] = user_prompt
+        if source_media is not None:
+            if source_media_type is None:
+                raise ValueError("source_media_type is required when source_media is provided")
+            human_content = [
+                {"type": "text", "text": user_prompt},
+                {
+                    "type": "image" if source_media_type.startswith("image/") else "file",
+                    "base64": base64.b64encode(source_media).decode("ascii"),
+                    "mime_type": source_media_type,
+                },
+            ]
         result = structured_llm.invoke(
             [
                 SystemMessage(content=system_prompt),
-                HumanMessage(content=user_prompt),
+                HumanMessage(content=human_content),
             ]
         )
 

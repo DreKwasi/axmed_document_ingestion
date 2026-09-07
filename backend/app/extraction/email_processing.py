@@ -137,11 +137,10 @@ def consume_email_extraction(session: Session, extraction_id: str, settings: Con
         record_event(session, document_id=document.id, stage="email_quotation_normalizing")
         session.commit()
         quotation = apply_commercial_rules(reconcile_email_price_uoms(quotation, safe_context.get("body_text", "")))
-        extraction.status = "completed"
-        extraction.error_message = None
         extraction.result_json = quotation.model_dump_json()
-        document.status = "pending_review"
-        _upsert_quotation(session, document, quotation)
+        stored = _upsert_quotation(session, document, quotation)
+        extraction.status = "completed" if stored is not None else "failed"
+        extraction.error_message = None if stored is not None else "no_products_extracted"
         _upsert_invocation(
             session,
             extraction,
@@ -157,14 +156,19 @@ def consume_email_extraction(session: Session, extraction_id: str, settings: Con
         record_event(
             session,
             document_id=document.id,
-            stage="email_extraction_completed",
-            metadata={"line_item_count": len(quotation.line_items), "model": settings.gemini_model},
+            stage="email_extraction_completed" if stored is not None else "email_extraction_failed",
+            metadata={
+                "line_item_count": len(quotation.line_items),
+                "model": settings.gemini_model,
+                **({} if stored is not None else {"reason": "no_products_extracted"}),
+            },
         )
         session.commit()
         logger.info(
-            "[Email %s] Extraction COMPLETED -> %d line items, status=pending_review",
+            "[Email %s] Extraction finished -> %d line items, status=%s",
             document.id[:8],
             len(quotation.line_items),
+            document.status,
         )
         return
     logger.warning("[Email %s] Gemini API key is not configured", document.id[:8])

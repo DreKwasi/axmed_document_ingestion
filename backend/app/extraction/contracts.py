@@ -4,45 +4,6 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-_CORE_DOSAGE_FORMS = (
-    "tablet",
-    "capsule",
-    "syrup",
-    "suspension",
-    "solution",
-    "cream",
-    "ointment",
-    "gel",
-    "drops",
-    "spray",
-    "injection",
-    "suppository",
-    "patch",
-)
-
-
-def _core_dosage_form(value: str) -> tuple[str, str | None]:
-    """Split a source dosage-form phrase into a core form and presentation qualifier."""
-    normalized = re.sub(r"\s+", " ", value.strip().lower().replace("–", "-").replace("—", "-"))
-    for core_form in _CORE_DOSAGE_FORMS:
-        match = re.search(rf"\b{re.escape(core_form)}s?\b", normalized)
-        if match:
-            presentation = (normalized[: match.start()] + normalized[match.end() :]).strip(" -,") or None
-            return core_form, presentation
-    return normalized, None
-
-
-def _clean_presentation_qualifier(value: str | None) -> str | None:
-    if value is None:
-        return None
-    cleaned = re.sub(
-        r"^\d+(?:[.,/]\d+)?\s*[a-zµμ]+(?:\s*/\s*\d+(?:[.,]\d+)?\s*[a-zµμ]+)?\s+",
-        "",
-        value.strip(),
-        flags=re.IGNORECASE,
-    )
-    return cleaned.strip(" ,-") or None
-
 
 def _singularize_uom(value: str | None) -> str | None:
     """Normalize grammatical plural UOM labels without changing their commercial category."""
@@ -121,9 +82,6 @@ class Packaging(BaseModel):
             return values
         normalized = dict(values)
         normalized["presentation"] = values["presentation"].strip().lower()
-        _, qualifier = _core_dosage_form(values["presentation"])
-        if qualifier is not None:
-            normalized["presentation"] = (_clean_presentation_qualifier(qualifier) or qualifier).lower()
         return normalized
 
     @model_validator(mode="after")
@@ -135,11 +93,6 @@ class Packaging(BaseModel):
                 self.units_per_pack = units
             if self.unit_label is None:
                 self.unit_label = label
-        if self.presentation is None:
-            _, qualifier = _core_dosage_form(self.description or "")
-            cleaned = _clean_presentation_qualifier(qualifier)
-            if cleaned is not None:
-                self.presentation = cleaned.lower()
         return self
 
 
@@ -224,9 +177,10 @@ class Product(BaseModel):
         if not isinstance(values, dict) or not isinstance(values.get("dosage_form"), str):
             return values
 
-        dosage_form, _ = _core_dosage_form(values["dosage_form"])
         normalized_values = dict(values)
-        normalized_values["dosage_form"] = dosage_form
+        normalized_values["dosage_form"] = re.sub(
+            r"\s+", " ", values["dosage_form"].strip().lower().replace("–", "-").replace("—", "-")
+        )
         return normalized_values
 
 
@@ -255,27 +209,6 @@ class LineItem(BaseModel):
     supply: Supply = Field(default_factory=Supply)
     regulatory: Regulatory = Field(default_factory=Regulatory)
     evidence: list[Evidence] = Field(default_factory=list)
-
-    @model_validator(mode="before")
-    @classmethod
-    def move_dosage_qualifier_to_packaging(cls, values: Any) -> Any:
-        if not isinstance(values, dict) or not isinstance(values.get("product"), dict):
-            return values
-        dosage_form = values["product"].get("dosage_form")
-        if not isinstance(dosage_form, str):
-            return values
-
-        core_form, presentation = _core_dosage_form(dosage_form)
-        normalized_values = dict(values)
-        normalized_product = dict(values["product"])
-        normalized_product["dosage_form"] = core_form
-        normalized_values["product"] = normalized_product
-        if presentation:
-            packaging = dict(values.get("packaging") or {})
-            packaging.setdefault("presentation", presentation)
-            normalized_values["packaging"] = packaging
-        return normalized_values
-
 
 class CanonicalQuotation(BaseModel):
     model_config = ConfigDict(extra="forbid")
