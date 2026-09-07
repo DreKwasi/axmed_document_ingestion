@@ -236,7 +236,7 @@ describe("App", () => {
     await wrapper.findAll("button").find((button) => button.text() === "Save correction")?.trigger("click");
     await flushPromises();
 
-    expect(wrapper.text()).toContain("99%");
+    expect(wrapper.text()).not.toContain("Field Evidence & Provenance");
     expect(wrapper.text()).toContain("tablet · film-coated");
     expect(api.reviewDocument).toHaveBeenCalledWith(
       "document-2",
@@ -567,8 +567,8 @@ describe("App", () => {
     await rows[0].trigger("click");
     await flushPromises();
 
-    // Drawer is now open with Field Evidence & Provenance and first line details
-    expect(wrapper.text()).toContain("Field Evidence & Provenance");
+    // Internal provenance does not appear in the routine product-review drawer.
+    expect(wrapper.text()).not.toContain("Field Evidence & Provenance");
     expect(wrapper.text()).toContain("Substance A");
 
     // Click second product row

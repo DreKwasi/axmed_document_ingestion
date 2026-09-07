@@ -1028,7 +1028,7 @@ At minimum:
 }
 ```
 
-Internally, provenance should be richer.
+Internally, provenance should be richer, but a mapping path is lineage—not source evidence—and must not be stored as proof that a field is correct. A field-evidence record is reserved for a source excerpt/location returned by semantic extraction, a deterministic validation result, or an auditable human review action.
 
 For a field:
 
@@ -1038,8 +1038,7 @@ For a field:
  "value": 0.134,
  "source_document": "RE_RFQ-2026-0244_Novara_quotation.eml",
  "source_location": "P.S. correction",
- "extraction_method": "llm",
- "confidence": 0.99
+ "extraction_method": "llm_extraction"
 }
 ```
 
@@ -1053,7 +1052,6 @@ Possible origins:
 
 ```text
 source
-deterministic_mapping
 llm_extraction
 derived
 human_corrected
