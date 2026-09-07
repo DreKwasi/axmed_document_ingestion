@@ -116,8 +116,12 @@ def test_email_worker_uses_redacted_context_and_persists_reviewable_quotation(cl
         assert [event.stage for event in events] == [
             "email_extraction_queued",
             "email_extraction_started",
+            "email_extraction_prepared",
+            "email_semantic_extraction_started",
+            "email_quotation_normalizing",
             "email_extraction_completed",
         ]
     completed = client.get(f"/api/v1/documents/{document['id']}").json()
     assert completed["status"] == "needs_review"
     assert completed["quotation"]["line_items"][0]["pricing"]["quoted_price"]["amount"] == "0.134"
+    assert completed["source_name"] == "Novara quotation"

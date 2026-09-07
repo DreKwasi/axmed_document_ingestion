@@ -101,6 +101,8 @@ def test_correction_creates_a_new_unapproved_revision_and_preserves_audit(client
             "document_id": document["id"],
             "learning_id": corrected["learning"][0]["id"],
             "stage": "learning_queued",
+            "phase": "Queued",
+            "message": "Learning queued",
             "metadata": {"corrected_field_count": 1},
             "created_at": events[0]["created_at"],
         }

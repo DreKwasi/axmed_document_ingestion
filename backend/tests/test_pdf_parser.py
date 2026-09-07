@@ -177,8 +177,17 @@ def test_pdf_worker_uses_redacted_page_context_and_persists_reviewable_quotation
             "pdf_native_parse_completed",
             "pdf_extraction_queued",
             "pdf_extraction_started",
+            "pdf_extraction_prepared",
+            "pdf_semantic_extraction_started",
+            "pdf_quotation_normalizing",
             "pdf_extraction_completed",
         ]
     completed = client.get(f"/api/v1/documents/{document['id']}").json()
     assert completed["status"] == "needs_review"
     assert completed["quotation"]["supplier"]["name"] == "Farmaceutica Andina S.A.S."
+    assert completed["source_name"] == "Farmaceutica Andina S.A.S. quotation"
+    assert completed["product_counts"] == {"extracted": 1, "failed": 0}
+    events_response = client.get(f"/api/v1/documents/{document['id']}/events")
+    assert events_response.status_code == 200
+    assert events_response.json()[3]["phase"] == "Preparing"
+    assert "prepared for semantic extraction" in events_response.json()[3]["message"]
