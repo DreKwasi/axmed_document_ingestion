@@ -39,4 +39,5 @@
 
 ## Final commit and tag
 
-- Pending commit; tag after the final commit is created.
+- Finalized by this documentation commit.
+- Tag: `worksheet/confidence-v7`.
