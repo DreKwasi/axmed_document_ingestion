@@ -1511,7 +1511,7 @@ The reviewer sees one of these categories:
 
 ```text
 High    direct or strongly corroborated source evidence with no material warning
-Medium  usable source evidence that needs ordinary verification
+Medium  usable source evidence that needs ordinary verification, including clean native PDF text without a leaf source location
 Low     an extracted value has weak OCR evidence, ambiguity, conflict, or poor parser quality
 ```
 

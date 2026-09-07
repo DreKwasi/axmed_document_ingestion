@@ -83,3 +83,16 @@ def test_missing_optional_schema_fields_do_not_route_a_complete_offer_to_review(
 
     assert result.system_decision == "auto_accepted"
     assert all("minimum_order_quantity" not in reason for reason in result.review_reasons)
+
+
+def test_clean_native_pdf_without_leaf_provenance_is_medium_not_a_review_failure():
+    line_item = complete_line_item()
+    line_item.evidence = []
+
+    result = assess_review_readiness(
+        CanonicalQuotation(line_items=[line_item]), ConfidenceSignals(source_type="pdf")
+    )
+
+    assert result.system_decision == "auto_accepted"
+    assert {field.band for field in result.fields.values()} == {"Medium"}
+    assert not result.review_reasons

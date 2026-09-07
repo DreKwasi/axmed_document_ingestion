@@ -68,7 +68,7 @@ def assess_review_readiness(quotation: CanonicalQuotation, signals: ConfidenceSi
                 field_path, evidence.get(suffix), issues, signals
             )
             fields[field_path] = confidence
-            if confidence.band != "High":
+            if confidence.band == "Low":
                 review_reasons.append(f"{field_path}: {confidence.reason}")
 
     for issue in issues:
@@ -128,6 +128,8 @@ def _classify_extracted_field(
     if signals.parser_quality in {"poor", "failed"}:
         return FieldConfidence("Low", "Poor parser quality")
     if evidence is None:
+        if signals.source_type == "pdf" and signals.parser_quality not in {"poor", "failed"}:
+            return FieldConfidence("Medium", "Clean native PDF value without a leaf source location")
         return FieldConfidence("Low", "No field provenance was recorded")
     if evidence.extraction_method == "ocr" and _evidence_score(evidence) < 0.70:
         return FieldConfidence("Low", "Low-confidence OCR evidence")
