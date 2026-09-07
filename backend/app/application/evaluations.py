@@ -8,26 +8,15 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.settings import Settings
+from app.core.config import Config
 from app.domain.commercial_rules import apply_commercial_rules
 from app.domain.email_parser import parse_email
 from app.domain.email_reconciliation import reconcile_email_price_uoms
+from app.domain.json_extraction import JsonSemanticExtractor, profile_json, validate_source_facts
 from app.domain.pdf_parser import parse_native_pdf
-from app.domain.schema_mapping import SemanticMappingProvider, apply_mapping, extract_source_metadata, fingerprint
 from app.infrastructure.models import EvaluationCaseRecord, EvaluationResultRecord, EvaluationRunRecord
 from app.security.redaction import redact_for_model
 from app.workers.ocr_client import request_ocr
-
-
-def _set_path(payload: dict[str, Any], path: str, value: Any) -> None:
-    current: Any = payload
-    *segments, final_segment = path.split(".")
-    for segment in segments:
-        current = current[int(segment)] if isinstance(current, list) else current[segment]
-    if isinstance(current, list):
-        current[int(final_segment)] = value
-    else:
-        current[final_segment] = value
 
 
 def _dataset_fixture_path(golden_dataset_path: Path, fixture: str) -> Path:
@@ -62,7 +51,7 @@ def run_recorded_evaluation(
     *,
     project_root: Path,
     golden_dataset_path: Path,
-    provider: SemanticMappingProvider,
+    extractor: JsonSemanticExtractor,
 ) -> EvaluationRunRecord:
     dataset = json.loads(golden_dataset_path.read_text())
     run = EvaluationRunRecord(
@@ -73,9 +62,10 @@ def run_recorded_evaluation(
     session.add(run)
     session.flush()
     results = []
+    not_run = 0
     for case in dataset["cases"]:
         if case.get("execution"):
-            skipped_scores = {"canonical_fidelity": 0.0, "mapping_efficiency": 0.0, "safety_and_uncertainty": 0.0}
+            skipped_scores = {"canonical_fidelity": 0.0, "source_grounding": 0.0, "safety_and_uncertainty": 0.0}
             session.add(
                 EvaluationResultRecord(
                     run_id=run.id,
@@ -86,83 +76,55 @@ def run_recorded_evaluation(
                 )
             )
             results.append(skipped_scores)
+            not_run += 1
             continue
         fixture_path = _dataset_fixture_path(golden_dataset_path, case["input_fixture"])
         payload = json.loads(fixture_path.read_text())
-        source_system, _ = extract_source_metadata(payload)
-        schema_fingerprint = fingerprint(payload)
-        cold_started = perf_counter()
-        cold_proposal = provider.propose(source_system, schema_fingerprint)
+        source_system = str(
+            payload.get("source_system") or (payload.get("meta") or {}).get("source_system") or "unknown"
+        )
+        started = perf_counter()
+        proposal = extractor.extract(payload, profile_json(payload), source_document=str(fixture_path))
         expected = case["expected"]
         errors: list[str] = []
-        if cold_proposal is None:
-            errors.append("No recorded semantic mapping proposal was available.")
-            cold_calls = 0
-            warm_calls = 0
+        if proposal is None:
+            errors.append("No recorded JSON semantic extraction was available.")
+            extraction_calls = 0
             line_item_count = 0
             input_tokens = 0
             output_tokens = 0
             estimated_cost_usd = "0"
-            cold_duration_ms = max(1, int((perf_counter() - cold_started) * 1000))
-            warm_duration_ms = 0
+            duration_ms = max(1, int((perf_counter() - started) * 1000))
         else:
-            # The recorded proposal represents a reviewer-confirmed mapping. Once trusted,
-            # the warm path calls only the deterministic mapper; it has no provider handle.
-            cold_calls = 1
-            input_tokens = cold_proposal.input_tokens or 0
-            output_tokens = cold_proposal.output_tokens or 0
+            facts, invalid_paths = validate_source_facts(payload, proposal.extraction.source_facts)
+            extraction_calls = 1
+            input_tokens = proposal.input_tokens or 0
+            output_tokens = proposal.output_tokens or 0
             estimated_cost_usd = (
-                "0" if cold_proposal.estimated_cost_usd is None else str(cold_proposal.estimated_cost_usd)
+                "0" if proposal.estimated_cost_usd is None else str(proposal.estimated_cost_usd)
             )
-            quotation = apply_mapping(
-                payload,
-                cold_proposal.mapping,
-                source_document=str(fixture_path),
-            )
-            cold_duration_ms = max(1, int((perf_counter() - cold_started) * 1000))
-            warm_payload = json.loads(json.dumps(payload))
-            warm_mutation = expected["warm_mutation"]
-            _set_path(warm_payload, warm_mutation["source_path"], warm_mutation["value"])
-            warm_started = perf_counter()
-            warm_quotation = apply_mapping(
-                warm_payload,
-                cold_proposal.mapping,
-                source_document=str(fixture_path),
-            )
-            warm_duration_ms = max(1, int((perf_counter() - warm_started) * 1000))
-            warm_calls = 0
+            quotation = proposal.extraction.quotation
+            duration_ms = max(1, int((perf_counter() - started) * 1000))
             line_item_count = len(quotation.line_items)
+            if invalid_paths:
+                errors.append("Recorded extraction contained invalid source references.")
+            if not facts:
+                errors.append("Recorded extraction did not recover source-grounded facts.")
             if quotation.quotation_reference != expected["quotation_reference"]:
                 errors.append("Quotation reference did not match golden data.")
             if line_item_count != expected["line_item_count"]:
                 errors.append("Line item count did not match golden data.")
             if source_system != expected["source_system"]:
                 errors.append("Source system did not match golden data.")
-            cold_payload = quotation.model_dump(mode="json")
-            warm_payload = warm_quotation.model_dump(mode="json")
-            canonical_paths = warm_mutation.get("canonical_paths")
-            if canonical_paths is None:
-                canonical_paths = [warm_mutation["canonical_path"]]
-            for canonical_path in canonical_paths:
-                _set_path(warm_payload, canonical_path, _get_path(cold_payload, canonical_path))
-            _remove_operational_evidence(cold_payload)
-            _remove_operational_evidence(warm_payload)
-            if warm_payload != cold_payload:
-                errors.append("Warm deterministic result diverged outside the changed source value.")
         scores: dict[str, Any] = {
             "canonical_fidelity": 1.0 if not errors else 0.0,
-            "mapping_efficiency": 1.0 if cold_calls == 1 and warm_calls == 0 else 0.0,
+            "source_grounding": 1.0 if not errors else 0.0,
             "safety_and_uncertainty": 1.0,
-            "cold_mapping_calls": cold_calls,
-            "warm_mapping_calls": warm_calls,
+            "semantic_extraction_calls": extraction_calls,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "estimated_cost_usd": estimated_cost_usd,
-            "warm_input_tokens": 0,
-            "warm_output_tokens": 0,
-            "warm_estimated_cost_usd": "0",
-            "cold_duration_ms": cold_duration_ms,
-            "warm_duration_ms": warm_duration_ms,
+            "duration_ms": duration_ms,
         }
         status = "passed" if not errors else "failed"
         result = EvaluationResultRecord(
@@ -178,9 +140,7 @@ def run_recorded_evaluation(
         {
             "case_count": len(results),
             "passed": sum(score["canonical_fidelity"] == 1.0 for score in results),
-            "not_run": sum(
-                score["canonical_fidelity"] == 0.0 and "cold_mapping_calls" not in score for score in results
-            ),
+            "not_run": not_run,
             "rubrics": dataset["rubric"],
         }
     )
@@ -193,11 +153,11 @@ def run_live_pdf_evaluation(
     *,
     project_root: Path,
     golden_dataset_path: Path,
-    settings: Settings,
+    settings: Config,
 ) -> EvaluationRunRecord:
     """Run source PDFs through the production extraction stages and score reviewed fields."""
 
-    if not settings.resolved_gemini_api_key:
+    if not settings.gemini_api_key:
         raise ValueError("Live PDF evaluation requires configured Gemini credentials.")
     dataset = json.loads(golden_dataset_path.read_text())
     run = EvaluationRunRecord(
@@ -227,7 +187,11 @@ def run_live_pdf_evaluation(
         started = perf_counter()
         from app.domain.langchain_extractor import LangChainSemanticExtractor
 
-        extractor = LangChainSemanticExtractor(settings.resolved_gemini_api_key, settings.resolved_gemini_model)
+        extractor = LangChainSemanticExtractor(
+            settings.gemini_api_key,
+            settings.gemini_model,
+            settings.gemini_request_timeout_seconds,
+        )
         actual, telemetry = extractor.extract_canonical_quotation(context, source_type="pdf")
         actual_payload = apply_commercial_rules(actual).model_dump(mode="json")
         errors = _subset_mismatches(expected, actual_payload)
@@ -262,7 +226,7 @@ def run_live_ocr_evaluation(
     session: Session,
     *,
     golden_dataset_path: Path,
-    settings: Settings,
+    settings: Config,
 ) -> EvaluationRunRecord:
     """Evaluate configured OCR evidence without invoking an extraction model."""
 
@@ -324,11 +288,11 @@ def run_live_email_evaluation(
     session: Session,
     *,
     golden_dataset_path: Path,
-    settings: Settings,
+    settings: Config,
 ) -> EvaluationRunRecord:
     """Run approved email cases through parse, redaction, structured extraction, and rules."""
 
-    if not settings.resolved_gemini_api_key:
+    if not settings.gemini_api_key:
         raise ValueError("Live email evaluation requires configured Gemini credentials.")
     dataset = json.loads(golden_dataset_path.read_text())
     email_cases = [case for case in dataset["cases"] if case.get("execution") == "live_email_pipeline"]
@@ -340,7 +304,11 @@ def run_live_email_evaluation(
     passed = 0
     from app.domain.langchain_extractor import LangChainSemanticExtractor
 
-    extractor = LangChainSemanticExtractor(settings.resolved_gemini_api_key, settings.resolved_gemini_model)
+    extractor = LangChainSemanticExtractor(
+        settings.gemini_api_key,
+        settings.gemini_model,
+        settings.gemini_request_timeout_seconds,
+    )
     for case in email_cases:
         fixture_path = _dataset_fixture_path(golden_dataset_path, case["input_fixture"])
         expected = json.loads(_dataset_fixture_path(golden_dataset_path, case["expected_output_fixture"]).read_text())

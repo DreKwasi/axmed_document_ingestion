@@ -1,6 +1,7 @@
 """Safe persisted event seam shared by API, worker, diagnostics, and SSE."""
 
 import json
+import logging
 from collections.abc import Iterable
 from typing import Any
 
@@ -9,6 +10,8 @@ from sqlalchemy.orm import Session
 
 from app.infrastructure.models import ProcessingEventRecord
 from app.security.redaction import redact_for_model
+
+logger = logging.getLogger("app.events")
 
 _EVENT_PHASES = {
     "queued": "Queued",
@@ -45,7 +48,16 @@ _EVENT_MESSAGES = {
     "ocr_failed": "Source image extraction needs attention.",
     "ocr_extraction_completed": "Normalizing the extracted image content.",
     "ocr_extraction_failed": "Image quotation extraction needs attention.",
+    "json_profiling_started": "Inspecting the JSON structure and repeated records.",
+    "json_profile_completed": "JSON structure prepared for quotation extraction.",
+    "json_semantic_extraction_started": "Recovering quotation facts from the JSON source.",
+    "json_source_validation_retrying": "Checking source references before finalizing extracted facts.",
+    "json_quotation_normalizing": "Normalizing supported quotation fields.",
+    "json_extraction_completed": "JSON quotation extraction completed.",
+    "json_extraction_failed": "JSON quotation extraction failed.",
 }
+
+
 
 
 def record_event(
@@ -53,19 +65,22 @@ def record_event(
     *,
     document_id: str,
     stage: str,
-    learning_id: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> ProcessingEventRecord:
     """Persist only redacted metadata; never accept document text at this boundary."""
 
+    meta_redacted = redact_for_model(metadata or {})
     event = ProcessingEventRecord(
         document_id=document_id,
-        learning_id=learning_id,
         stage=stage,
-        metadata_json=json.dumps(redact_for_model(metadata or {}), sort_keys=True),
+        metadata_json=json.dumps(meta_redacted, sort_keys=True),
     )
     session.add(event)
     session.flush()
+
+    message = meta_redacted.get("message") or _EVENT_MESSAGES.get(stage, stage.replace("_", " ").capitalize())
+    meta_str = f" | metadata={json.dumps(meta_redacted)}" if meta_redacted else ""
+    logger.info("[Doc %s] Event: %s — %s%s", document_id[:8], stage, message, meta_str)
     return event
 
 
@@ -87,7 +102,6 @@ def serialize_event(event: ProcessingEventRecord) -> dict[str, Any]:
     return {
         "id": event.id,
         "document_id": event.document_id,
-        "learning_id": event.learning_id,
         "stage": event.stage,
         "phase": phase,
         "message": message,

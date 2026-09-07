@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.application.processing_events import record_event
-from app.core.settings import Settings
+from app.core.config import Config
 from app.domain.commercial_rules import apply_commercial_rules
 from app.domain.confidence import (
     ConfidenceSignals,
@@ -23,18 +23,19 @@ from app.domain.confidence import (
 from app.domain.contracts import CanonicalQuotation
 from app.domain.email_parser import parse_email
 from app.domain.image_parser import ImageParseError, parse_image
-from app.domain.pdf_parser import PdfParseError, parse_native_pdf
-from app.domain.schema_mapping import (
-    SemanticMappingProvider,
-    apply_mapping,
-    extract_source_metadata,
-    fingerprint,
+from app.domain.json_extraction import (
+    JsonSemanticExtractor,
+    JsonSourceFact,
+    profile_json,
+    validate_source_facts,
 )
+from app.domain.pdf_parser import PdfParseError, parse_native_pdf
 from app.infrastructure.models import (
     BatchRecord,
     DocumentArtifactRecord,
     DocumentRecord,
     EmailExtractionRecord,
+    ExtractedSourceFactRecord,
     FieldEvidenceRecord,
     ModelInvocationRecord,
     OcrJobRecord,
@@ -48,9 +49,7 @@ from app.infrastructure.models import (
     QuotationLineItemRecord,
     QuotationLineItemStrengthRecord,
     QuotationRecord,
-    ReviewLearningRecord,
     ReviewRecord,
-    SchemaMappingRecord,
 )
 from app.security.redaction import redact_for_model
 
@@ -76,7 +75,7 @@ REJECTION_REASONS = {
 
 
 
-def validate_json_upload(filename: str, content_type: str | None, data: bytes, settings: Settings) -> None:
+def validate_json_upload(filename: str, content_type: str | None, data: bytes, settings: Config) -> None:
     if not filename.lower().endswith(".json"):
         raise UploadValidationError("Slice 1 accepts JSON files only.")
     if len(data) == 0:
@@ -108,7 +107,7 @@ def ingest_email(
     filename: str,
     content_type: str | None,
     data: bytes,
-    settings: Settings,
+    settings: Config,
     batch_id: str | None = None,
 ) -> DocumentRecord:
     if not filename.lower().endswith(".eml"):
@@ -168,7 +167,7 @@ def ingest_pdf(
     filename: str,
     content_type: str | None,
     data: bytes,
-    settings: Settings,
+    settings: Config,
     batch_id: str | None = None,
 ) -> DocumentRecord:
     if not filename.lower().endswith(".pdf"):
@@ -279,7 +278,7 @@ def ingest_image(
     filename: str,
     content_type: str | None,
     data: bytes,
-    settings: Settings,
+    settings: Config,
     batch_id: str | None = None,
 ) -> DocumentRecord:
     if not filename.lower().endswith((".png", ".jpg", ".jpeg")):
@@ -342,8 +341,7 @@ def _upsert_quotation(session: Session, document: DocumentRecord, quotation: Can
         stored.system_decision = "pending_review"
         if stored.review_status in {"unreviewed", "corrected"}:
             stored.review_status = "pending_review"
-        if document.status != "needs_mapping_confirmation":
-            document.status = "pending_review"
+        document.status = "pending_review"
         stored.revision += 1
         _sync_field_evidence(session, document.id, stored, CanonicalQuotation.model_validate_json(payload_json))
         _sync_normalized_line_items(session, stored.id, CanonicalQuotation.model_validate_json(payload_json))
@@ -355,8 +353,7 @@ def _upsert_quotation(session: Session, document: DocumentRecord, quotation: Can
             assessment=assessment,
         )
         return stored
-    if document.status != "needs_mapping_confirmation":
-        document.status = "pending_review"
+    document.status = "pending_review"
     stored = QuotationRecord(
         document_id=document.id,
         payload_json=payload_json,
@@ -697,6 +694,89 @@ def _sync_field_evidence(
         )
 
 
+def _attach_json_fact_evidence(quotation: CanonicalQuotation, facts: list[JsonSourceFact]) -> CanonicalQuotation:
+    """Attach source-backed provenance only to normalized canonical fields."""
+
+    payload = quotation.model_dump(mode="python")
+    for fact in facts:
+        if not fact.canonical_field:
+            continue
+        if not _canonical_fact_is_populated(payload, fact.canonical_field):
+            fact.canonical_field = None
+            fact.normalization_status = "unmapped"
+            continue
+        evidence = {
+            "source_path": fact.source_path,
+            "extraction_method": fact.extraction_method,
+            "confidence": fact.confidence,
+        }
+        if fact.canonical_field.startswith("line_items["):
+            match = re.match(r"line_items\[(\d+)\]\.(.+)", fact.canonical_field)
+            if match is None:
+                fact.canonical_field = None
+                fact.normalization_status = "unmapped"
+                continue
+            index, canonical_field = int(match.group(1)), match.group(2)
+            line_items = payload.get("line_items", [])
+            if index >= len(line_items):
+                fact.canonical_field = None
+                fact.normalization_status = "unmapped"
+                continue
+            line_items[index].setdefault("evidence", []).append({"canonical_field": canonical_field, **evidence})
+        else:
+            payload.setdefault("evidence", []).append({"canonical_field": fact.canonical_field, **evidence})
+    return CanonicalQuotation.model_validate(payload)
+
+
+def _canonical_fact_is_populated(payload: dict[str, Any], canonical_field: str) -> bool:
+    """Prevent a claimed destination from becoming evidence without a canonical value."""
+
+    current: Any = payload
+    for segment in canonical_field.split("."):
+        line_item = re.fullmatch(r"line_items\[(\d+)\]", segment)
+        if line_item:
+            index = int(line_item.group(1))
+            if not isinstance(current, dict) or not isinstance(current.get("line_items"), list):
+                return False
+            items = current["line_items"]
+            if index >= len(items):
+                return False
+            current = items[index]
+            continue
+        if not isinstance(current, dict) or segment not in current:
+            return False
+        current = current[segment]
+    return current is not None
+
+
+def _sync_extracted_source_facts(
+    session: Session,
+    document_id: str,
+    quotation_id: str,
+    facts: list[JsonSourceFact],
+) -> None:
+    session.execute(delete(ExtractedSourceFactRecord).where(ExtractedSourceFactRecord.document_id == document_id))
+    session.add_all(
+        [
+            ExtractedSourceFactRecord(
+                id=str(uuid4()),
+                document_id=document_id,
+                quotation_id=quotation_id,
+                label=fact.label,
+                value_json=json.dumps(fact.value, default=str, sort_keys=True),
+                source_path=fact.source_path,
+                extraction_method=fact.extraction_method,
+                confidence=fact.confidence,
+                confidence_reason=fact.confidence_reason,
+                normalization_status=fact.normalization_status,
+                canonical_field=fact.canonical_field,
+                review_status="pending_review",
+            )
+            for fact in facts
+        ]
+    )
+
+
 def _flatten_extracted_values(value: Any, path: str) -> list[tuple[str, Any]]:
     if isinstance(value, dict):
         flattened: list[tuple[str, Any]] = []
@@ -978,6 +1058,11 @@ def apply_review_action(session: Session, document_id: str, action: str, command
         )
     else:
         _set_field_review_status(session, quotation.id, next_review_status)
+    session.execute(
+        update(ExtractedSourceFactRecord)
+        .where(ExtractedSourceFactRecord.document_id == document_id)
+        .values(review_status=next_review_status)
+    )
     review = ReviewRecord(
         document_id=document_id,
         request_id=request_id,
@@ -990,31 +1075,6 @@ def apply_review_action(session: Session, document_id: str, action: str, command
     )
     session.add(review)
     try:
-        if action == "corrected":
-            session.flush()
-            learning = ReviewLearningRecord(
-                document_id=document_id,
-                review_id=review.id,
-                source_system=document.source_system,
-                schema_fingerprint=document.schema_fingerprint,
-                status="queued",
-                context_json=json.dumps(
-                    {
-                        "rule": "Learn field interpretation, never copy corrected commercial values.",
-                        "corrected_fields": [{"path": patch["path"]} for patch in audit_patches],
-                    },
-                    default=str,
-                ),
-            )
-            session.add(learning)
-            session.flush()
-            record_event(
-                session,
-                document_id=document_id,
-                learning_id=learning.id,
-                stage="learning_queued",
-                metadata={"corrected_field_count": len(audit_patches)},
-            )
         document.status = next_review_status
         session.commit()
     except IntegrityError as error:
@@ -1029,66 +1089,20 @@ def apply_review_action(session: Session, document_id: str, action: str, command
     return document
 
 
-def _find_mapping(
-    session: Session, source_system: str, source_schema_version: str, schema_fingerprint: str
-) -> SchemaMappingRecord | None:
-    return session.scalar(
-        select(SchemaMappingRecord).where(
-            SchemaMappingRecord.source_system == source_system,
-            SchemaMappingRecord.source_schema_version == source_schema_version,
-            SchemaMappingRecord.schema_fingerprint == schema_fingerprint,
-        )
-    )
-
-
-def _learning_preferences(session: Session, source_system: str, schema_fingerprint: str) -> list[dict[str, Any]]:
-    """Return model-produced field guidance, never values corrected on a prior offer."""
-
-    preferences: list[dict[str, Any]] = []
-    for learning in session.scalars(
-        select(ReviewLearningRecord)
-        .where(
-            ReviewLearningRecord.source_system == source_system,
-            ReviewLearningRecord.schema_fingerprint == schema_fingerprint,
-            ReviewLearningRecord.status == "completed",
-        )
-        .order_by(ReviewLearningRecord.created_at)
-    ):
-        if not learning.result_json:
-            continue
-        for preference in json.loads(learning.result_json).get("preferences", []):
-            if isinstance(preference, dict):
-                preferences.append(preference)
-    return preferences
-
-
-def _record_schema_conflict(session: Session, source_system: str, source_schema_version: str) -> None:
-    """Record a changed structure as reviewable without applying an old mapping."""
-    for mapping in session.scalars(
-        select(SchemaMappingRecord).where(
-            SchemaMappingRecord.source_system == source_system,
-            SchemaMappingRecord.source_schema_version == source_schema_version,
-            SchemaMappingRecord.trust_state == "trusted",
-        )
-    ):
-        mapping.conflict_count += 1
-
-
 def ingest_json(
     session: Session,
     *,
     filename: str,
     content_type: str | None,
     data: bytes,
-    settings: Settings,
-    provider: SemanticMappingProvider,
+    settings: Config,
+    extractor: JsonSemanticExtractor,
     batch_id: str | None = None,
 ) -> DocumentRecord:
     validate_json_upload(filename, content_type, data, settings)
     payload = read_json(data)
-    source_system, source_schema_version = extract_source_metadata(payload)
-    source_schema_version = source_schema_version or "unknown"
-    schema_fingerprint = fingerprint(payload)
+    source_system = str(payload.get("source_system") or (payload.get("meta") or {}).get("source_system") or "unknown")
+    source_schema_version = (payload.get("meta") or {}).get("export_version") or payload.get("schema_version")
     # A repeat submission is an independent receipt. Content identity remains available via
     # content_sha256, while a random document id prevents a prior submission from causing a
     # database collision or overwriting its stored source.
@@ -1105,147 +1119,144 @@ def ingest_json(
         media_type="application/json",
         content_sha256=hashlib.sha256(data).hexdigest(),
         source_system=source_system,
-        schema_version=source_schema_version,
-        schema_fingerprint=schema_fingerprint,
+        schema_version=str(source_schema_version) if source_schema_version is not None else None,
         status="received",
     )
     session.add(document)
     session.flush()
 
-    mapping = _find_mapping(session, source_system, source_schema_version, schema_fingerprint)
-    if mapping and mapping.trust_state == "trusted":
-        mapping.times_seen += 1
-        mapping_json = json.loads(mapping.mapping_json)
-        try:
-            quotation = apply_mapping(
-                payload,
-                mapping_json,
-                source_document=document.original_filename,
-            )
-        except (InvalidOperation, TypeError, ValidationError, ValueError):
-            document.status = "failed"
-            document.mapping_source = "mapping_application_failed"
-            session.commit()
-            return document
-        document.status = "pending_review"
-        document.mapping_source = "trusted_cache"
-        _upsert_quotation(session, document, quotation)
-        session.commit()
-        return document
+    return _extract_json_document(session, document, payload, extractor)
 
-    learning_preferences = _learning_preferences(session, source_system, schema_fingerprint)
-    if hasattr(provider, "sample_payload"):
-        provider.sample_payload = payload
-    if hasattr(provider, "providers"):
-        for sub in getattr(provider, "providers", []):
-            if hasattr(sub, "sample_payload"):
-                sub.sample_payload = payload
-    proposal = provider.propose(
-        source_system,
-        schema_fingerprint,
-        learning_preferences=learning_preferences or None,
+
+def _extract_json_document(
+    session: Session,
+    document: DocumentRecord,
+    payload: dict[str, Any],
+    extractor: JsonSemanticExtractor,
+) -> DocumentRecord:
+    """Extract one JSON source independently; no prior schema affects this run."""
+
+    record_event(session, document_id=document.id, stage="json_profiling_started")
+    profile = profile_json(payload)
+    record_event(
+        session,
+        document_id=document.id,
+        stage="json_profile_completed",
+        metadata={"candidate_collection_count": len(profile["candidate_collections"])},
     )
+    record_event(session, document_id=document.id, stage="json_semantic_extraction_started")
+    try:
+        proposal = extractor.extract(payload, profile, source_document=document.original_filename)
+    except Exception:
+        document.status = "failed"
+        document.failure_reason = "JSON extraction could not complete. Try extracting this source again."
+        record_event(session, document_id=document.id, stage="json_extraction_failed")
+        session.commit()
+        return document
     if proposal is None:
-        _record_schema_conflict(session, source_system, source_schema_version)
-        document.status = "needs_mapping_resolution"
-        document.mapping_source = "schema_conflict"
+        document.status = "failed"
+        document.failure_reason = "No quotation facts could be extracted from this JSON source."
+        record_event(session, document_id=document.id, stage="json_extraction_failed")
         session.commit()
         return document
 
+    valid_facts, invalid_paths = validate_source_facts(payload, proposal.extraction.source_facts)
+    if invalid_paths:
+        record_event(
+            session,
+            document_id=document.id,
+            stage="json_source_validation_retrying",
+            metadata={"invalid_claim_count": len(invalid_paths)},
+        )
+        try:
+            retry = extractor.extract(
+                payload,
+                profile,
+                source_document=document.original_filename,
+                invalid_source_paths=invalid_paths,
+            )
+        except Exception:
+            retry = None
+        if retry is not None:
+            retry_facts, _ = validate_source_facts(payload, retry.extraction.source_facts)
+            def fact_identity(fact: JsonSourceFact) -> tuple[str, str | None, str]:
+                return fact.source_path, fact.canonical_field, json.dumps(fact.value, default=str, sort_keys=True)
+
+            known = {
+                fact_identity(fact) for fact in valid_facts
+            }
+            valid_facts.extend(
+                fact
+                for fact in retry_facts
+                if fact_identity(fact) not in known
+            )
+            proposal = retry
+
+    if not valid_facts:
+        document.status = "failed"
+        document.failure_reason = "No source-grounded quotation facts could be extracted from this JSON source."
+        record_event(session, document_id=document.id, stage="json_extraction_failed")
+        session.commit()
+        return document
+
+    quotation = _attach_json_fact_evidence(proposal.extraction.quotation, valid_facts)
+    quotation.source["document_name"] = document.original_filename
+    quotation.source["document_format"] = "json"
+    quotation = apply_commercial_rules(quotation)
+    record_event(session, document_id=document.id, stage="json_quotation_normalizing")
+    stored = _upsert_quotation(session, document, quotation)
+    _sync_extracted_source_facts(session, document.id, stored.id, valid_facts)
     session.add(
         ModelInvocationRecord(
             document_id=document.id,
-            operation="schema_mapping",
+            operation="json_semantic_extraction",
             provider=proposal.provider,
-            model=None,
-            prompt_version="schema-mapping-v1",
+            model=proposal.model,
+            prompt_version=proposal.prompt_version,
             status="completed",
             duration_ms=proposal.duration_ms,
             input_tokens=proposal.input_tokens,
             output_tokens=proposal.output_tokens,
             estimated_cost_usd=None if proposal.estimated_cost_usd is None else str(proposal.estimated_cost_usd),
             safe_metadata_json=json.dumps(
-                {"source_system": source_system, "schema_fingerprint": schema_fingerprint}, sort_keys=True
+                {"source_format": "json", "source_fact_count": len(valid_facts)}, sort_keys=True
             ),
         )
     )
-
-    if mapping is None:
-        mapping = SchemaMappingRecord(
-            source_system=source_system,
-            source_schema_version=source_schema_version,
-            schema_fingerprint=schema_fingerprint,
-            mapping_json=json.dumps(proposal.mapping),
-            trust_state="proposed",
-        )
-        session.add(mapping)
-    else:
-        mapping.mapping_json = json.dumps(proposal.mapping)
-        mapping.times_seen += 1
-    try:
-        quotation = apply_mapping(
-            payload,
-            proposal.mapping,
-            source_document=document.original_filename,
-        )
-    except (InvalidOperation, TypeError, ValidationError, ValueError):
-        document.status = "failed"
-        document.mapping_source = "mapping_application_failed"
-        session.commit()
-        return document
-    document.status = "needs_mapping_confirmation"
-    document.mapping_source = proposal.provider
-    document.semantic_mapping_calls = 1
-    _upsert_quotation(session, document, quotation)
+    record_event(session, document_id=document.id, stage="json_extraction_completed")
     session.commit()
     return document
 
 
-def confirm_mapping(session: Session, document_id: str, settings: Settings) -> DocumentRecord:
+def reextract_json_document(
+    session: Session, document_id: str, settings: Config, extractor: JsonSemanticExtractor
+) -> DocumentRecord:
     document = session.get(DocumentRecord, document_id)
     if document is None:
         raise LookupError("Document not found.")
-    if document.status != "needs_mapping_confirmation":
-        raise ValueError("Only documents awaiting mapping confirmation can be confirmed.")
-    mapping = _find_mapping(
-        session,
-        document.source_system or "unknown",
-        document.schema_version or "unknown",
-        document.schema_fingerprint or "",
-    )
-    if mapping is None:
-        raise LookupError("Mapping proposal not found.")
-    payload = read_json((Path(settings.upload_dir) / document.stored_filename).read_bytes())
-    mapping.trust_state = "trusted"
-    mapping.human_verified = True
-    mapping.times_confirmed += 1
-    quotation = apply_mapping(
-        payload,
-        json.loads(mapping.mapping_json),
-        source_document=document.original_filename,
-    )
-    document.status = "pending_review"
-    document.mapping_source = "confirmed_mapping"
-    _upsert_quotation(session, document, quotation)
+    if document.media_type != "application/json":
+        raise ValueError("Only JSON sources can be re-extracted through this endpoint.")
+    source_path = Path(settings.upload_dir) / Path(document.stored_filename).name
+    if not source_path.is_file():
+        raise LookupError("Stored source document not found.")
+    payload = read_json(source_path.read_bytes())
+    _clear_document_quotation(session, document.id)
+    session.execute(delete(ExtractedSourceFactRecord).where(ExtractedSourceFactRecord.document_id == document.id))
+    document.status = "pending_extraction"
+    document.failure_reason = None
     session.commit()
-    return document
+    return _extract_json_document(session, document, payload, extractor)
 
 
-def delete_document(session: Session, document_id: str, settings: Settings) -> None:
+def delete_document(session: Session, document_id: str, settings: Config) -> None:
     """Permanently remove one uploaded source and every record derived from it."""
 
     document = session.get(DocumentRecord, document_id)
     if document is None:
         raise LookupError("Document not found.")
 
-    quotation_ids = session.scalars(
-        select(QuotationRecord.id).where(QuotationRecord.document_id == document.id)
-    ).all()
     email_extraction_ids = session.scalars(
         select(EmailExtractionRecord.id).where(EmailExtractionRecord.document_id == document.id)
-    ).all()
-    learning_ids = session.scalars(
-        select(ReviewLearningRecord.id).where(ReviewLearningRecord.document_id == document.id)
     ).all()
 
     # These records reference the extraction/review records below, so remove
@@ -1255,34 +1266,15 @@ def delete_document(session: Session, document_id: str, settings: Settings) -> N
         session.execute(
             delete(ModelInvocationRecord).where(ModelInvocationRecord.email_extraction_id.in_(email_extraction_ids))
         )
-    if learning_ids:
-        session.execute(delete(ModelInvocationRecord).where(ModelInvocationRecord.learning_id.in_(learning_ids)))
-        session.execute(delete(ProcessingEventRecord).where(ProcessingEventRecord.learning_id.in_(learning_ids)))
     session.execute(delete(ProcessingEventRecord).where(ProcessingEventRecord.document_id == document.id))
-    session.execute(delete(ReviewLearningRecord).where(ReviewLearningRecord.document_id == document.id))
     session.execute(delete(ReviewRecord).where(ReviewRecord.document_id == document.id))
     session.execute(delete(DocumentArtifactRecord).where(DocumentArtifactRecord.document_id == document.id))
     session.execute(delete(EmailExtractionRecord).where(EmailExtractionRecord.document_id == document.id))
     session.execute(delete(PdfExtractionRecord).where(PdfExtractionRecord.document_id == document.id))
     session.execute(delete(OcrJobRecord).where(OcrJobRecord.document_id == document.id))
 
-    if quotation_ids:
-        line_item_ids = session.scalars(
-            select(QuotationLineItemRecord.id).where(QuotationLineItemRecord.quotation_id.in_(quotation_ids))
-        ).all()
-        session.execute(delete(FieldEvidenceRecord).where(FieldEvidenceRecord.quotation_id.in_(quotation_ids)))
-        session.execute(delete(QuotationFieldValueRecord).where(QuotationFieldValueRecord.quotation_id.in_(quotation_ids)))
-        if line_item_ids:
-            for model in (
-                QuotationLineItemInnRecord,
-                QuotationLineItemStrengthRecord,
-                QuotationLineItemPriceTierRecord,
-                QuotationLineItemAdjustmentRecord,
-                QuotationLineItemMarketRecord,
-            ):
-                session.execute(delete(model).where(model.line_item_id.in_(line_item_ids)))
-            session.execute(delete(QuotationLineItemRecord).where(QuotationLineItemRecord.id.in_(line_item_ids)))
-        session.execute(delete(QuotationRecord).where(QuotationRecord.id.in_(quotation_ids)))
+    _clear_document_quotation(session, document.id)
+    session.execute(delete(ExtractedSourceFactRecord).where(ExtractedSourceFactRecord.document_id == document.id))
 
     stored_filename = Path(document.stored_filename).name
     session.execute(delete(DocumentRecord).where(DocumentRecord.id == document.id))
@@ -1299,6 +1291,33 @@ def delete_document(session: Session, document_id: str, settings: Settings) -> N
         # The database deletion is authoritative. A later storage sweep can
         # remove an inaccessible orphan without restoring a deleted source.
         pass
+
+
+def _clear_document_quotation(session: Session, document_id: str) -> None:
+    """Remove a mutable quotation projection while retaining its source receipt."""
+
+    quotation_ids = session.scalars(
+        select(QuotationRecord.id).where(QuotationRecord.document_id == document_id)
+    ).all()
+    if not quotation_ids:
+        return
+    line_item_ids = session.scalars(
+        select(QuotationLineItemRecord.id).where(QuotationLineItemRecord.quotation_id.in_(quotation_ids))
+    ).all()
+    session.execute(delete(FieldEvidenceRecord).where(FieldEvidenceRecord.quotation_id.in_(quotation_ids)))
+    session.execute(delete(QuotationFieldValueRecord).where(QuotationFieldValueRecord.quotation_id.in_(quotation_ids)))
+    session.execute(delete(ExtractedSourceFactRecord).where(ExtractedSourceFactRecord.quotation_id.in_(quotation_ids)))
+    if line_item_ids:
+        for model in (
+            QuotationLineItemInnRecord,
+            QuotationLineItemStrengthRecord,
+            QuotationLineItemPriceTierRecord,
+            QuotationLineItemAdjustmentRecord,
+            QuotationLineItemMarketRecord,
+        ):
+            session.execute(delete(model).where(model.line_item_id.in_(line_item_ids)))
+        session.execute(delete(QuotationLineItemRecord).where(QuotationLineItemRecord.id.in_(line_item_ids)))
+    session.execute(delete(QuotationRecord).where(QuotationRecord.id.in_(quotation_ids)))
 
 
 def serialize_document(session: Session, document: DocumentRecord) -> dict[str, Any]:
@@ -1323,7 +1342,7 @@ def serialize_document(session: Session, document: DocumentRecord) -> dict[str, 
             for index, line_item in enumerate(normalized_items):
                 if index < len(snapshot_items):
                     line_item["evidence"] = snapshot_items[index].get("evidence", [])
-        quotation_payload["line_items"] = normalized_items
+            quotation_payload["line_items"] = normalized_items
         quotation_payload["revision"] = quotation.revision
         quotation_payload["system_decision"] = quotation.system_decision
         quotation_payload["review_status"] = quotation.review_status
@@ -1349,14 +1368,13 @@ def serialize_document(session: Session, document: DocumentRecord) -> dict[str, 
             }
             for field_value in field_values
         ]
-    mapping = None
-    if document.source_system and document.schema_fingerprint:
-        mapping = _find_mapping(
-            session,
-            document.source_system,
-            document.schema_version or "unknown",
-            document.schema_fingerprint,
+    source_facts = list(
+        session.scalars(
+            select(ExtractedSourceFactRecord)
+            .where(ExtractedSourceFactRecord.document_id == document.id)
+            .order_by(ExtractedSourceFactRecord.created_at, ExtractedSourceFactRecord.id)
         )
+    )
     return {
         "id": document.id,
         "batch_id": document.batch_id,
@@ -1366,9 +1384,6 @@ def serialize_document(session: Session, document: DocumentRecord) -> dict[str, 
         "failure_reason": document.failure_reason,
         "source_system": document.source_system,
         "schema_version": document.schema_version,
-        "schema_fingerprint": document.schema_fingerprint,
-        "semantic_mapping_calls": document.semantic_mapping_calls,
-        "mapping_source": document.mapping_source,
         "parsed_summary": _safe_parsed_summary(document),
         "system_decision": None if quotation is None else quotation.system_decision,
         "confidence_summary": _confidence_summary(field_values),
@@ -1387,15 +1402,20 @@ def serialize_document(session: Session, document: DocumentRecord) -> dict[str, 
                 .order_by(DocumentArtifactRecord.page_number)
             )
         ],
-        "mapping": None
-        if mapping is None
-        else {
-            "id": mapping.id,
-            "trust_state": mapping.trust_state,
-            "times_seen": mapping.times_seen,
-            "times_confirmed": mapping.times_confirmed,
-            "human_verified": mapping.human_verified,
-        },
+        "extracted_source_facts": [
+            {
+                "label": fact.label,
+                "value": json.loads(fact.value_json),
+                "source_path": fact.source_path,
+                "extraction_method": fact.extraction_method,
+                "confidence": str(fact.confidence),
+                "confidence_reason": fact.confidence_reason,
+                "normalization_status": fact.normalization_status,
+                "canonical_field": fact.canonical_field,
+                "review_status": fact.review_status,
+            }
+            for fact in source_facts
+        ],
         "quotation": quotation_payload,
         "reviews": [
             {
@@ -1410,18 +1430,6 @@ def serialize_document(session: Session, document: DocumentRecord) -> dict[str, 
                 select(ReviewRecord)
                 .where(ReviewRecord.document_id == document.id)
                 .order_by(ReviewRecord.created_at.desc())
-            )
-        ],
-        "learning": [
-            {
-                "id": learning.id,
-                "review_id": learning.review_id,
-                "status": learning.status,
-            }
-            for learning in session.scalars(
-                select(ReviewLearningRecord)
-                .where(ReviewLearningRecord.document_id == document.id)
-                .order_by(ReviewLearningRecord.created_at.desc())
             )
         ],
         "email_extraction": _serialize_email_extraction(session, document.id),
@@ -1511,7 +1519,7 @@ def ingest_failed_document(
     data: bytes,
     content_type: str | None,
     error_message: str,
-    settings: Settings,
+    settings: Config,
     batch_id: str | None = None,
 ) -> DocumentRecord:
     document_id = str(uuid4())
@@ -1552,12 +1560,11 @@ def serialize_batch(session: Session, batch: BatchRecord) -> dict[str, Any]:
         status_counts[doc.status] = status_counts.get(doc.status, 0) + 1
 
     terminal_statuses = {
+        "pending_extraction",
         "pending_review",
         "approved",
         "rejected",
         "failed",
-        "needs_mapping_confirmation",
-        "needs_mapping_resolution",
     }
     is_completed = len(docs) > 0 and all(doc.status in terminal_statuses for doc in docs)
 

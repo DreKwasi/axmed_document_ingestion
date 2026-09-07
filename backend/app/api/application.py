@@ -1,10 +1,11 @@
 import asyncio
 import json
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
@@ -15,7 +16,6 @@ from app.application.documents import (
     ReviewValidationError,
     UploadValidationError,
     apply_review_action,
-    confirm_mapping,
     create_batch,
     delete_document,
     ingest_email,
@@ -23,6 +23,7 @@ from app.application.documents import (
     ingest_image,
     ingest_json,
     ingest_pdf,
+    reextract_json_document,
     serialize_batch,
     serialize_document,
 )
@@ -33,12 +34,13 @@ from app.application.evaluations import (
     seed_evaluation_cases,
 )
 from app.application.processing_events import list_events_after, record_event, serialize_event
-from app.core.settings import Settings, get_settings
-from app.domain.schema_mapping import (
-    ChainedSemanticMappingProvider,
-    LangChainSemanticMappingProvider,
-    RecordedSemanticMappingProvider,
-    SemanticMappingProvider,
+from app.core.config import Config, get_config
+from app.core.logging import get_api_logger
+from app.domain.json_extraction import (
+    ChainedJsonSemanticExtractor,
+    JsonSemanticExtractor,
+    LangChainJsonSemanticExtractor,
+    RecordedJsonSemanticExtractor,
 )
 from app.infrastructure.database import create_sqlite_engine, run_migrations
 from app.infrastructure.models import (
@@ -50,6 +52,11 @@ from app.infrastructure.models import (
     ProcessingEventRecord,
     QuotationRecord,
 )
+from app.workers.email_extraction import consume_email_extraction
+from app.workers.ocr import consume_ocr
+from app.workers.pdf_extraction import consume_pdf_extraction
+
+logger = get_api_logger()
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -71,11 +78,10 @@ def _absolute_path(path: Path) -> Path:
     return path if path.is_absolute() else PROJECT_ROOT / path
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
-    active_settings = settings or get_settings()
+def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtractor | None = None) -> FastAPI:
+    active_settings = settings or get_config()
     active_settings.upload_dir = _absolute_path(active_settings.upload_dir)
-    active_settings.task_database_path = _absolute_path(active_settings.task_database_path)
-    active_settings.recorded_mapping_dir = _absolute_path(active_settings.recorded_mapping_dir)
+    active_settings.recorded_json_extraction_dir = _absolute_path(active_settings.recorded_json_extraction_dir)
     active_settings.golden_dataset_path = _absolute_path(active_settings.golden_dataset_path)
     engine = create_sqlite_engine(active_settings.database_url)
     session_factory = sessionmaker(
@@ -84,23 +90,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         autocommit=False,
         expire_on_commit=False,
     )
-    mapping_providers: list[SemanticMappingProvider] = []
-    if active_settings.resolved_gemini_api_key:
-        mapping_providers.append(
-            LangChainSemanticMappingProvider(
-                api_key=active_settings.resolved_gemini_api_key,
-                model=active_settings.resolved_gemini_model,
+    extractors: list[JsonSemanticExtractor] = [
+        RecordedJsonSemanticExtractor(active_settings.recorded_json_extraction_dir)
+    ]
+    if active_settings.gemini_api_key:
+        extractors.append(
+            LangChainJsonSemanticExtractor(
+                api_key=active_settings.gemini_api_key,
+                model=active_settings.gemini_model,
+                request_timeout_seconds=active_settings.gemini_request_timeout_seconds,
             )
         )
-    mapping_providers.append(RecordedSemanticMappingProvider(active_settings.recorded_mapping_dir))
-    provider = ChainedSemanticMappingProvider(mapping_providers) if len(mapping_providers) > 1 else mapping_providers[0]
+    extractor = json_extractor or (
+        ChainedJsonSemanticExtractor(extractors) if len(extractors) > 1 else extractors[0]
+    )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
+        # Uvicorn installs its logging configuration immediately before startup.
+        # Bind here as well so the dedicated lifecycle handler survives that setup.
+        global logger
+        logger = get_api_logger()
         active_settings.upload_dir.mkdir(parents=True, exist_ok=True)
         run_migrations(active_settings.database_url, PROJECT_ROOT)
         with session_factory() as session:
             seed_evaluation_cases(session, active_settings.golden_dataset_path)
+
+        logger.info("Axmed Document Intelligence API started")
         yield
 
     app = FastAPI(title=active_settings.app_name, version="0.1.0", lifespan=lifespan)
@@ -118,6 +134,104 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     SessionDep = Annotated[Session, Depends(get_request_session)]
 
+    def _record_background_failure(document_id: str, stage: str) -> None:
+        with session_factory() as event_session:
+            record_event(
+                event_session,
+                document_id=document_id,
+                stage=stage,
+                metadata={"reason": "background_processing_failed"},
+            )
+            event_session.commit()
+
+    def _run_email_extraction(extraction_id: str, document_id: str) -> None:
+        started_at = time.perf_counter()
+        logger.info("[Doc %s] >>> Background task STARTED: Email extraction (%s)", document_id[:8], extraction_id[:8])
+        try:
+            with session_factory() as background_session:
+                consume_email_extraction(background_session, extraction_id, active_settings)
+            logger.info(
+                "[Doc %s] <<< Background task COMPLETED: Email extraction in %.2fs",
+                document_id[:8],
+                time.perf_counter() - started_at,
+            )
+        except Exception as error:
+            logger.error(
+                "[Doc %s] !!! Background task FAILED: Email extraction (%s), error_type=%s",
+                document_id[:8],
+                extraction_id[:8],
+                type(error).__name__,
+            )
+            _record_background_failure(document_id, "email_extraction_background_failed")
+
+    def _run_pdf_extraction(extraction_id: str, document_id: str) -> None:
+        started_at = time.perf_counter()
+        logger.info("[Doc %s] >>> Background task STARTED: PDF extraction (%s)", document_id[:8], extraction_id[:8])
+        try:
+            with session_factory() as background_session:
+                consume_pdf_extraction(background_session, extraction_id, active_settings)
+            logger.info(
+                "[Doc %s] <<< Background task COMPLETED: PDF extraction in %.2fs",
+                document_id[:8],
+                time.perf_counter() - started_at,
+            )
+        except Exception as error:
+            logger.error(
+                "[Doc %s] !!! Background task FAILED: PDF extraction (%s), error_type=%s",
+                document_id[:8],
+                extraction_id[:8],
+                type(error).__name__,
+            )
+            _record_background_failure(document_id, "pdf_extraction_background_failed")
+
+    def _run_ocr(job_id: str, document_id: str) -> None:
+        started_at = time.perf_counter()
+        logger.info("[Doc %s] >>> Background task STARTED: OCR (%s)", document_id[:8], job_id[:8])
+        try:
+            with session_factory() as background_session:
+                consume_ocr(background_session, job_id, active_settings)
+            logger.info(
+                "[Doc %s] <<< Background task COMPLETED: OCR in %.2fs",
+                document_id[:8],
+                time.perf_counter() - started_at,
+            )
+        except Exception as error:
+            logger.error(
+                "[Doc %s] !!! Background task FAILED: OCR (%s), error_type=%s",
+                document_id[:8],
+                job_id[:8],
+                type(error).__name__,
+            )
+            _record_background_failure(document_id, "ocr_background_failed")
+
+    def _schedule_document_processing(
+        background_tasks: BackgroundTasks,
+        document: DocumentRecord,
+        response: dict[str, Any],
+    ) -> None:
+        if not active_settings.background_processing_enabled:
+            logger.warning("[Doc %s] Background processing disabled in settings.", document.id[:8])
+            return
+        if document.source_system == "email" and response.get("email_extraction"):
+            ext_id = response["email_extraction"]["id"]
+            logger.info("[Doc %s] Scheduling background task: email extraction (%s)", document.id[:8], ext_id[:8])
+            background_tasks.add_task(_run_email_extraction, ext_id, document.id)
+        elif document.source_system == "pdf" and response.get("pdf_extraction"):
+            ext_id = response["pdf_extraction"]["id"]
+            logger.info("[Doc %s] Scheduling background task: PDF extraction (%s)", document.id[:8], ext_id[:8])
+            background_tasks.add_task(_run_pdf_extraction, ext_id, document.id)
+        elif document.status == "needs_ocr" and response.get("ocr"):
+            job_id = response["ocr"]["id"]
+            logger.info("[Doc %s] Scheduling background task: OCR (%s)", document.id[:8], job_id[:8])
+            background_tasks.add_task(_run_ocr, job_id, document.id)
+        else:
+            logger.info(
+                "[Doc %s] Synchronous processing finished (status=%s, source=%s)",
+                document.id[:8],
+                document.status,
+                document.source_system,
+            )
+
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok", "service": "axmed-document-intelligence"}
@@ -125,6 +239,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def _process_upload_file(
         session: Session,
         file: UploadFile,
+        background_tasks: BackgroundTasks,
         batch_id: str | None = None,
         isolate_failures: bool = False,
     ) -> dict[str, Any]:
@@ -167,88 +282,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     content_type=file.content_type,
                     data=data,
                     settings=active_settings,
-                    provider=provider,
+                    extractor=extractor,
                     batch_id=batch_id,
                 )
             else:
                 raise UploadValidationError(f"Unsupported file format: {filename}")
 
             response = serialize_document(session, document)
-            if (
-                document.source_system == "email"
-                and active_settings.background_job_dispatch_enabled
-                and response.get("email_extraction")
-            ):
-                try:
-                    from app.workers.tasks import enqueue_email_extraction
-
-                    enqueue_email_extraction(
-                        response["email_extraction"]["id"],
-                        database_url=active_settings.database_url,
-                        task_database_path=str(active_settings.task_database_path),
-                        resolver_url=active_settings.semantic_resolver_url,
-                        resolver_token=active_settings.semantic_resolver_token,
-                        resolver_model=active_settings.semantic_resolver_model,
-                    )
-                except Exception:
-                    with session_factory() as event_session:
-                        record_event(
-                            event_session,
-                            document_id=document.id,
-                            stage="email_extraction_dispatch_failed",
-                            metadata={"reason": "queue_unavailable"},
-                        )
-                        event_session.commit()
-            if (
-                document.source_system == "pdf"
-                and active_settings.background_job_dispatch_enabled
-                and response.get("pdf_extraction")
-            ):
-                try:
-                    from app.workers.tasks import enqueue_pdf_extraction
-
-                    enqueue_pdf_extraction(
-                        response["pdf_extraction"]["id"],
-                        database_url=active_settings.database_url,
-                        task_database_path=str(active_settings.task_database_path),
-                        resolver_url=active_settings.semantic_resolver_url,
-                        resolver_token=active_settings.semantic_resolver_token,
-                        resolver_model=active_settings.semantic_resolver_model,
-                    )
-                except Exception:
-                    with session_factory() as event_session:
-                        record_event(
-                            event_session,
-                            document_id=document.id,
-                            stage="pdf_extraction_dispatch_failed",
-                            metadata={"reason": "queue_unavailable"},
-                        )
-                        event_session.commit()
-            if (
-                document.status == "needs_ocr"
-                and active_settings.background_job_dispatch_enabled
-                and response.get("ocr")
-            ):
-                try:
-                    from app.workers.tasks import enqueue_ocr_job
-
-                    enqueue_ocr_job(
-                        response["ocr"]["id"],
-                        database_url=active_settings.database_url,
-                        task_database_path=str(active_settings.task_database_path),
-                        upload_dir=str(active_settings.upload_dir),
-                        service_url=active_settings.ocr_service_url,
-                        service_token=active_settings.ocr_service_token,
-                    )
-                except Exception:
-                    with session_factory() as event_session:
-                        record_event(
-                            event_session,
-                            document_id=document.id,
-                            stage="ocr_dispatch_failed",
-                            metadata={"reason": "queue_unavailable"},
-                        )
-                        event_session.commit()
+            _schedule_document_processing(background_tasks, document, response)
             return response
         except UploadValidationError as error:
             if isolate_failures:
@@ -279,11 +320,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/v1/documents", status_code=201)
     async def upload_document(
+        background_tasks: BackgroundTasks,
         session: SessionDep,
         file: UploadFile = File(...),  # noqa: B008
         batch_id: str | None = None,
     ):
-        return await _process_upload_file(session, file, batch_id=batch_id, isolate_failures=False)
+        return await _process_upload_file(session, file, background_tasks, batch_id=batch_id, isolate_failures=False)
 
     @app.get("/api/v1/documents")
     def list_documents(session: SessionDep):
@@ -306,20 +348,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/v1/batches", status_code=201)
     async def upload_batch(
+        background_tasks: BackgroundTasks,
         session: SessionDep,
         files: list[UploadFile] = File(...),  # noqa: B008
         name: str | None = None,
     ):
         if not files:
             raise HTTPException(status_code=400, detail="At least one file is required.")
+        filenames = [f.filename or "unknown" for f in files]
+        logger.info("Batch upload received: %d files %s (batch_name=%s)", len(files), filenames, name)
         batch = create_batch(session, name=name)
         for file in files:
             await _process_upload_file(
                 session=session,
                 file=file,
+                background_tasks=background_tasks,
                 batch_id=batch.id,
                 isolate_failures=True,
             )
+        logger.info("Batch upload complete: batch_id=%s, files_count=%d", batch.id[:8], len(files))
         return serialize_batch(session, batch)
 
     @app.get("/api/v1/batches")
@@ -399,10 +446,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
-    @app.post("/api/v1/documents/{document_id}/mapping/confirm")
-    def confirm_document_mapping(document_id: str, session: SessionDep):
+    @app.post("/api/v1/documents/{document_id}/reextract")
+    def reextract_document(document_id: str, session: SessionDep):
         try:
-            document = confirm_mapping(session, document_id, active_settings)
+            document = reextract_json_document(session, document_id, active_settings, extractor)
             return serialize_document(session, document)
         except LookupError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
@@ -410,7 +457,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=409, detail=str(error)) from error
 
     @app.post("/api/v1/documents/{document_id}/reviews/{action}")
-    def review_document(document_id: str, action: str, command: ReviewCommand, session: SessionDep):
+    def review_document(
+        document_id: str,
+        action: str,
+        command: ReviewCommand,
+        background_tasks: BackgroundTasks,
+        session: SessionDep,
+    ):
         if action not in {"correct", "approve", "reject"}:
             raise HTTPException(status_code=404, detail="Unknown review action.")
         if action == "correct" and not command.patches:
@@ -422,30 +475,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 session, document_id, f"{action}ed" if action != "approve" else "approved", command.model_dump()
             )
             response = serialize_document(session, document)
-            if action == "correct" and active_settings.background_job_dispatch_enabled and response["learning"]:
-                learning_id = response["learning"][0]["id"]
-                try:
-                    # Import only when dispatch is enabled: test apps must not create or touch a shared queue.
-                    from app.workers.tasks import enqueue_correction_learning
-
-                    enqueue_correction_learning(
-                        learning_id,
-                        database_url=active_settings.database_url,
-                        task_database_path=str(active_settings.task_database_path),
-                        resolver_url=active_settings.learning_resolver_url,
-                        resolver_token=active_settings.learning_resolver_token,
-                    )
-                except Exception:
-                    # The decision is already durable. Keep the failed dispatch visible without leaking internals.
-                    with session_factory() as event_session:
-                        record_event(
-                            event_session,
-                            document_id=document_id,
-                            learning_id=learning_id,
-                            stage="learning_dispatch_failed",
-                            metadata={"reason": "queue_unavailable"},
-                        )
-                        event_session.commit()
             return response
         except LookupError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
@@ -517,7 +546,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/v1/evaluations/runs", status_code=201)
     def run_evaluation(session: SessionDep):
-        if active_settings.resolved_gemini_api_key:
+        if active_settings.gemini_api_key:
             run = run_live_pdf_evaluation(
                 session,
                 project_root=PROJECT_ROOT,
@@ -529,7 +558,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 session,
                 project_root=PROJECT_ROOT,
                 golden_dataset_path=active_settings.golden_dataset_path,
-                provider=provider,
+                extractor=extractor,
             )
         return {"id": run.id, "status": run.status, "summary": json.loads(run.summary_json)}
 
