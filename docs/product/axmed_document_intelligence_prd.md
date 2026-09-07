@@ -229,25 +229,17 @@ Primary surfaces:
 
 No externally deployed database is required.
 
-Application state lives locally.
-
-Huey's internal queue should use a separate SQLite database so queue state and application data aren't mixed.
-
-Conceptually:
-
-```text
-data/
-├── app.db
-└── tasks.db
-```
+Application state lives locally in `data/app.db`.
 
 ## Background processing
 
-**Huey with SqliteHuey**
+**API-owned Python background tasks**
 
-Huey provides a real worker boundary without requiring an additional infrastructure service.
+For the current single-process implementation, FastAPI schedules document-specific Python background tasks after the upload response is sent. No separate queue database or worker process is required.
 
-The worker handles operations that may be:
+The API writes safe terminal lifecycle logs for every task: scheduled, started, completed with duration, or failed with only an error type. Logs include a short document/job identifier and never source text or credentials; persisted processing events remain the browser-facing progress record.
+
+Background tasks handle operations that may be:
 
 - slow
 - remote
@@ -263,9 +255,9 @@ That means one bad scan doesn't prevent unrelated clean documents from completin
 
 # 7. Sync vs async processing
 
-The system should not push all document work into background workers by default.
+The system should not push all document work into background tasks by default.
 
-Fast, deterministic work stays in the normal FastAPI request flow. Slow, remote, model-dependent, or retryable work is handed to Huey.
+Fast, deterministic work stays in the normal FastAPI request flow. Slow or model-dependent work is scheduled by the API after the source has been persisted.
 
 ## Synchronous fast path
 
@@ -282,7 +274,7 @@ JSON parsing / MIME parsing / LiteParse
  ↓
 Persist parsed representation
  ↓
-Queue semantic extraction if required
+For JSON: profile, extract, validate, normalize, and persist source facts
  ↓
 Respond
 ```
@@ -293,12 +285,11 @@ Examples:
 - MIME parsing for email
 - LiteParse for digitally generated PDFs
 - basic image validation
-- schema fingerprint generation
-- known schema lookup
+- per-document JSON structural profiling
 
 ## Async path
 
-Huey handles work where runtime is less predictable:
+The API-owned background task handles work where runtime is less predictable:
 
 ```text
 Parsed source
@@ -324,7 +315,7 @@ The useful unit of background work is generally one document, not an entire uplo
 
 # 8. Async path
 
-Huey handles operations with unpredictable runtime or external dependencies.
+API-owned background tasks handle operations with unpredictable runtime or external dependencies.
 
 ```text
 Parsed document
@@ -332,8 +323,6 @@ Parsed document
 OCR if necessary
  ↓
 PII scan/redaction
- ↓
-Schema mapping
  ↓
 LLM semantic extraction
  ↓
@@ -354,12 +343,12 @@ Persist results
 
 Use **Server-Sent Events**.
 
-The Huey worker does not communicate directly with browser connections.
+The API background task does not communicate directly with browser connections.
 
 Instead:
 
 ```text
-Huey
+API background task
  ↓
 writes processing state/event
  ↓
@@ -374,7 +363,7 @@ Vue
 
 SQLite therefore becomes the communication boundary.
 
-This keeps the worker independent from frontend connection state.
+This keeps processing independent from frontend connection state.
 
 If the browser disconnects, document processing continues normally.
 
@@ -1075,62 +1064,53 @@ Human reviewers should be able to see this difference.
 
 ---
 
-# 32. JSON schema recognition
+# 32. JSON semantic extraction without schema reuse
 
-JSON should use a progressive field-mapping system: simple and known cases should be handled cheaply and deterministically, while ambiguous cases should receive progressively stronger interpretation.
-
-Fuzzy similarity should not be treated as authoritative. It is only used to generate plausible candidates for unresolved fields.
+Each JSON upload is interpreted independently as a source document. The system does not store schema fingerprints, mappings, correction-learning records, or aliases for later reuse.
 
 ```text
 Incoming JSON
  ↓
-Flatten / discover paths
+Profile its structure in memory
  ↓
-Normalize key names
+Recover quotation-relevant source facts
  ↓
-Look up known supplier/schema mappings
+Validate each fact's JSONPath and value against the source
  ↓
-Apply deterministic canonical matches
+Assign extraction confidence from source recovery quality
  ↓
-Apply small global alias set
+Normalize only facts with a certain canonical interpretation
  ↓
-Generate fuzzy candidates for unresolved fields
+Persist all facts, including unmapped facts
  ↓
-LLM resolves ambiguous mappings using field context
- ↓
-Validate
- ↓
-Human correction where required
- ↓
-Persist successful mappings
+Human review of the quotation result
 ```
 
-The key principle is:
+The profile inventories paths, types, arrays, repeated object shapes, and small contextual samples for this upload only. It is neither persisted as a fingerprint nor reused for another document.
+
+Every quotation-relevant source fact stores its raw value, JSONPath, method, confidence, rationale, normalization status, and optional canonical field. The original JSON remains authoritative.
 
 ```text
-Known mapping
-→ deterministic reuse
-
-Obvious canonical field
-→ deterministic mapping
-
-Near-match field name
-→ fuzzy candidates only
-
-Ambiguous/new field
-→ LLM resolution
-
-Low-confidence result
-→ human review
+$.order_info.minimum = "5,000 boxes"
+ ↓
+source fact recovered and JSONPath/value validated
+ ↓
+High extraction confidence
+ ↓
+canonical normalization uncertain
+ ↓
+persist as an unmapped extracted source fact
 ```
 
-This keeps the LLM focused on semantic ambiguity rather than repeatedly rediscovering mappings the system already understands.
+That is successful extraction. Canonical-mapping uncertainty never lowers extraction confidence, creates a review issue, or fails a document. A document fails only when no meaningful quotation facts can be recovered. Invalid claims get one corrective extraction attempt, while valid facts from the first attempt remain stored.
+
+Canonical quotation fields remain blank when normalization is not certain. `field_evidence` is used only for normalized canonical fields; generic extracted facts are stored separately and are not shown in the current product detail. Human decisions apply to the quotation result, not to a source-schema interpretation.
 
 ---
 
-# 33. Key normalization
+# 33. Source-fact normalization
 
-Supplier naming conventions vary:
+JSON key styles vary:
 
 ```text
 pricePerPack
@@ -1139,225 +1119,35 @@ PRICE_PER_PACK
 Price Per Pack
 ```
 
-Normalize these into a comparable representation before mapping.
-
-This is cheap and deterministic.
+The profile retains the original JSONPaths. Extraction may use normalized key context to understand a single document, but it must not turn key spelling into a stored mapping or infer a canonical field without source support.
 
 ---
 
-# 34. Small global alias layer
+# 34. Canonical normalization boundary
 
-Maintain only a small set of obvious universal aliases.
+Normalization is a separate outcome from extraction. The system may populate a canonical field only where the extracted fact has a certain, source-supported meaning. It does not use a global alias registry, fuzzy field matching, or schema memory to force a mapping.
 
-Example:
-
-```text
-generic_name
-active_ingredient
-active_moiety
-→ product.inn
-```
-
-The system should not depend on maintaining an enormous global dictionary.
-
-A large alias registry quickly becomes brittle and supplier-specific. The goal is to handle common conventions deterministically while allowing the mapping memory and LLM resolver to absorb the long tail.
+When a fact has an uncertain canonical interpretation, retain its source value and JSONPath as `unmapped`. This is not an exception, a review issue, or a confidence penalty.
 
 ---
 
-# 35. Fuzzy matching as candidate generation
+# 35. Source validation and partial success
 
-Fuzzy matching should not automatically accept a canonical mapping on first encounter.
+For direct JSON facts, resolve the supplied JSONPath and compare the recovered value with the claimed value. For semantic facts, confirm that their source path exists and that their rationale remains consistent with its scoped source context. Invalid claims trigger a single retry that identifies the rejected paths.
 
-Use a lightweight technique such as RapidFuzz only to narrow the candidate space for fields that have not already been resolved by exact matches, known schema mappings, or the small global alias set.
-
-For example:
-
-```text
-source field:
-min_order_packs
-
-possible canonical candidates:
-1. quantity.minimum_order_quantity
-2. packaging.units_per_pack
-3. quantity.quoted_quantity
-```
-
-The fuzzy score is not treated as proof.
-
-Instead, the LLM receives:
-
-```text
-source field
-sample value
-nearby fields
-supplier/schema context
-top candidate mappings
-```
-
-and chooses the most plausible canonical target.
-
-If the result remains uncertain, the field is flagged for human review.
-
-The project should not rely on a hard rule such as:
-
-```text
-score > 92
-→ accept
-```
-
-unless later evaluation shows that a threshold is safe for a narrowly defined field class.
+The system retains all valid facts from either pass. A partially valid extraction remains successful and may produce a sparse canonical quotation. Only a result with no meaningful, source-grounded quotation facts is failed.
 
 ---
 
-# 36. Supplier-specific schema memory
+# 36. Extracted-source-fact persistence
 
-SQLite stores successful mappings.
+`extracted_source_facts` is the normalized store for every quotation-relevant fact: document and optional quotation identifiers, label, JSON value, source JSONPath, extraction method, numeric confidence and rationale, normalization status, optional canonical field, and inherited human-review status.
 
-Conceptually:
-
-```text
-schema_mapping
-
-supplier
-source_system
-schema_version
-schema_fingerprint
-
-source_path
-canonical_field
-
-mapping_method
-confidence
-
-times_seen
-times_confirmed
-
-human_verified
-
-created_at
-last_seen_at
-```
-
-Example:
-
-```text
-SanovaERP
-2.4.1
-offer.products[].commercials.price_per_pack
-→ pricing.quoted_price.amount
-```
+The source-fact record preserves material that does not fit the canonical quotation today. It does not convert uncertain normalization into a failed extraction. Re-extracting an unreviewed JSON source clears its prior machine-generated quotation projection and source facts, then processes the retained original file again. Completed human-review audit records are preserved.
 
 ---
 
-# 37. Schema fingerprinting
-
-Not every supplier provides an explicit schema version.
-
-Generate a fingerprint from normalized JSON paths.
-
-For example:
-
-```text
-offer.products[].commercials.price_per_pack
-offer.products[].commercials.minimum_order_quantity_packs
-offer.products[].packaging.units_per_pack
-offer.products[].generic_name
-```
-
-Normalize and hash the structure.
-
-```text
-schema_fingerprint =
-SHA256(normalized_paths)
-```
-
-If the supplier silently changes its ERP export structure, the fingerprint changes and the system can re-evaluate mappings.
-
----
-
-# 38. Learning from uploads
-
-The model itself isn't being retrained.
-
-The application builds **mapping memory**.
-
-```text
-First encounter
- ↓
-unknown fields
- ↓
-LLM-assisted mapping
- ↓
-validation / review
- ↓
-persist mapping
-
-Future encounter
- ↓
-mapping found
- ↓
-deterministic extraction
-```
-
-This has a major cost consequence.
-
-The LLM increasingly handles only novelty.
-
----
-
-# 39. Human corrections improve schema recognition
-
-Suppose the system maps:
-
-```text
-order_qty
-→ minimum_order_quantity
-```
-
-but a reviewer corrects it to:
-
-```text
-order_qty
-→ quoted_quantity
-```
-
-That correction should update the supplier/schema mapping.
-
-Human review therefore improves future extraction.
-
----
-
-# 40. Mapping trust
-
-A mapping shouldn't automatically become permanently trusted because the LLM used it once.
-
-Track:
-
-```text
-times_seen
-times_confirmed
-human_verified
-conflict_count
-last_seen
-schema_fingerprint
-```
-
-Potential policy:
-
-```text
-Human verified
-→ trusted deterministic reuse
-
-Repeated model mapping + successful validation
-→ reusable with high confidence
-
-Changed fingerprint
-→ re-evaluate
-```
-
----
-
-# 41. Deterministic derived calculations
+# 37. Deterministic derived calculations
 
 Several calculations should never require an LLM.
 
@@ -1684,8 +1474,10 @@ ocr_required
 ocr_started
 ocr_completed
 pii_redacted
-schema_mapping_started
-extraction_started
+json_profiling_started
+json_semantic_extraction_started
+json_source_validation_retrying
+normalization_started
 validation_completed
 review_required
 processing_completed
@@ -1710,9 +1502,9 @@ Fail during synchronous parsing where possible.
 
 ### OCR service unavailable
 
-Worker retries.
+The API records the failure and exposes it through the document status and SSE timeline. A user can retry from the source workflow; automatic retry is intentionally deferred until a durable production queue is introduced.
 
-If retry budget is exhausted:
+If the service remains unavailable:
 
 ```text
 failed
@@ -1731,31 +1523,11 @@ Store null and flag.
 
 ---
 
-# 51. File batches
+# 51. Multi-document upload
 
-A folder upload is represented conceptually as a batch containing documents.
+One document-upload action accepts either one file or several files. Every file becomes an independent document with its own extraction, failure, and review state. A failed file does not block its siblings.
 
-```text
-Batch
- ├── Document
- ├── Document
- ├── Document
- └── Document
-```
-
-Processing occurs independently per document.
-
-Batch progress is aggregated from child documents.
-
-This allows:
-
-```text
-997 completed
-2 require review
-1 failed
-```
-
-without treating the whole batch as failed.
+The product does not create a separate batch resource or require batch listing and retrieval routes. The upload response is the list of documents created by that request.
 
 ---
 
@@ -1836,20 +1608,7 @@ duration
 estimated cost
 ```
 
-Then demonstrate the effect of schema memory.
-
-For example:
-
-```text
-First Sanova schema encounter
-→ LLM schema mapping
-
-Second identical schema
-→ cached mapping
-→ no schema-mapping LLM call
-```
-
-This is a meaningful product characteristic rather than just a benchmark.
+For JSON, telemetry records the semantic extraction call and its source-validation retry, if any. It never stores a schema fingerprint or reusable mapping.
 
 ---
 
@@ -1864,7 +1623,7 @@ PII processing
 LLM extraction
 normalization
 validation
-total worker time
+total processing time
 ```
 
 This will show where the actual bottlenecks are.
@@ -1881,11 +1640,9 @@ SQLite would likely be replaced with a database appropriate for concurrent distr
 
 The take-home does **not** deploy one.
 
-## Worker system
+## Background-processing system
 
-Huey is appropriate for the constrained local implementation.
-
-At larger distributed scale, queue architecture would be revisited based on throughput, retry guarantees and deployment topology.
+The take-home uses API-owned Python background tasks and does not depend on Huey. This is intentionally a single-process convenience, not a durable distributed job system. At production scale, introduce a managed queue and worker service only with explicit timeouts, idempotency, retry policy, dead-letter handling, stale-job recovery, and operational observability.
 
 ## Object storage
 
@@ -1938,7 +1695,7 @@ build
 Important tests include:
 
 - parser tests
-- schema mapping tests
+- JSON semantic extraction and source-validation tests
 - deterministic calculation tests
 - validation tests
 - PII redaction tests
@@ -1952,26 +1709,23 @@ A small deterministic fixture set can run continuously, with fuller LLM evaluati
 
 # 59. Repository structure
 
-A sensible high-level repository might be:
+The backend uses a shallow structure with names that describe the code directly:
 
 ```text
 axmed-document-intelligence/
 
 ├── backend/
 │ ├── app/
-│ │ ├── ingestion/
-│ │ ├── parsers/
-│ │ ├── ocr/
-│ │ ├── privacy/
+│ │ ├── api.py
+│ │ ├── config.py
+│ │ ├── database.py
+│ │ ├── documents.py
+│ │ ├── events.py
+│ │ ├── evaluations.py
+│ │ ├── logging.py
+│ │ ├── models.py
 │ │ ├── extraction/
-│ │ ├── schema_mapping/
-│ │ ├── normalization/
-│ │ ├── validation/
-│ │ ├── confidence/
-│ │ ├── provenance/
-│ │ ├── review/
-│ │ ├── workers/
-│ │ └── models/
+│ │ └── security/
 │ │
 │ └── tests/
 │
@@ -2061,7 +1815,7 @@ Unreadable values remain unreadable.
 
 **No external database or Redis requirement for the take-home.**
 
-SQLite + Huey gives us the local architecture we want.
+SQLite plus API-owned Python background tasks gives us the local architecture we want for now.
 
 **No medicine-catalogue RAG layer.**
 
@@ -2069,23 +1823,7 @@ This take-home does not require building a medicine catalogue or matching extrac
 
 Without a trusted reference corpus, adding catalogue retrieval would solve a different problem and add complexity without improving the core quotation-extraction task.
 
-Instead, schema recognition follows a layered approach:
-
-```text
-known mapping
-→ deterministic reuse
-
-similar unknown field
-→ fuzzy candidate generation
-
-semantic ambiguity
-→ LLM resolution
-
-reviewer correction
-→ stored mapping memory
-```
-
-The retrieval-like memory in this project is the SQLite-backed supplier/schema mapping store, not a medicine catalogue.
+Instead, each JSON source is profiled and interpreted independently. Its extracted facts are JSONPath-validated, normalized only where certain, and otherwise preserved without a reusable schema interpretation.
 
 ---
 
@@ -2114,10 +1852,8 @@ Expose uncertainty instead of hiding it
 Let a human make the final decision
 ```
 
-The schema-mapping memory is one of the pieces to emphasize most.
+Source-grounded extraction is the piece to emphasize most. The system must preserve correct facts even when a source's structure does not cleanly fit the canonical quotation.
 
-On the first encounter with a supplier export, the system may need meaningful LLM assistance. Once that schema has been understood and validated, subsequent documents increasingly become ordinary deterministic data processing.
-
-So accuracy should improve while latency, token consumption, and model cost fall.
+LLM interpretation is scoped to each source. Cost and latency can be improved later with a separately evaluated optimization, but not by treating a prior source-schema interpretation as truth for a new document.
 
 That's a much more interesting document-intelligence system than `upload → LLM → CSV`.

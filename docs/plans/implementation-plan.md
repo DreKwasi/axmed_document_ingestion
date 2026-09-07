@@ -3,7 +3,7 @@
 > Purpose: turn the Axmed document-intelligence PRD into an executable, take-home-sized delivery plan.
 > Status: approved for full scope; publish dependency-ordered work into `TODOS.md` before implementation.
 > Strategy: ship tracer-bullet vertical slices, each demoable through the running FastAPI and Vue application.
-> Critical thesis: deterministic extraction and remembered mappings handle known structure; AI handles novelty and ambiguity.
+> Critical thesis: each JSON source is independently profiled and semantically extracted; canonical normalization never discards a correctly recovered source fact.
 > Trust boundary: every successful extraction enters human review; confidence prioritizes attention but never auto-approves a record. Missing commercial values remain separate availability exceptions.
 > Source: `docs/product/axmed_document_intelligence_prd.md` and the checked-in synthetic corpus in `sample_documents/`.
 
@@ -16,7 +16,7 @@ The finished take-home should demonstrate one coherent workflow:
 3. Receive a canonical quotation with original commercial meaning intact.
 4. See derived values, uncertainty, validation issues, and source evidence separately.
 5. Route exceptions to review, then correct, approve, or reject the result with an auditable outcome.
-6. Re-upload a known supplier schema and demonstrate less model work, lower latency, and lower cost.
+6. Re-extract a retained JSON source explicitly without changing its human-review audit history.
 
 ### Required product stories
 
@@ -24,7 +24,7 @@ The finished take-home should demonstrate one coherent workflow:
 - **US-02 — Track:** A user can see each document move through processing stages and can reconnect without losing work.
 - **US-03 — Review:** A reviewer can inspect canonical quotation lines, prioritized uncertainty, source-versus-derived values, and evidence.
 - **US-04 — Decide:** A reviewer can correct fields and approve or reject a quotation; accepted state is never inferred from extraction success.
-- **US-05 — Learn:** A reviewer-confirmed supplier mapping can be reused deterministically when the same schema fingerprint appears again.
+- **US-05 — Preserve:** A JSON fact with uncertain canonical normalization remains a successful, source-grounded extracted fact.
 - **US-06 — Operate:** An engineer can diagnose failures and compare parse, OCR, PII, model, and total latency without raw document text in logs.
 - **US-07 — Evaluate:** An evaluator can run the supplied corpus against checked-in ground truth and inspect field-level accuracy and cost.
 
@@ -37,12 +37,12 @@ The delivery scope includes every supplied format (JSON, email, native PDF, and 
 ### Repository and runtime
 
 - Monorepo with `backend/` (including `backend/evals/`), `frontend/`, `sample_documents/`, and `data/` (ignored runtime state).
-- Python 3.12 managed by `uv`; FastAPI, Pydantic v2, SQLAlchemy 2, Alembic, Huey/`SqliteHuey`, pytest, Ruff, and mypy.
+- Python 3.12 managed by `uv`; FastAPI, Pydantic v2, SQLAlchemy 2, Alembic, pytest, Ruff, and mypy.
 - Vue 3, Vite, and TypeScript with Vitest, Vue Testing Library, and Playwright.
-- `app.db` for application state and `tasks.db` for Huey. Enable WAL and keep worker writes short.
-- One documented command starts API, worker, and frontend; one command runs the full validation suite.
+- `app.db` for application state. Enable WAL and keep background-task writes short.
+- One documented command starts API and frontend; one command runs the full validation suite.
 
-Python 3.12 is a useful compatibility target because current Presidio guidance supports it. LiteParse is recent and should sit behind a parser adapter with a one-slice feasibility gate. `SqliteHuey` remains appropriate for the local worker boundary and keeps queue state separate from application state.
+Python 3.12 is a useful compatibility target because current Presidio guidance supports it. LiteParse is recent and should sit behind a parser adapter with a one-slice feasibility gate. API-owned Python background tasks keep the current local runtime simple; a later production queue must include bounded calls and stale-job recovery.
 
 ### Backend boundaries
 
@@ -50,15 +50,14 @@ Keep orchestration independent of vendors through small ports:
 
 ```text
 DocumentPipeline
-├── StructuredIngest     JSON schema recognition + trusted mapping memory
+├── StructuredIngest     JSON profiling + per-document semantic fact extraction
 ├── UnstructuredParsers  MIME | LiteParse | PaddleOCR
 ├── ParseQualityPolicy   native text/table quality and OCR decision
 ├── OcrClient            Modal PaddleOCR | fixture fake
 ├── PiiRedactor          Presidio
 ├── SemanticExtractor    LangChain structured output | fixture fake
-├── SchemaMappingStore   fingerprinted mappings and trust counters
 ├── QuotationRules       normalization, calculations, validation, confidence
-└── ReviewService        correction, approval, rejection, mapping confirmation
+└── ReviewService        correction, approval, rejection
 ```
 
 The pipeline owns stage transitions; adapters do not mutate review state directly.
@@ -67,15 +66,14 @@ The pipeline owns stage transitions; adapters do not mutate review state directl
 
 Use relational tables for operational state and versioned JSON for the evolving canonical payload:
 
-- `documents`: identity, file metadata, type, status, failure reason, batch ID.
+- `documents`: identity, file metadata, type, status, and failure reason.
 - `document_artifacts`: native parse, OCR parse, and redacted model input with storage references and quality metadata.
 - `quotations`: canonical payload, schema version, current review status, revision.
 - `field_evidence`: JSON-pointer field path, source location/page/bounds/snippet, method, confidence, supersession link.
 - `processing_events`: monotonic ID, document ID, stage, safe metadata, timestamp; source for SSE.
 - `reviews`: action, field patches, reviewer note, prior/new revision, timestamp.
-- `schema_mappings`: supplier/source system/fingerprint/path mapping plus trust counters and human verification.
+- `extracted_source_facts`: every quotation-relevant JSON fact, including raw value, JSONPath, method, confidence, normalization status, optional canonical field, and inherited review status.
 - `model_invocations`: operation, model, prompt/schema version, token counts, duration, estimated cost; never raw sensitive input.
-- `batches`: aggregate identity and progress only.
 
 Keep business values readable in the canonical payload. Store provenance separately by field path rather than wrapping every scalar. Derived values still carry their calculation and `derived: true` marker in the payload.
 
@@ -83,23 +81,15 @@ Keep business values readable in the canonical payload. Store provenance separat
 
 Version the canonical Pydantic model before the first parser. Its MVP must include quotation type/reference/dates, supplier, currency and commercial terms, line items, product identity with paired ingredient strengths, original packaging description, quoted quantity versus MOQ, quoted price and basis, price tiers/adjustments, normalized price, supply details, regulatory fields, and source metadata. The first UI may show a subset, but parsers must not silently discard supported values.
 
-Unknown means `null` plus a review issue when the field matters; it never means an empty string, zero, or model guess. Use `Decimal` for money and explicit units. Stored quotations and mappings carry schema/transformation versions; incompatible versions require migration or re-evaluation.
+Unknown canonical values remain `null`; they never mean an empty string, zero, or model guess. A correctly recovered fact with no certain canonical destination is stored separately without a review issue or confidence penalty. Use `Decimal` for money and explicit units.
 
 Check in a corpus manifest from Slice 1. For each fixture it names the document class, expected fields, intentionally unreadable/unknown fields, expected review issues, and comparison mode: exact, normalized text, decimal tolerance, ordered/unordered collection, or null correctness.
 
-### Schema-mapping contract
+### JSON extraction contract
 
-A mapping lookup key is `(supplier/source_system, optional source schema version, normalized-path fingerprint)`. A mapping entry records source path pattern, canonical field, transformation/version, provenance, trust state, `times_seen`, `times_confirmed`, `human_verified`, and conflicts.
+Each JSON upload is profiled in memory and then semantically extracted without cross-document memory. Facts carry raw value, JSONPath, method, confidence, rationale, normalization status, and optional canonical field. Direct JSON facts are accepted only when resolving their JSONPath produces the claimed value; invalid claims cause one retry while already validated facts remain.
 
-- Same shape with different values is a cache hit; the same supplier with a changed normalized shape is a miss.
-- A trusted hit is forbidden from calling the semantic schema-mapping adapter.
-- Confirming a proposed mapping makes that mapping reusable.
-- A small global alias layer handles only obvious universal names. Exact canonical matches precede aliases.
-- Fuzzy matching is candidate generation only; it never accepts a mapping. The semantic resolver receives candidates plus field/sample/nearby-field/schema context and may still return an uncertainty flag.
-- Correcting a wrongly mapped field updates or revokes only the affected mapping and records an audit event. It stores a field-interpretation lesson, never a historical commercial value to copy into later offers.
-- A warm run must match the approved cold-run canonical payload except for identifiers, timestamps, and operational metrics.
-
-This project does not build a medicine-catalogue RAG layer. Its retrieval-like memory is the supplier/schema mapping store.
+No schema fingerprint, stored mapping, alias-learning record, mapping confirmation, or automatic reuse is part of the current product. Mapping uncertainty does not affect extraction confidence. Only source readability, ambiguity, conflicts, and pointer/value validation do. A document fails only when no meaningful quotation facts are recovered.
 
 ### State and trust model
 
@@ -125,20 +115,20 @@ Validate media signatures as well as extensions, impose upload/page/text limits,
 
 ## 3. Vertical implementation slices
 
-### Slice 1 — Prove schema learning in one runnable JSON path
+### Slice 1 — Prove source-grounded JSON extraction in one runnable path
 
 **Blocked by:** None  
 **Covers:** US-01, US-03, US-05, US-07
 
-Build the walking skeleton and the product’s core thesis together: FastAPI, minimal Vue review screen, SQLite migrations, versioned canonical contract, corpus manifest, safe upload, path normalization/fingerprinting, a recorded semantic mapping adapter, human mapping confirmation, and trusted reuse. Use Sanova as the unfamiliar JSON fixture.
+Build the walking skeleton and the product’s core thesis together: FastAPI, minimal Vue review screen, SQLite migrations, versioned canonical contract, corpus manifest, safe upload, recursive JSON profiling, a recorded semantic fact extractor, JSONPath/value validation, and extracted-source-fact persistence. Use nested, flat, and mixed JSON fixtures.
 
 Acceptance checks:
 
 - A fresh checkout installs, migrates, and starts the backend/frontend with one documented command.
-- First upload produces a proposed mapping and canonical result; a reviewer can confirm the mapping in the UI.
-- Re-uploading identical-shape data with changed values is a trusted hit, produces the same approved shape, and the adapter boundary asserts zero schema-mapping calls/tokens/cost.
-- Renaming one normalized source path creates a miss; an ambiguous/conflicting mapping requires review.
-- The cold/warm report records mapping calls, recorded token/cost metadata, and same-machine pipeline latency, clearly labelled fixture-backed.
+- First upload produces source-grounded facts and only the canonical fields that can be normalized with certainty.
+- Nested, flat, and mixed JSON structures do not influence one another.
+- `$.order_info.minimum = "5,000 boxes"` persists as a high-confidence unmapped fact while canonical fields remain blank.
+- Invalid pointers trigger a retry, partial-success results retain valid facts, and only no-meaningful-fact results fail.
 - Media signature/size/name protections, canonical null semantics, and the Sanova manifest are tested.
 
 ### Slice 2 — Add deterministic commercial rules, evidence, and review decisions
@@ -151,26 +141,25 @@ Complete the Sanova quotation path with price normalization, validation, field e
 Acceptance checks:
 
 - Review UI separates quoted and derived price, shows formula/source path, and prioritizes failed validations.
-- Corrections retain prior evidence, enqueue PII-safe learning feedback about field interpretation (never a reusable historical price), update/revoke an affected mapping where applicable, and remain unapproved until an explicit approval.
+- Corrections retain prior evidence and remain unapproved until an explicit approval; they never teach a later source-schema interpretation.
 - Approve/reject/correct commands are idempotent; stale revisions conflict; failed or stale records cannot be accepted downstream.
-- Tests cover arithmetic, quantities versus MOQ, invalid dates/percentages/tiers, mapping correction, and review transitions.
-- One ingest action accepts multiple documents and preserves independent review state/source access for each; a Playwright test uploads, confirms mapping, corrects a field, and approves the current revision.
+- Tests cover arithmetic, quantities versus MOQ, invalid dates/percentages/tiers, source-fact validation, and review transitions.
+- One ingest action accepts multiple documents and preserves independent review state/source access for each; a Playwright test uploads, corrects a field, and approves the current revision.
 
 ### Slice 3 — Add durable jobs and reconnectable live progress
 
 **Blocked by:** Slice 2  
 **Covers:** US-02, US-06
 
-Move unpredictable processing behind Huey while preserving the completed JSON behavior. Persist safe stage events in the application database, stream them through FastAPI SSE, and let Vue reconnect from the last event ID.
+Move unpredictable processing into API-owned Python background tasks while preserving the completed JSON behavior. Persist safe stage events in the application database, stream them through FastAPI SSE, and let Vue reconnect from the last event ID.
 
 Acceptance checks:
 
-- API, worker, and UI run separately against `app.db` and `tasks.db`.
+- API and UI run locally against `app.db`; the API schedules document-specific in-process background tasks after persisting intake and logs scheduled/start/completed/failed lifecycle boundaries using safe identifiers only.
 - Refresh/reconnect replays ordered events without duplicating terminal state.
 - Retry policy is bounded and idempotent; retry-after-failure follows an explicit transition.
 - Event/log/exception payload tests prove seeded PII and raw document text cannot escape.
-- Stage duration is recorded and exposed in a safe local diagnostics view/report.
-- Queued human-correction learning is consumed only after PII redaction. The worker invokes the semantic resolver with correction interpretation and mapping evidence, persists its outcome, and the next matching schema run receives that preference as non-authoritative context.
+- Stage duration is recorded in model invocation telemetry and safe terminal logs.
 
 ### Slice 4 — Interpret email chronology behind the privacy boundary
 
@@ -222,13 +211,12 @@ Acceptance checks:
 **Blocked by:** Slices 4–6  
 **Covers:** US-05, US-06, US-07
 
-Extend the Slice 1 harness to every supplied fixture. Produce field/document metrics, null correctness, correction handling, tier/combination integrity, schema reuse, stage latency, and model cost.
+Extend the Slice 1 harness to every supplied fixture. Produce field/document metrics, null correctness, source-grounding, correction handling, tier/combination integrity, stage latency, and model cost.
 
 Acceptance checks:
 
 - One deterministic command emits JSON plus a concise Markdown report.
-- Special assertions cover all tiers, paired combination strengths, non-overlapping ranges, email correction precedence, glare null correctness, and warm-schema call prohibition.
-- Cold/warm timing uses a documented same-machine method; simulated/recorded and live provider measurements are separate.
+- Special assertions cover all tiers, paired combination strengths, non-overlapping ranges, email correction precedence, glare null correctness, JSONPath/value validation, and unmapped-fact preservation.
 - Deterministic parsing/normalization benchmarks have a stable baseline and modest regression budget.
 
 ### Slice 8 — Add independent batch progress and failure isolation
@@ -275,7 +263,7 @@ Acceptance checks:
 
 Recommended milestones:
 
-- **Milestone A — Core thesis:** Slice 1 proves unknown → confirmed → deterministic warm-schema reuse.
+- **Milestone A — Core thesis:** Slice 1 proves source-grounded extraction → validation → selective normalization → human review.
 - **Milestone B — Trustworthy product path:** Slices 2–3 add human decisions, provenance, durable work, and live state.
 - **Milestone C — Full heterogeneous corpus:** Slices 4–7 add email, native PDF, live Modal OCR, and unified evidence.
 - **Milestone D — Full delivery scope:** Slice 8 completes batch processing; Slice 9 completes hardening and submission artifacts.
@@ -284,8 +272,8 @@ Recommended milestones:
 
 ### Per-change gates
 
-- Backend unit tests: domain calculations, state transitions, key normalization, fingerprinting, mappings, validation, confidence.
-- Backend integration tests: SQLite transactions, upload API, Huey jobs, SSE replay, review revisions, adapter contracts.
+- Backend unit tests: domain calculations, state transitions, JSON profiling, source-path validation, selective normalization, and confidence.
+- Backend integration tests: SQLite transactions, upload API, API-owned background tasks, SSE replay, review revisions, adapter contracts.
 - Frontend component tests: processing states, issue prioritization, evidence/origin badges, correction validation.
 - Playwright: upload → progress → review → correct/approve, plus terminal failure.
 - Corpus evaluations: all supplied files against versioned ground truth.
@@ -294,7 +282,7 @@ Recommended milestones:
 
 - Mutate the pack-price formula and confirm Sanova regression tests fail.
 - Make the email parser select the first Azimax price and confirm the correction test fails.
-- Disable fingerprint changes and confirm schema-drift tests fail.
+- Point a claimed JSON fact at an invalid path and confirm validation/retry tests fail if it is accepted.
 - Replace an unreadable OCR value with a plausible number and confirm null/confidence tests fail.
 - Remove event persistence and confirm SSE reconnect/replay tests fail.
 
@@ -308,7 +296,7 @@ Normal CI must not require network access, model credentials, Modal, or non-dete
 | --- | --- | --- |
 | LiteParse is a young dependency | Output/API churn blocks PDF work | Spike and pin in Slice 6; normalize behind `DocumentParser`; retain replacement option. |
 | Presidio false positives remove supplier context | Lower extraction quality | Entity allowlist/policy, redaction audit metadata, corpus tests. |
-| SQLite has one writer at a time | Worker/API lock contention | Separate Huey DB, WAL, short transactions, bounded retry, concurrency test. |
+| SQLite has one writer at a time | API/background-task lock contention | WAL, short transactions, bounded calls, and a concurrency test. |
 | LLM output varies | Flaky tests and unsafe records | Structured schema, prompt versioning, deterministic fixtures, bounded retry, human review. |
 | Live Modal deployment is not yet authorized | OCR integration cannot be verified against the hosted service | Complete contract/recorded tests first; request authorization only when Slice 6 is ready. |
 | Canonical schema grows too quickly | Migration/UI complexity | Version payload, expose a focused review subset, retain rich fields without rendering all initially. |
