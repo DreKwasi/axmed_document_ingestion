@@ -9,7 +9,7 @@ confidence value.
 from dataclasses import dataclass
 from decimal import Decimal
 
-from app.domain.contracts import CanonicalQuotation, Evidence, LineItem
+from app.extraction.contracts import CanonicalQuotation, Evidence, LineItem
 
 STRONG_SOURCE_METHODS = {"human_corrected", "direct_json"}
 
