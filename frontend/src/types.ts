@@ -22,7 +22,7 @@ export type LineItem = {
     currency?: string | null;
     pack_price?: string | null;
     quoted_price: { amount?: string | null; uom?: string | null };
-    normalized_price: { amount?: string | null; uom?: string | null; calculation?: string | null; derived?: boolean };
+    normalized_price: { amount?: string | null; uom?: string | null; calculation?: string | null; derived?: boolean; validation_status?: string | null };
     discount?: string | null;
     extended_price?: string | null;
     price_tiers?: Array<{ min_quantity?: string | null; max_quantity?: string | null; quantity_uom?: string | null; price?: string | null; price_uom?: string | null }>;
@@ -43,7 +43,7 @@ export type Quotation = {
     field_path: string;
     value: unknown;
     review_status: string;
-    confidence_band: "High" | "Medium" | "Low";
+    confidence_band: "High" | "Medium" | "Low" | null;
     confidence_reason?: string | null;
     /** Raw evidence score retained for audit/evaluation; not user-facing confidence. */
     confidence: string;

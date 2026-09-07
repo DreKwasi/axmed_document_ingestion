@@ -7,7 +7,7 @@ const props = defineProps<{
   reviewReasons?: string[];
   fieldReviews?: Array<{
     field_path: string;
-    confidence_band: "High" | "Medium" | "Low";
+    confidence_band: "High" | "Medium" | "Low" | null;
     confidence_reason?: string | null;
   }>;
   selectedIndex: number;

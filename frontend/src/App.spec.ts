@@ -66,14 +66,25 @@ describe("App", () => {
           product: { trade_name: "Dolostop 500", inn: ["Paracetamol"], strength: [], dosage_form: "tablet" },
           packaging: { primary_pack: "PVC/Alu blister", units_per_pack: 20, unit_label: "tablet", packs_per_shipper: 12 },
           quantity: { quoted_quantity: "6000000", quoted_quantity_uom: "tablet" },
-          pricing: { currency: "USD", quoted_price: { amount: "0.0091", uom: "tablet" }, normalized_price: {}, price_tiers: [{ min_quantity: "100", price: "0.008" }], adjustments: [{ type: "rebate", value: "5" }] },
+          pricing: { currency: "USD", quoted_price: { amount: "0.0091", uom: "tablet" }, normalized_price: { amount: "0.0091", uom: "tablet", derived: true, calculation: "quoted_price.amount", validation_status: "passed" }, price_tiers: [{ min_quantity: "100", price: "0.008" }], adjustments: [{ type: "rebate", value: "5" }] },
           supply: { minimum_remaining_shelf_life_percent: "80" },
           regulatory: { who_prequalified: true, who_pq_reference: "PQ-1", registered_markets: ["KE"] },
           evidence: [{ canonical_field: "product.trade_name", extraction_method: "table_extraction", confidence: "1.00" }]
         }],
         revision: 1,
         review_status: "unreviewed",
-        review_issues: []
+        review_issues: [],
+        field_reviews: [{
+          field_path: "line_items[0].product.trade_name",
+          value: "Dolostop 500",
+          review_status: "unreviewed",
+          confidence_band: "Medium",
+          confidence_reason: "source evidence: strong; association: limited; independent validation: unavailable",
+          confidence: "1.00",
+          extraction_method: "table_extraction",
+          source_path: "andina.pdf",
+          source_location: "page 1",
+        }]
       },
       reviews: []
     }]);
@@ -107,6 +118,9 @@ describe("App", () => {
     expect(wrapper.text()).toContain("markets: KE");
     expect(wrapper.text()).toContain("1 price tiers");
     expect(wrapper.text()).toContain("1 adjustments");
+    expect(wrapper.text()).toContain("Derived value · Validation passed");
+    expect(wrapper.text()).toContain("How confidence was determined");
+    expect(wrapper.text()).toContain("source evidence: strong; association: limited; independent validation: unavailable");
     expect(wrapper.find("th").text()).not.toContain("Source");
   });
 

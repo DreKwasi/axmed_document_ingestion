@@ -66,6 +66,14 @@ const rowConfidence = computed(() => {
   return "—";
 });
 
+const confidenceExplanations = computed(() => {
+  const prefix = `line_items[${props.lineIndex}]`;
+  const values = props.document.quotation?.field_reviews
+    ?.filter((field) => field.field_path.startsWith(prefix) && field.confidence_reason)
+    .map((field) => field.confidence_reason as string) ?? [];
+  return [...new Set(values)];
+});
+
 function handleSave() {
   if (!correctionValue.value.trim()) return;
   const path = `line_items.${props.lineIndex}.${selectedField.value}`;
@@ -110,6 +118,16 @@ function handleSave() {
 
     <!-- Drawer Body (Scrollable) -->
     <div class="flex-1 overflow-y-auto p-6 space-y-6 text-xs">
+      <div v-if="confidenceExplanations.length" class="rounded-2xl border border-amber-200 bg-amber-50/50 p-4">
+        <h3 class="text-xs font-bold uppercase tracking-wider text-amber-900">How confidence was determined</h3>
+        <p class="mt-1 text-[11px] text-amber-800">
+          Confidence is based on source evidence, association with this product row, and independent validation.
+        </p>
+        <ul class="mt-2 space-y-1 text-[11px] text-amber-900">
+          <li v-for="reason in confidenceExplanations" :key="reason">{{ reason }}</li>
+        </ul>
+      </div>
+
       <!-- Edit / Correction Card (Clean & Inline) -->
       <div class="rounded-2xl border border-emerald-200 bg-emerald-50/40 p-4 shadow-xs">
         <div class="flex items-center justify-between">
@@ -216,6 +234,9 @@ function handleSave() {
             </p>
             <span v-if="lineItem.pricing.normalized_price.calculation" class="text-[10px] text-slate-400">
               Formula: {{ lineItem.pricing.normalized_price.calculation }}
+            </span>
+            <span v-if="lineItem.pricing.normalized_price.derived" class="mt-1 block text-[10px] font-semibold text-slate-500">
+              Derived value<span v-if="lineItem.pricing.normalized_price.validation_status"> · Validation {{ lineItem.pricing.normalized_price.validation_status }}</span>
             </span>
           </div>
           <div>
