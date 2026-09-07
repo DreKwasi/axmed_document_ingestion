@@ -19,6 +19,51 @@ from app.security.redaction import redact_for_model
 from app.workers.resolver import provider_name, request_canonical_quotation
 
 
+def _semantic_pdf_context(stored_context: dict[str, Any]) -> dict[str, Any]:
+    """Prepare the low-token semantic pass from deterministic PDF reading order.
+
+    LiteParse geometry is retained for table-cell fidelity. The follow-up
+    semantic pass receives text only, so supply and regulatory enrichment does
+    not repeatedly send the price-table layout.
+    """
+
+    pages = [
+        {
+            "page_number": page.get("page_number"),
+            "liteparse": page.get("liteparse"),
+            "text": page.get("text", ""),
+        }
+        for page in stored_context.get("pages", [])
+    ]
+    structured_page_numbers = [
+        page["page_number"]
+        for page in pages
+        if _has_structured_table_layout(str(page["text"]))
+    ]
+    return {
+        "source_document": stored_context.get("source_document"),
+        "instruction": stored_context.get("instruction"),
+        "document_plan": {
+            "source_representation": "native_pdf_reading_order",
+            "structured_page_numbers": structured_page_numbers,
+            "semantic_page_numbers": [page["page_number"] for page in pages],
+        },
+        "pages": pages,
+        # A table page can contain a scoped footnote or a shipping condition.
+        # The enrichment pass therefore receives every page's compact reading
+        # text, never the layout geometry used by the primary table pass.
+        "semantic_pages": [{"page_number": page["page_number"], "text": page["text"]} for page in pages],
+    }
+
+
+def _has_structured_table_layout(text: str) -> bool:
+    """Identify table-shaped pages without assuming a supplier's column names."""
+
+    markers = ("item", "product", "quantity", "qty", "price", "uom", "amount", "discount")
+    normalized = text.casefold()
+    return sum(marker in normalized for marker in markers) >= 3
+
+
 def _upsert_invocation(
     session: Session,
     extraction: PdfExtractionRecord,
@@ -77,7 +122,7 @@ def consume_pdf_extraction(session: Session, extraction_id: str, settings: Setti
         session.commit()
         return
     started = time.perf_counter()
-    safe_context = redact_for_model(json.loads(extraction.safe_context_json))
+    safe_context = _semantic_pdf_context(redact_for_model(json.loads(extraction.safe_context_json)))
     extraction.status = "running"
     document.status = "semantic_extraction_running"
     record_event(session, document_id=document.id, stage="pdf_extraction_started")
@@ -92,7 +137,7 @@ def consume_pdf_extraction(session: Session, extraction_id: str, settings: Setti
             metadata={"source_type": "pdf", "page_count": len(safe_context.get("pages", []))},
         )
         session.commit()
-        from app.domain.langchain_extractor import LangChainSemanticExtractor
+        from app.domain.langchain_extractor import LangChainSemanticExtractor, merge_semantic_enrichment
 
         record_event(
             session,
@@ -108,6 +153,10 @@ def consume_pdf_extraction(session: Session, extraction_id: str, settings: Setti
                 model=settings.resolved_gemini_model,
             )
             quotation, telemetry = extractor.extract_canonical_quotation(safe_context, source_type="pdf")
+            enrichment, enrichment_telemetry = extractor.enrich_line_items_from_semantic_sections(
+                safe_context, quotation
+            )
+            quotation = merge_semantic_enrichment(quotation, enrichment)
         except Exception as error:
             extraction.status = "failed"
             extraction.error_message = f"langchain_extraction_failed: {error}"
@@ -138,11 +187,13 @@ def consume_pdf_extraction(session: Session, extraction_id: str, settings: Setti
             provider="google-gemini",
             model=settings.resolved_gemini_model,
             status="completed",
-            duration_ms=telemetry.get("duration_ms", int((time.perf_counter() - started) * 1000)),
+            duration_ms=(telemetry.get("duration_ms") or 0) + (enrichment_telemetry.get("duration_ms") or 0),
             metadata={"source_type": "pdf", "line_item_count": len(quotation.line_items)},
-            input_tokens=telemetry.get("input_tokens"),
-            output_tokens=telemetry.get("output_tokens"),
-            estimated_cost_usd=_cost_text(telemetry.get("estimated_cost_usd")),
+            input_tokens=_sum_optional(telemetry.get("input_tokens"), enrichment_telemetry.get("input_tokens")),
+            output_tokens=_sum_optional(telemetry.get("output_tokens"), enrichment_telemetry.get("output_tokens")),
+            estimated_cost_usd=_cost_text(
+                _sum_optional(telemetry.get("estimated_cost_usd"), enrichment_telemetry.get("estimated_cost_usd"))
+            ),
         )
         record_event(
             session,
@@ -258,3 +309,9 @@ def run_pdf_extraction_job(
 
 def _cost_text(value: Any) -> str | None:
     return None if value is None else str(value)
+
+
+def _sum_optional(left: Any, right: Any) -> Any:
+    if left is None and right is None:
+        return None
+    return (left or 0) + (right or 0)

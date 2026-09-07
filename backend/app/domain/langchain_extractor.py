@@ -13,10 +13,10 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, Field
 
-from app.domain.contracts import CanonicalQuotation
+from app.domain.contracts import CanonicalQuotation, Regulatory, Supply
 from app.domain.schema_mapping import MappingProposal
 
-CANONICAL_QUOTATION_PROMPT_VERSION = "canonical-quotation-v5"
+CANONICAL_QUOTATION_PROMPT_VERSION = "canonical-quotation-v6"
 
 
 class ProposedMappingSchema(BaseModel):
@@ -25,6 +25,18 @@ class ProposedMappingSchema(BaseModel):
     supplier: dict[str, str | None] = Field(default_factory=dict)
     commercial_terms: dict[str, str | None] = Field(default_factory=dict)
     line_items: dict[str, Any] = Field(default_factory=dict)
+
+
+class SemanticLineItemEnrichment(BaseModel):
+    """Narrative-only fields to merge into an already structured line item."""
+
+    source_key: str
+    supply: Supply = Field(default_factory=Supply)
+    regulatory: Regulatory = Field(default_factory=Regulatory)
+
+
+class SemanticEnrichment(BaseModel):
+    line_items: list[SemanticLineItemEnrichment] = Field(default_factory=list)
 
 
 class LangChainSemanticExtractor:
@@ -73,7 +85,9 @@ class LangChainSemanticExtractor:
             "fields. A comma is a thousands separator (for example, `6,000,000` is six million), not a reason to "
             "truncate or calculate a new value. Do not calculate a price from quantity, discount, extended value, or "
             "packaging when the table already states the price.\n"
-            "For PDF input, `liteparse` is the source representation. Preserve its page and reading-order context; "
+            "For PDF input, the deterministic document plan and native reading-order text are "
+            "the source representation. "
+            "Preserve their page context; "
             "do not infer a value from a neighboring row or calculate a replacement for a value that is present. "
             "If a row/column relationship is not reliable, leave the affected field null and add a review issue.\n"
             "For pharmaceutical tables, map the INN/active-moiety column to product.inn and pair each strength with "
@@ -99,6 +113,16 @@ class LangChainSemanticExtractor:
             "in parentheses, "
             "for incoterms. Derive dosage_form from the pharmaceutical form phrase, never from a container or UOM; "
             "for example, `Pressurised inhalation suspension` has dosage_form `suspension`.\n"
+            "Semantic enrichment: After respecting the structured-table facts, read the full document's narrative, "
+            "notes, footnotes, appendices, and shipping/regulatory sections. These sections can set values for a "
+            "specific item, an item range/list, an exception, or all other items. Apply their explicit scope to the "
+            "affected line items. Extract every stated supply field, including shelf_life_months, "
+            "minimum_remaining_shelf_life_percent, lead_time_days, storage_conditions, and cold_chain_required; "
+            "also extract stated MOQ, regulatory registration/reference/status, and registered markets. Do not leave "
+            "one of those fields null merely because it appears outside the price table. Do not treat transit time as "
+            "lead time unless the source explicitly calls it lead time. Store a source percentage in percentage points "
+            "(for example, 80 percent as 80, not 0.80). When a note supplies a registration or variation identifier, "
+            "store it in registration_reference as well as its stated status.\n"
             "When packaging text says `20 tablets per pack`, `30 tablets per pack`, or `500 tablets per pack`, "
             "extract units_per_pack as the number and unit_label as the named unit; do the same for `25 ampoules "
             "per box`. A container-only phrase such as `60 mL bottle` has unit_label `bottle` and no units_per_pack. "
@@ -150,6 +174,53 @@ class LangChainSemanticExtractor:
         }
         return quotation, telemetry
 
+    def enrich_line_items_from_semantic_sections(
+        self,
+        context: dict[str, Any],
+        quotation: CanonicalQuotation,
+    ) -> tuple[SemanticEnrichment, dict[str, Any]]:
+        """Recover narrative supply/regulatory facts without re-sending table layout."""
+
+        started_at = time.perf_counter()
+        semantic_pages = context.get("semantic_pages") or context.get("pages", [])
+        source_lines = [
+            {"source_key": line.source_key, "trade_name": line.product.trade_name}
+            for line in quotation.line_items
+            if line.source_key
+        ]
+        system_prompt = (
+            "You enrich an existing pharmaceutical quotation from narrative-only source sections. "
+            "Do not change product identity, table quantities, prices, packaging, or commercial terms. "
+            "Return only explicitly stated supply and regulatory values for the supplied source_key values. "
+            "Apply notes scoped to a particular item, a list/range, an exception, or all remaining items. "
+            "Extract shelf life, minimum remaining shelf life, storage, cold chain, lead time, registration status, "
+            "registration/variation references, and registered markets. A percentage is expressed in percentage points "
+            "(80 percent is 80). Do not infer facts not stated in the narrative."
+        )
+        user_content = json.dumps(
+            {
+                "line_items": source_lines,
+                "semantic_pages": semantic_pages,
+            },
+            indent=2,
+        )
+        structured_llm = self._llm.with_structured_output(SemanticEnrichment, include_raw=True)
+        result = structured_llm.invoke(
+            [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=f"Enrich these line items from the semantic sections:\n\n{user_content}"),
+            ]
+        )
+        enrichment, usage = _structured_result(result, SemanticEnrichment)
+        duration_ms = max(1, int((time.perf_counter() - started_at) * 1000))
+        return enrichment, {
+            "provider": "google-gemini",
+            "model": self.model_name,
+            "prompt_version": f"{CANONICAL_QUOTATION_PROMPT_VERSION}-semantic-enrichment",
+            "duration_ms": duration_ms,
+            **usage,
+        }
+
     def propose_schema_mapping(
         self,
         unmapped_payload: dict[str, Any],
@@ -196,6 +267,32 @@ class LangChainSemanticExtractor:
             provider=f"google-gemini/{self.model_name}",
             duration_ms=duration_ms,
         )
+
+
+def merge_semantic_enrichment(
+    quotation: CanonicalQuotation,
+    enrichment: SemanticEnrichment,
+) -> CanonicalQuotation:
+    """Fill omitted narrative facts without overwriting structured/table values."""
+
+    enrichment_by_key = {item.source_key: item for item in enrichment.line_items}
+    for line in quotation.line_items:
+        if not line.source_key or line.source_key not in enrichment_by_key:
+            continue
+        source = enrichment_by_key[line.source_key]
+        _fill_missing_model_values(line.supply, source.supply)
+        _fill_missing_model_values(line.regulatory, source.regulatory)
+    return quotation
+
+
+def _fill_missing_model_values(target: Supply | Regulatory, source: Supply | Regulatory) -> None:
+    for field_name in type(source).model_fields:
+        source_value = getattr(source, field_name)
+        target_value = getattr(target, field_name)
+        if source_value is None or source_value == []:
+            continue
+        if target_value is None or target_value == []:
+            setattr(target, field_name, source_value)
 
 
 def _structured_result(result: Any, expected_type: type[BaseModel]) -> tuple[Any, dict[str, Any]]:

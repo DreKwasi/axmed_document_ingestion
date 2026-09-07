@@ -154,6 +154,13 @@ def test_pdf_worker_uses_redacted_page_context_and_persists_reviewable_quotation
 
     assert submitted[0]["operation"] == "pdf_quotation_extraction"
     assert "exportaciones@fandina.com.co" not in json.dumps(submitted)
+    semantic_context = submitted[0]["context"]
+    assert "liteparse" in json.dumps(semantic_context)
+    assert semantic_context["document_plan"]["source_representation"] == "native_pdf_reading_order"
+    assert semantic_context["document_plan"]["structured_page_numbers"] == [1]
+    assert semantic_context["document_plan"]["semantic_page_numbers"] == [1, 2]
+    assert [page["page_number"] for page in semantic_context["semantic_pages"]] == [1, 2]
+    assert "liteparse" not in json.dumps(semantic_context["semantic_pages"])
     with factory() as session:
         extraction = session.get(PdfExtractionRecord, document["pdf_extraction"]["id"])
         quotation = session.scalar(select(QuotationRecord).where(QuotationRecord.document_id == document["id"]))

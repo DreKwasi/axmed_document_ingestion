@@ -20,8 +20,15 @@ from app.domain.contracts import (
     QuotedPrice,
     Strength,
     Supplier,
+    Supply,
 )
-from app.domain.langchain_extractor import LangChainSemanticExtractor, ProposedMappingSchema
+from app.domain.langchain_extractor import (
+    LangChainSemanticExtractor,
+    ProposedMappingSchema,
+    SemanticEnrichment,
+    SemanticLineItemEnrichment,
+    merge_semantic_enrichment,
+)
 from app.domain.schema_mapping import LangChainSemanticMappingProvider
 from app.infrastructure.database import create_sqlite_engine, run_migrations
 from app.infrastructure.models import (
@@ -68,6 +75,42 @@ def test_packaging_reads_explicit_quantity_without_relabeling_the_source_basis()
     assert Strength(ingredient="Clavulanic acid (as potassium clavulanate)").ingredient == "Clavulanic acid"
 
 
+def test_semantic_enrichment_fills_missing_note_facts_without_replacing_table_values():
+    quotation = CanonicalQuotation(
+        line_items=[
+            LineItem(
+                source_key="06",
+                product=Product(trade_name="Salbudina 2/5"),
+                supply=Supply(shelf_life_months=None),
+            )
+        ]
+    )
+    enrichment = SemanticEnrichment(
+        line_items=[
+            SemanticLineItemEnrichment(
+                source_key="06",
+                supply=Supply(shelf_life_months=24, minimum_remaining_shelf_life_percent=Decimal("80")),
+                regulatory={
+                    "registration_reference": "FDA/GH/VAR/2026/0442",
+                    "regulatory_status": "under assessment",
+                },
+            )
+        ]
+    )
+
+    merged = merge_semantic_enrichment(quotation, enrichment)
+
+    assert merged.line_items[0].supply.shelf_life_months == 24
+    assert merged.line_items[0].supply.minimum_remaining_shelf_life_percent == Decimal("80")
+    assert merged.line_items[0].regulatory.registration_reference == "FDA/GH/VAR/2026/0442"
+
+    existing_table_value = CanonicalQuotation(
+        line_items=[LineItem(source_key="06", supply=Supply(shelf_life_months=36))]
+    )
+    unchanged = merge_semantic_enrichment(existing_table_value, enrichment)
+    assert unchanged.line_items[0].supply.shelf_life_months == 36
+
+
 def test_langchain_email_extraction_resolves_corrections_and_supersession():
     extractor = LangChainSemanticExtractor(api_key="test-fake-key", model="gemini-3.1-flash-lite")
 
@@ -111,6 +154,9 @@ def test_langchain_email_extraction_resolves_corrections_and_supersession():
     assert "product.country_of_origin" in system_prompt
     assert "all items or products are manufactured" in system_prompt
     assert "incoterm_country" in system_prompt
+    assert "notes, footnotes, appendices, and shipping/regulatory sections" in system_prompt
+    assert "shelf_life_months" in system_prompt
+    assert "80 percent as 80, not 0.80" in system_prompt
 
 
 def test_langchain_schema_mapping_proposal():
@@ -301,6 +347,7 @@ def test_pdf_worker_executes_langchain_when_gemini_configured(tmp_path):
             LineItem(
                 product=Product(trade_name="Amoxicilina 500mg", country_of_origin="Colombia"),
                 quantity=Quantity(quoted_quantity=Decimal("1200"), quoted_quantity_uom="capsule"),
+                supply=Supply(shelf_life_months=36, minimum_remaining_shelf_life_percent=Decimal("80")),
                 pricing=Pricing(currency="USD", quoted_price=QuotedPrice(amount=Decimal("0.045"), uom="capsule")),
             )
         ],
@@ -308,8 +355,12 @@ def test_pdf_worker_executes_langchain_when_gemini_configured(tmp_path):
 
     with patch("app.domain.langchain_extractor.LangChainSemanticExtractor.extract_canonical_quotation") as mock_extract:
         mock_extract.return_value = (mock_quotation, {"duration_ms": 145, "model": "gemini-3.1-flash-lite"})
-        with session_factory() as session:
-            consume_pdf_extraction(session, extraction_id, settings)
+        with patch(
+            "app.domain.langchain_extractor.LangChainSemanticExtractor.enrich_line_items_from_semantic_sections"
+        ) as mock_enrich:
+            mock_enrich.return_value = (SemanticEnrichment(), {"duration_ms": 20})
+            with session_factory() as session:
+                consume_pdf_extraction(session, extraction_id, settings)
 
     with session_factory() as session:
         doc = session.get(DocumentRecord, doc.id)
@@ -322,6 +373,8 @@ def test_pdf_worker_executes_langchain_when_gemini_configured(tmp_path):
         assert line_item is not None
         assert line_item.quoted_quantity == Decimal("1200")
         assert line_item.quoted_quantity_uom == "capsule"
+        assert line_item.shelf_life_months == 36
+        assert line_item.minimum_remaining_shelf_life_percent == Decimal("80")
         assert quotation is not None and json.loads(quotation.payload_json)["rfq_reference"] == "AXMED-RFQ-2026-0233"
         assert json.loads(quotation.payload_json)["supplier"]["country"] == "Colombia"
         assert json.loads(quotation.payload_json)["commercial_terms"]["incoterm_country"] == "Colombia"
