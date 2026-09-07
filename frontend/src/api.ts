@@ -36,6 +36,15 @@ export function reextractDocument(documentId: string): Promise<DocumentResponse>
   return request(`/api/v1/documents/${documentId}/reextract`, { method: "POST" });
 }
 
+export function openImageExtractionForReview(
+  documentId: string,
+  approach: string
+): Promise<DocumentResponse> {
+  return request(`/api/v1/documents/${documentId}/image-extractions/${approach}/review`, {
+    method: "POST"
+  });
+}
+
 export function sourceDocumentUrl(documentId: string): string {
   return `${API_BASE_URL}/api/v1/documents/${documentId}/source`;
 }
@@ -60,7 +69,7 @@ export function reviewDocument(
     expected_revision: number;
     note?: string;
     rejection_reason?: string;
-    patches?: Array<{ path: string; value: string }>;
+    patches?: Array<{ path: string; value: unknown }>;
   }
 ): Promise<DocumentResponse> {
   return request(`/api/v1/documents/${documentId}/reviews/${action}`, {

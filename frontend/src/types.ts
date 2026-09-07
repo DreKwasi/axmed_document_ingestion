@@ -43,10 +43,11 @@ export type Quotation = {
     field_path: string;
     value: unknown;
     review_status: string;
-    confidence_band: "High" | "Medium" | "Low" | null;
-    confidence_reason?: string | null;
-    /** Raw evidence score retained for audit/evaluation; not user-facing confidence. */
-    confidence: string;
+    mapping_confidence_band: "High" | "Medium" | "Low" | null;
+    mapping_confidence_score: number | null;
+    mapping_confidence_reason?: string | null;
+    /** Raw source-evidence score retained for extraction-quality audit. */
+    source_evidence_score: string;
     extraction_method: string;
     source_path?: string | null;
     source_location?: string | null;
@@ -56,6 +57,22 @@ export type Quotation = {
   review_status: "pending_review" | "approved" | "rejected";
   has_corrections?: boolean;
   review_issues: Array<{ field_path: string; code: string; message: string; severity: string }>;
+};
+
+export type ImageExtractionAttempt = {
+  approach: "ocr_assisted" | "vision_direct" | string;
+  status: "completed" | "failed" | string;
+  result: {
+    quotation_reference?: string | null;
+    supplier: { name?: string | null; country?: string | null };
+    line_items: LineItem[];
+    review_issues?: Array<{ field_path: string; code: string; message: string; severity: string }>;
+  } | null;
+  product_count: number;
+  failure_reason?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  duration_ms?: number | null;
 };
 
 export type DocumentResponse = {
@@ -68,8 +85,23 @@ export type DocumentResponse = {
   schema_version?: string | null;
   parsed_summary?: { subject?: string; message_id?: string | null; page_count?: number; needs_ocr_pages?: number[] } | null;
   system_decision?: "pending_review" | null;
-  confidence_summary?: Record<"High" | "Medium" | "Low", number>;
-  review_reasons?: string[];
+  extraction_confidence?: {
+    score: number;
+    band: "High" | "Medium" | "Low";
+    factors: Array<{ key: string; label: string; weight: number; score: number; reason: string }>;
+  };
+  mapping_confidence?: {
+    score: number | null;
+    band: "High" | "Medium" | "Low" | null;
+    issue_count: number;
+  } | null;
+  mapping_issues?: Array<{
+    field_path: string;
+    section: "document" | "product" | "pricing" | "quantity_packaging" | "supply" | "regulatory" | string;
+    code: string;
+    message: string;
+    severity: string;
+  }>;
   product_counts?: { extracted: number; failed: number };
   notes?: string[];
   extracted_source_facts?: Array<{
@@ -93,6 +125,7 @@ export type DocumentResponse = {
     patches: Array<{ path: string; before?: string | null; after?: string | null }>;
   }>;
   ocr?: { id: string; status: string; selected_pages: number[] } | null;
+  image_extraction_attempts?: ImageExtractionAttempt[];
 };
 
 export type ProcessingEvent = {

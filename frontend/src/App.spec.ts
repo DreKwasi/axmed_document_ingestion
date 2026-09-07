@@ -96,14 +96,18 @@ describe("App", () => {
           field_path: "line_items[0].product.trade_name",
           value: "Dolostop 500",
           review_status: "pending_review",
-          confidence_band: "Medium",
-          confidence_reason: "source evidence: strong; association: limited; independent validation: unavailable",
-          confidence: "1.00",
+          mapping_confidence_band: "Medium",
+          mapping_confidence_score: 82,
+          mapping_confidence_reason: "The value has source provenance but limited structural association.",
+          source_evidence_score: "1.00",
           extraction_method: "table_extraction",
           source_path: "andina.pdf",
           source_location: "page 1",
         }]
       },
+      extraction_confidence: { score: 100, band: "High", factors: [{ key: "format", label: "Source format", weight: 20, score: 100, reason: "The source format was accepted for extraction." }] },
+      mapping_confidence: { score: 82, band: "Medium", issue_count: 0 },
+      mapping_issues: [],
       reviews: []
     }]);
     const wrapper = mount(App);
@@ -141,9 +145,15 @@ describe("App", () => {
     expect(wrapper.text()).toContain("1 price tiers");
     expect(wrapper.text()).toContain("1 adjustments");
     expect(wrapper.text()).toContain("Derived value · Validation passed");
-    expect(wrapper.text()).toContain("Confidence summary");
-    expect(wrapper.text()).toContain("The values were recovered from clear source material.");
-    expect(wrapper.text()).toContain("some lack an exact row or cell reference");
+    expect(wrapper.text()).toContain("Extraction confidence");
+    expect(wrapper.text()).toContain("Source content was recovered successfully");
+    const extractionHelp = wrapper.get('button[aria-label="How extraction confidence is calculated"]');
+    expect(wrapper.text()).not.toContain("How this is calculated");
+    await extractionHelp.trigger("click");
+    expect(wrapper.text()).toContain("How this is calculated");
+    expect(extractionHelp.attributes("aria-expanded")).toBe("true");
+    await extractionHelp.trigger("click");
+    expect(extractionHelp.attributes("aria-expanded")).toBe("false");
     expect(wrapper.find("th").text()).not.toContain("Source");
   });
 
@@ -208,7 +218,7 @@ describe("App", () => {
             pricing: {
               currency: "EUR",
               quoted_price: { amount: "3.15", uom: "pack" },
-              normalized_price: { amount: "0.035", uom: "tablet" }
+              normalized_price: { amount: "0.035714285714", uom: "tablet" }
             },
             supply: {},
             evidence: [
@@ -241,6 +251,8 @@ describe("App", () => {
     await file.trigger("change");
     await flushPromises();
 
+    expect(wrapper.find("table").text()).not.toContain("Normalized");
+
     // Verify Review Source dialog
     const reviewBtn = wrapper.findAll("button").find((button) => button.text().includes("Review source"));
     await reviewBtn?.trigger("click");
@@ -257,12 +269,23 @@ describe("App", () => {
     await wrapper.find("tbody tr").trigger("click");
     await flushPromises();
 
+    expect(wrapper.text()).toContain("EUR 0.04 / tablet");
+    expect(wrapper.text()).not.toContain("0.035714");
+    const correctionOptions = wrapper.get('select[aria-label="Correction field"]').findAll("option").map((option) => option.text());
+    expect(correctionOptions).toContain("Product identity · Active ingredients (INN)");
+    expect(correctionOptions).toContain("Pricing · Price tiers");
+    expect(correctionOptions).toContain("Quantity & packaging · MOQ");
+    expect(correctionOptions).toContain("Supply · Cold chain required");
+    expect(correctionOptions).toContain("Regulatory · Registered markets");
+
     await wrapper.get('input[aria-label="Correction value for Example"]').setValue("4.00");
     await wrapper.findAll("button").find((button) => button.text() === "Save correction")?.trigger("click");
     await flushPromises();
 
     expect(wrapper.text()).not.toContain("Field Evidence & Provenance");
-    expect(wrapper.text()).toContain("tablet · film-coated");
+    expect(wrapper.text()).toContain("Dosage form");
+    expect(wrapper.text()).toContain("Dosage Formtablet");
+    expect(wrapper.text()).not.toContain("tablet · film-coated");
     expect(api.reviewDocument).toHaveBeenCalledWith(
       "document-2",
       "correct",
@@ -541,20 +564,23 @@ describe("App", () => {
         field_reviews: [
           {
             field_path: "line_items[1].product.inn",
-            confidence_band: "Low",
-            confidence_reason: "source evidence: weak; association: limited; independent validation: unavailable"
+            mapping_confidence_band: "Low",
+            mapping_confidence_score: 42,
+            mapping_confidence_reason: "The source-to-schema association conflicts with another value.",
+            source_evidence_score: "0.72"
           }
         ]
       },
-      confidence_summary: { High: 6, Medium: 4, Low: 2 },
-      review_reasons: ["line_items[1].product.inn: Active ingredient requires confirmation"],
+      extraction_confidence: { score: 61, band: "Low", factors: [] },
+      mapping_confidence: { score: 74, band: "Medium", issue_count: 1 },
+      mapping_issues: [{ field_path: "line_items[1].product.inn", section: "product", code: "uncertain_mapping", message: "Active ingredient requires confirmation", severity: "warning" }],
       reviews: []
     };
     api.fetchDocuments.mockResolvedValue([document]);
     const wrapper = mount(App);
     await flushPromises();
 
-    expect(wrapper.text()).toContain("lowest field band");
+    expect(wrapper.text()).toContain("Extraction confidence");
 
     // Open the source
     await wrapper.get("button.group").trigger("click");
@@ -563,10 +589,16 @@ describe("App", () => {
     // Check product breakdown contains both products
     expect(wrapper.text()).toContain("HighConfidenceItem");
     expect(wrapper.text()).toContain("LowerConfidenceItem");
-    expect(wrapper.text()).toContain("Confidence");
-    expect(wrapper.text()).toContain("Review issues");
-    expect(wrapper.text()).toContain("Active ingredient requires confirmation");
+    expect(wrapper.text()).toContain("Mapping confidence");
+    expect(wrapper.text()).toContain("Mapping issues");
+    const mappingDefinitionHelp = wrapper.get('button[aria-label="How mapping confidence is calculated"]');
+    await mappingDefinitionHelp.trigger("click");
+    expect(wrapper.text()).toContain("How mapping confidence is built");
+    expect(wrapper.text()).toContain("The product score is the average of those field scores.");
     expect(wrapper.text()).toContain("Low");
+    expect(wrapper.findAll("tbody tr")[1].findAll("td")[5].text().trim()).toBe("1");
+    expect(wrapper.findAll("tbody tr")[1].findAll("td")[4].find("button").attributes("title")).toContain("Average of 1 mapped field score");
+    expect(wrapper.findAll("tbody tr")[1].findAll("td")[4].find("button").attributes("title")).toContain("Mapping issues are counted separately: 1");
 
     // Click first product row to open drawer
     const rows = wrapper.findAll("tbody tr");
@@ -585,5 +617,10 @@ describe("App", () => {
     // Verify drawer now shows second line
     expect(wrapper.text()).toContain("Substance B");
     expect(wrapper.text()).toContain("LowerConfidenceItem");
+    expect(wrapper.text()).toContain("Active ingredient requires confirmation");
+    const mappingHelp = wrapper.get('[aria-labelledby="product-drawer-title"] button[aria-label="Explain mapping confidence"]');
+    await mappingHelp.trigger("click");
+    expect(wrapper.text()).toContain("Average of 1 mapped field score");
+    expect(wrapper.text()).toContain("Mapping issues are counted separately: 1");
   });
 });

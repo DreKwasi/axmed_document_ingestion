@@ -7,6 +7,7 @@ import {
   fetchDocument,
   fetchDocuments,
   fetchEvents,
+  openImageExtractionForReview,
   reviewDocument,
   reextractDocument,
   uploadDocuments,
@@ -155,7 +156,21 @@ async function reextract(document: DocumentResponse) {
   }
 }
 
-async function handleSaveCorrection(payload: { fieldPath: string; value: string; lineIndex: number }) {
+async function openCandidateForReview(approach: string) {
+  const doc = selectedDocument.value;
+  if (!doc) return;
+  busy.value = true;
+  errorMessage.value = "";
+  try {
+    replaceDocument(await openImageExtractionForReview(doc.id, approach));
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : "Could not open this extraction for review.";
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function handleSaveCorrection(payload: { fieldPath: string; value: unknown; lineIndex: number }) {
   const doc = selectedDocument.value;
   if (!doc?.quotation) return;
   busy.value = true;
@@ -231,7 +246,7 @@ function isExtractionOngoing(doc: DocumentResponse | null): boolean {
   if (latest) {
     const phaseLower = (latest.phase || "").toLowerCase();
     const stageLower = (latest.stage || "").toLowerCase();
-    if (phaseLower === "complete" || stageLower.endsWith("_completed")) return false;
+    if (phaseLower === "complete" || stageLower.endsWith("_completed") || stageLower === "image_extractions_ready_for_comparison") return false;
     if (phaseLower === "needs attention" || stageLower.endsWith("_failed")) return false;
     return true;
   }
@@ -353,12 +368,60 @@ onBeforeUnmount(() => eventSources.forEach((source) => source.close()));
         <section v-if="selectedDocument.quotation">
           <ProductTable
             :line-items="selectedDocument.quotation.line_items"
-            :review-issues="selectedDocument.quotation.review_issues"
-            :review-reasons="selectedDocument.review_reasons"
+            :mapping-issues="selectedDocument.mapping_issues ?? []"
             :field-reviews="selectedDocument.quotation.field_reviews"
             :selected-index="selectedLineIndex"
             @select-line="(idx) => { selectedLineIndex = idx; isDrawerOpen = true; }"
           />
+        </section>
+
+        <section
+          v-else-if="selectedDocument.image_extraction_attempts?.length"
+          class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs"
+        >
+          <div class="border-b border-slate-100 px-6 py-5">
+            <h2 class="text-base font-bold text-slate-900">Compare image extractions</h2>
+            <p class="mt-1 text-xs text-slate-500">
+              These are two independent readings of the same source. Neither has been selected automatically.
+            </p>
+          </div>
+          <div class="grid gap-4 p-5 lg:grid-cols-2">
+            <article
+              v-for="attempt in selectedDocument.image_extraction_attempts"
+              :key="attempt.approach"
+              class="rounded-xl border border-slate-200 p-4"
+            >
+              <div class="flex items-start justify-between gap-3">
+                <div>
+                  <h3 class="font-bold text-slate-900">
+                    {{ attempt.approach === "ocr_assisted" ? "OCR-assisted extraction" : "Direct image extraction" }}
+                  </h3>
+                  <p class="mt-1 text-xs text-slate-500">
+                    {{ attempt.status === "completed" ? `${attempt.product_count} extracted products` : attempt.failure_reason || "Extraction did not complete." }}
+                  </p>
+                </div>
+                <button
+                  v-if="attempt.status === 'completed' && attempt.result?.line_items.length"
+                  type="button"
+                  class="rounded-lg bg-emerald-800 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-900 disabled:opacity-50"
+                  :disabled="busy"
+                  @click="openCandidateForReview(attempt.approach)"
+                >
+                  Review this extraction
+                </button>
+              </div>
+              <dl v-if="attempt.result" class="mt-4 space-y-2 text-xs">
+                <div class="flex justify-between gap-3"><dt class="text-slate-500">Supplier</dt><dd class="font-semibold text-slate-800 text-right">{{ attempt.result.supplier.name || "—" }}</dd></div>
+                <div class="flex justify-between gap-3"><dt class="text-slate-500">Quotation reference</dt><dd class="font-semibold text-slate-800 text-right">{{ attempt.result.quotation_reference || "—" }}</dd></div>
+              </dl>
+              <ul v-if="attempt.result?.line_items.length" class="mt-4 divide-y divide-slate-100 border-t border-slate-100 text-xs">
+                <li v-for="(item, index) in attempt.result.line_items" :key="item.source_key || index" class="flex justify-between gap-3 py-2">
+                  <span class="font-semibold text-slate-800">{{ item.product.trade_name || item.product.inn.join(" · ") || "Unnamed product" }}</span>
+                  <span class="text-slate-500">{{ item.product.dosage_form || "—" }}</span>
+                </li>
+              </ul>
+            </article>
+          </div>
         </section>
 
         <!-- Product Details Drawer / Inspector -->
