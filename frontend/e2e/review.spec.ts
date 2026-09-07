@@ -11,7 +11,7 @@ test("a reviewer confirms and corrects an extracted offer", async ({ page }) => 
   await expect(page.getByText(/new source structure detected/i)).toBeVisible();
 
   await page.getByRole("button", { name: "Confirm mapping" }).click();
-  await expect(page.getByText("Review", { exact: true })).toBeVisible();
+  await expect(page.getByText("Pending human review", { exact: true })).toBeVisible();
   await expect(page.getByText("0.035", { exact: false }).first()).toBeVisible();
 
   await page.getByText("Sanotri-TLD").click();
@@ -20,5 +20,5 @@ test("a reviewer confirms and corrects an extracted offer", async ({ page }) => 
   await expect(page.getByText("0.044444", { exact: false }).first()).toBeVisible();
 
   await page.getByLabel("Close product details").click();
-  await expect(page.getByText("Corrected", { exact: true })).toBeVisible();
+  await expect(page.getByText("Pending review after correction", { exact: true })).toBeVisible();
 });

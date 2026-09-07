@@ -35,9 +35,10 @@ export type LineItem = {
 
 export type Quotation = {
   quotation_reference?: string | null;
+  rfq_reference?: string | null;
   document_type?: string | null;
   supplier: { name?: string | null; country?: string | null };
-  commercial_terms: { currency?: string | null; incoterm?: string | null; incoterm_named_place?: string | null };
+  commercial_terms: { currency?: string | null; incoterm?: string | null; incoterm_named_place?: string | null; incoterm_country?: string | null };
   line_items: LineItem[];
   field_reviews?: Array<{
     field_path: string;
@@ -52,8 +53,9 @@ export type Quotation = {
     source_location?: string | null;
   }>;
   revision: number;
-  system_decision: "auto_accepted" | "needs_review";
-  review_status: string;
+  system_decision: "pending_review";
+  review_status: "pending_review" | "approved" | "rejected";
+  has_corrections?: boolean;
   review_issues: Array<{ field_path: string; code: string; message: string; severity: string }>;
 };
 
@@ -62,7 +64,7 @@ export type DocumentResponse = {
   batch_id?: string | null;
   filename: string;
   source_name?: string | null;
-  status: "needs_mapping_confirmation" | "needs_mapping_resolution" | "needs_review" | "failed" | string;
+  status: "needs_mapping_confirmation" | "needs_mapping_resolution" | "pending_review" | "approved" | "rejected" | "failed" | string;
   failure_reason?: string | null;
   source_system?: string | null;
   schema_version?: string | null;
@@ -70,7 +72,7 @@ export type DocumentResponse = {
   semantic_mapping_calls: number;
   mapping_source?: string | null;
   parsed_summary?: { subject?: string; message_id?: string | null; page_count?: number; needs_ocr_pages?: number[] } | null;
-  system_decision?: "auto_accepted" | "needs_review" | null;
+  system_decision?: "pending_review" | null;
   confidence_summary?: Record<"High" | "Medium" | "Low", number>;
   review_reasons?: string[];
   product_counts?: { extracted: number; failed: number };

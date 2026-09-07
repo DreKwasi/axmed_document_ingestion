@@ -51,7 +51,7 @@ describe("App", () => {
       id: "document-quantity",
       filename: "andina.pdf",
       source_name: "Farmaceutica Andina S.A.S. · FA-COT-2026-118",
-      status: "needs_review",
+      status: "pending_review",
       source_system: "pdf",
       semantic_mapping_calls: 0,
       product_counts: { extracted: 1, failed: 0 },
@@ -71,12 +71,12 @@ describe("App", () => {
           evidence: [{ canonical_field: "product.trade_name", extraction_method: "table_extraction", confidence: "1.00" }]
         }],
         revision: 1,
-        review_status: "unreviewed",
+        review_status: "pending_review",
         review_issues: [],
         field_reviews: [{
           field_path: "line_items[0].product.trade_name",
           value: "Dolostop 500",
-          review_status: "unreviewed",
+          review_status: "pending_review",
           confidence_band: "Medium",
           confidence_reason: "source evidence: strong; association: limited; independent validation: unavailable",
           confidence: "1.00",
@@ -118,8 +118,9 @@ describe("App", () => {
     expect(wrapper.text()).toContain("1 price tiers");
     expect(wrapper.text()).toContain("1 adjustments");
     expect(wrapper.text()).toContain("Derived value · Validation passed");
-    expect(wrapper.text()).toContain("How confidence was determined");
-    expect(wrapper.text()).toContain("source evidence: strong; association: limited; independent validation: unavailable");
+    expect(wrapper.text()).toContain("Confidence summary");
+    expect(wrapper.text()).toContain("The values were recovered from clear source material.");
+    expect(wrapper.text()).toContain("some lack an exact row or cell reference");
     expect(wrapper.find("th").text()).not.toContain("Source");
   });
 
@@ -132,18 +133,18 @@ describe("App", () => {
       schema_version: "2.4.1",
       semantic_mapping_calls: 1,
       mapping: { id: "mapping-1", trust_state: "proposed", times_seen: 1, times_confirmed: 0, human_verified: false },
-      quotation: { line_items: [], supplier: {}, commercial_terms: {}, revision: 1, system_decision: "needs_review", review_status: "unreviewed", review_issues: [] },
+      quotation: { line_items: [], supplier: {}, commercial_terms: {}, revision: 1, system_decision: "pending_review", review_status: "pending_review", review_issues: [] },
       reviews: []
     });
     api.confirmMapping.mockResolvedValue({
       id: "document-1",
       filename: "sanova.json",
-      status: "needs_review",
+      status: "pending_review",
       source_system: "SanovaERP",
       schema_version: "2.4.1",
       semantic_mapping_calls: 1,
       mapping: { id: "mapping-1", trust_state: "trusted", times_seen: 1, times_confirmed: 1, human_verified: true },
-      quotation: { line_items: [], supplier: {}, commercial_terms: {}, revision: 2, system_decision: "needs_review", review_status: "unreviewed", review_issues: [] },
+      quotation: { line_items: [], supplier: {}, commercial_terms: {}, revision: 2, system_decision: "pending_review", review_status: "pending_review", review_issues: [] },
       reviews: []
     });
     const wrapper = mount(App);
@@ -168,7 +169,7 @@ describe("App", () => {
     const document = {
       id: "document-2",
       filename: "offer.json",
-      status: "needs_review",
+      status: "pending_review",
       source_system: "SupplierERP",
       schema_version: "1",
       semantic_mapping_calls: 0,
@@ -198,7 +199,7 @@ describe("App", () => {
         supplier: {},
         commercial_terms: {},
         revision: 1,
-        review_status: "unreviewed",
+        review_status: "pending_review",
         review_issues: []
       },
       reviews: []
@@ -302,13 +303,13 @@ describe("App", () => {
       created_at: "2026-09-06T15:00:00Z",
       updated_at: "2026-09-06T15:00:00Z",
       total_documents: 2,
-      status_counts: { needs_review: 1, failed: 1 },
+      status_counts: { pending_review: 1, failed: 1 },
       is_completed: true,
       documents: [
         {
           id: "valid-doc",
           filename: "valid.json",
-          status: "needs_review",
+          status: "pending_review",
           semantic_mapping_calls: 0,
           quotation: {
             quotation_reference: "REF-1",
@@ -316,7 +317,7 @@ describe("App", () => {
             commercial_terms: {},
             line_items: [],
             revision: 1,
-            review_status: "unreviewed",
+            review_status: "pending_review",
             review_issues: []
           },
           reviews: []
@@ -378,7 +379,7 @@ describe("App", () => {
       reviews: []
     };
     api.uploadDocument.mockResolvedValue(uploaded);
-    api.fetchDocument.mockResolvedValue({ ...uploaded, status: "needs_review" });
+    api.fetchDocument.mockResolvedValue({ ...uploaded, status: "pending_review" });
     const wrapper = mount(App);
     await flushPromises();
     const file = wrapper.get('input[type="file"]');
@@ -431,7 +432,7 @@ describe("App", () => {
     const document = {
       id: "document-approve",
       filename: "offer.json",
-      status: "needs_review",
+      status: "pending_review",
       quotation: {
         quotation_reference: "REF-99",
         supplier: { name: "MedSupply Co" },
@@ -448,7 +449,7 @@ describe("App", () => {
           }
         ],
         revision: 2,
-        review_status: "unreviewed",
+        review_status: "pending_review",
         review_issues: []
       },
       reviews: []
@@ -474,7 +475,7 @@ describe("App", () => {
 
     // Verify dialog content
     expect(wrapper.text()).toContain("Review Source Decision");
-    expect(wrapper.text()).toContain("Record an overall approval or rejection for this source.");
+    expect(wrapper.text()).toContain("Every completed extraction requires a human decision.");
 
     // Enter an optional review note
     const noteTextarea = wrapper.get("textarea#review-note");
@@ -500,7 +501,7 @@ describe("App", () => {
     const document = {
       id: "document-multi-line",
       filename: "quotation.pdf",
-      status: "needs_review",
+      status: "pending_review",
       source_name: "PharmaGlobal Ltd",
       quotation: {
         quotation_reference: "PG-2026",
@@ -527,8 +528,8 @@ describe("App", () => {
           }
         ],
         revision: 1,
-        system_decision: "needs_review",
-        review_status: "unreviewed",
+        system_decision: "pending_review",
+        review_status: "pending_review",
         review_issues: [],
         field_reviews: [
           {
