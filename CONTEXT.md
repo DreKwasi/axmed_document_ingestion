@@ -2,7 +2,7 @@
 
 ## Ubiquitous language
 
-- **Extraction coverage:** count of expected key fields recovered; it says nothing about correctness.
+- **Extraction availability:** source fields are persisted when present; absence alone is neither a confidence score nor a review gate.
 - **Field reliability:** categorical assessment of one persisted field: `high`, `medium`, `low`, or `not_extracted`, with an observable reason.
 - **System decision:** automated routing outcome after extraction: `auto_accepted` or `needs_review`.
 - **Human outcome:** reviewer outcome, independent from system decision: `unreviewed`, `approved`, `corrected`, or `rejected`.

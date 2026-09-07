@@ -1559,11 +1559,9 @@ source evidence: usable; association: strong; independent validation: passed
 
 ## 45.6 Missing information and commercial availability
 
-A missing value is **not** a confidence category. If a supplier never states an MOQ, route, manufacturer, shelf life, or regulatory status, that does not reduce the confidence of the values that were recovered.
+A missing value is **not** a confidence category. If a supplier never states an MOQ, route, manufacturer, shelf life, price, quantity, or regulatory status, that does not reduce the confidence of the values that were recovered. There is no universal “critical fields” list or key-field completeness gate.
 
-The quotation review still requires seven commercial fields where applicable: product identity/INN, strength, dosage form, currency, quoted price, price UOM, and quoted quantity. Their presence is shown separately as an availability count such as `5 of 7 key fields available`.
-
-If one is unavailable, the product is sent to review because the offer cannot safely be evaluated or derived—not because another extracted value is less trustworthy. The **Review issues** column names the unavailable field. `Not extracted` may appear only as a field-availability state in detailed inspection; it is never shown as a product's Confidence and never lowers confidence in a different extracted field.
+An absent value routes review only when the extraction pipeline has positive evidence of a failure, conflict, unsafe derivation, or source ambiguity. Mere absence is preserved as `null` and is not converted into a confidence or review issue.
 
 ## 45.7 Confidence is not schema-mapping correctness
 
@@ -1585,11 +1583,11 @@ The document header does not show a generic percentage. It reports operational s
 
 ```text
 5 products extracted
-5 of 7 key fields available
+Medium confidence (lowest extracted-field band)
 1 field requires review
 ```
 
-Rows display the lowest confidence among their extracted fields only. The adjacent **Review issues** column separately names missing commercial values, conflicts, and validation failures.
+Rows display the lowest confidence among their extracted fields only. The adjacent **Review issues** column separately names confidence exceptions, conflicts, parser/OCR warnings, and validation failures.
 
 ---
 
@@ -1602,9 +1600,9 @@ SYSTEM DECISION: auto_accepted | needs_review
 HUMAN OUTCOME:  unreviewed | approved | corrected | rejected
 ```
 
-`auto_accepted` means the system judged the result safe enough to bypass the default manual queue; it does not mean a human approved it. It requires every required commercial value to be available, the extracted facts to meet the configured confidence policy, passing deterministic checks, no material parser/OCR uncertainty, and no conflicts.
+`auto_accepted` means the system judged the result safe enough to bypass the default manual queue; it does not mean a human approved it. It requires the extracted facts to meet the configured confidence policy, passing applicable deterministic checks, no material parser/OCR uncertainty, and no conflicts.
 
-`needs_review` is the exception route. It is selected for unavailable commercial values, Low-confidence extracted facts, validation errors, conflicts, ambiguity, poor OCR/parser quality, or unsafe derivation. The default review queue shows these exceptions, while auto-accepted records remain available in the broader source list.
+`needs_review` is the exception route. It is selected for Low-confidence extracted facts, explicit extraction failures, validation errors, conflicts, ambiguity, poor OCR/parser quality, or unsafe derivation. The default review queue shows these exceptions, while auto-accepted records remain available in the broader source list.
 
 `approved` means a reviewer inspected and accepted the record. An approval note is optional. `corrected` means a reviewer changed one or more values; the audit trail stores before/after values and an optional note. `rejected` requires a structured reason and permits an optional note.
 

@@ -4,7 +4,7 @@
     {
       "id": "canonical_fidelity",
       "label": "Canonical fidelity",
-      "success_criterion": "Critical quotation fields and line-item count exactly match approved ground truth."
+      "success_criterion": "Evaluated quotation fields and line-item count exactly match approved ground truth."
     },
     {
       "id": "mapping_efficiency",
