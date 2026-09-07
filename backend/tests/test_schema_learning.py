@@ -25,7 +25,7 @@ def test_confirmed_schema_reuses_mapping_without_semantic_call(client, sanova_by
     confirmed = client.post(f"/api/v1/documents/{cold['id']}/mapping/confirm")
 
     assert confirmed.status_code == 200
-    assert confirmed.json()["status"] == "needs_review"
+    assert confirmed.json()["status"] == "pending_review"
     assert confirmed.json()["mapping"]["human_verified"] is True
 
     warm_payload = json.loads(sanova_bytes)
@@ -34,7 +34,7 @@ def test_confirmed_schema_reuses_mapping_without_semantic_call(client, sanova_by
 
     assert warm.status_code == 201
     warm_document = warm.json()
-    assert warm_document["status"] == "needs_review"
+    assert warm_document["status"] == "pending_review"
     assert warm_document["mapping_source"] == "trusted_cache"
     assert warm_document["semantic_mapping_calls"] == 0
     assert warm_document["quotation"]["line_items"][0]["pricing"]["pack_price"] == "3.33"

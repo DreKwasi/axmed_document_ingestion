@@ -183,7 +183,7 @@ def test_pdf_worker_uses_redacted_page_context_and_persists_reviewable_quotation
             "pdf_extraction_completed",
         ]
     completed = client.get(f"/api/v1/documents/{document['id']}").json()
-    assert completed["status"] == "auto_accepted"
+    assert completed["status"] == "pending_review"
     assert "extraction_coverage" not in completed
     assert completed["quotation"]["supplier"]["name"] == "Farmaceutica Andina S.A.S."
     assert completed["source_name"] == "Farmaceutica Andina S.A.S. quotation"

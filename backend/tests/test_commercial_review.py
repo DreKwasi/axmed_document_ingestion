@@ -71,7 +71,8 @@ def test_correction_creates_a_corrected_revision_and_preserves_audit(client, san
     assert response.status_code == 200
     corrected = response.json()
     assert corrected["quotation"]["revision"] == revision + 1
-    assert corrected["quotation"]["review_status"] == "corrected"
+    assert corrected["quotation"]["review_status"] == "pending_review"
+    assert corrected["quotation"]["has_corrections"] is True
     assert corrected["quotation"]["line_items"][0]["pricing"]["pack_price"] == "4.00"
     assert (
         corrected["quotation"]["line_items"][0]["pricing"]["normalized_price"]["amount"]
@@ -182,7 +183,7 @@ def test_rejection_requires_a_structured_reason_and_preserves_it(client, sanova_
     assert rejected.json()["reviews"][0]["rejection_reason"] == "incorrect_extraction"
 
 
-def test_review_queue_contains_only_unreviewed_exceptions(client, sanova_bytes):
+def test_review_queue_contains_every_pending_human_review(client, sanova_bytes):
     document = confirmed_sanova(client, sanova_bytes)
 
     queue = client.get("/api/v1/review-queue")
@@ -228,7 +229,7 @@ def test_error_level_commercial_issue_cannot_be_approved(client, sanova_bytes):
     assert "resolve" in response.json()["detail"].lower()
 
 
-def test_decision_requires_a_completed_unreviewed_quotation(client, sanova_bytes):
+def test_decision_requires_a_quotation_awaiting_human_review(client, sanova_bytes):
     proposed = upload_json(client, "sanova-unconfirmed.json", sanova_bytes).json()
 
     response = client.post(
@@ -237,7 +238,7 @@ def test_decision_requires_a_completed_unreviewed_quotation(client, sanova_bytes
     )
 
     assert response.status_code == 409
-    assert "unreviewed" in response.json()["detail"].lower()
+    assert "awaiting human review" in response.json()["detail"].lower()
 
 
 def test_non_finite_or_empty_price_corrections_are_rejected(client, sanova_bytes):

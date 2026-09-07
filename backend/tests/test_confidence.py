@@ -33,12 +33,12 @@ def complete_line_item(method: str = "direct_json") -> LineItem:
     )
 
 
-def test_complete_direct_extraction_is_auto_accepted_without_a_numeric_score():
+def test_complete_direct_extraction_still_enters_pending_human_review():
     result = assess_review_readiness(
         CanonicalQuotation(line_items=[complete_line_item()]), ConfidenceSignals(source_type="json")
     )
 
-    assert result.system_decision == "auto_accepted"
+    assert result.system_decision == "pending_review"
     assert {field.band for field in result.fields.values()} == {"High"}
 
 
@@ -50,7 +50,7 @@ def test_absent_quantity_is_not_a_confidence_issue_or_review_gate():
         CanonicalQuotation(line_items=[line_item]), ConfidenceSignals(source_type="json")
     )
 
-    assert result.system_decision == "auto_accepted"
+    assert result.system_decision == "pending_review"
     assert "line_items[0].quantity.quoted_quantity" not in result.fields
     assert not result.review_reasons
     assert result.fields["line_items[0].product.inn[0]"].band == "High"
@@ -71,7 +71,7 @@ def test_conflicting_critical_value_cannot_be_averaged_away():
 
     result = assess_review_readiness(quotation, ConfidenceSignals(source_type="pdf"))
 
-    assert result.system_decision == "needs_review"
+    assert result.system_decision == "pending_review"
     assert result.fields["line_items[0].pricing.quoted_price.amount"].band == "Low"
 
 
@@ -80,7 +80,7 @@ def test_missing_optional_schema_fields_do_not_route_a_complete_offer_to_review(
         CanonicalQuotation(line_items=[complete_line_item()]), ConfidenceSignals(source_type="json")
     )
 
-    assert result.system_decision == "auto_accepted"
+    assert result.system_decision == "pending_review"
     assert all("minimum_order_quantity" not in reason for reason in result.review_reasons)
 
 
@@ -92,7 +92,7 @@ def test_clean_native_pdf_without_leaf_provenance_is_medium_not_a_review_failure
         CanonicalQuotation(line_items=[line_item]), ConfidenceSignals(source_type="pdf")
     )
 
-    assert result.system_decision == "auto_accepted"
+    assert result.system_decision == "pending_review"
     assert {field.band for field in result.fields.values()} == {"Medium"}
     assert not result.review_reasons
 
@@ -108,7 +108,7 @@ def test_clear_ocr_with_strong_row_association_is_high_confidence():
     )
 
     assert {field.band for field in result.fields.values()} == {"High"}
-    assert result.system_decision == "auto_accepted"
+    assert result.system_decision == "pending_review"
 
 
 def test_imperfect_ocr_with_clear_association_is_medium_without_corroboration():
@@ -164,7 +164,7 @@ def test_commercial_arithmetic_conflict_forces_low_confidence():
     price = result.fields["line_items[0].pricing.quoted_price.amount"]
     assert price.band == "Low"
     assert "independent validation: conflicting" in price.reason
-    assert result.system_decision == "needs_review"
+    assert result.system_decision == "pending_review"
 
 
 def test_every_extracted_source_field_receives_factorized_confidence():
