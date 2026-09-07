@@ -54,7 +54,7 @@ describe("App", () => {
       status: "needs_review",
       source_system: "pdf",
       semantic_mapping_calls: 0,
-      extraction_confidence: "96%",
+      extraction_coverage: { extracted: 6, expected: 6 },
       product_counts: { extracted: 1, failed: 0 },
       notes: ["Quantity extracted from the source table."],
       quotation: {
@@ -93,10 +93,15 @@ describe("App", () => {
     expect(wrapper.findAll("thead")[0].text()).not.toContain("File source");
     expect(wrapper.findAll("thead")[0].text()).not.toContain("Source name");
     await wrapper.get("button.group").trigger("click");
+    await flushPromises();
 
     expect(wrapper.text()).toContain("Product breakdown");
     expect(wrapper.text()).toContain("6,000,000 tablet");
     expect(wrapper.text()).toContain("Quoted quantity");
+
+    // Click product row to open product details drawer
+    await wrapper.find("tbody tr").trigger("click");
+    await flushPromises();
     expect(wrapper.text()).toContain("12 packs / shipper");
     expect(wrapper.text()).toContain("WHO prequalified");
     expect(wrapper.text()).toContain("markets: KE");
@@ -114,7 +119,7 @@ describe("App", () => {
       schema_version: "2.4.1",
       semantic_mapping_calls: 1,
       mapping: { id: "mapping-1", trust_state: "proposed", times_seen: 1, times_confirmed: 0, human_verified: false },
-      quotation: { line_items: [], supplier: {}, commercial_terms: {}, revision: 1, review_status: "unreviewed", review_issues: [] },
+      quotation: { line_items: [], supplier: {}, commercial_terms: {}, revision: 1, system_decision: "needs_review", review_status: "unreviewed", review_issues: [] },
       reviews: []
     });
     api.confirmMapping.mockResolvedValue({
@@ -125,7 +130,7 @@ describe("App", () => {
       schema_version: "2.4.1",
       semantic_mapping_calls: 1,
       mapping: { id: "mapping-1", trust_state: "trusted", times_seen: 1, times_confirmed: 1, human_verified: true },
-      quotation: { line_items: [], supplier: {}, commercial_terms: {}, revision: 2, review_status: "unreviewed", review_issues: [] },
+      quotation: { line_items: [], supplier: {}, commercial_terms: {}, revision: 2, system_decision: "needs_review", review_status: "unreviewed", review_issues: [] },
       reviews: []
     });
     const wrapper = mount(App);
@@ -139,7 +144,7 @@ describe("App", () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain("New source structure detected");
-    expect(wrapper.text()).toContain("Confidence");
+    expect(wrapper.text()).toContain("Extraction pending");
     await wrapper.findAll("button").find((button) => button.text() === "Confirm mapping")?.trigger("click");
     await flushPromises();
     expect(api.confirmMapping).toHaveBeenCalledWith("document-1");
@@ -196,8 +201,23 @@ describe("App", () => {
     });
     await file.trigger("change");
     await flushPromises();
-    expect(wrapper.text()).toContain("Source decision");
+
+    // Verify Review Source dialog
+    const reviewBtn = wrapper.findAll("button").find((button) => button.text().includes("Review source"));
+    await reviewBtn?.trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("Review Source Decision");
     expect(wrapper.text()).toContain("Approve source");
+
+    // Close review dialog to interact with product details
+    const closeDialogBtn = wrapper.findAll("button").find((button) => button.attributes("aria-label") === "Close dialog");
+    await closeDialogBtn?.trigger("click");
+    await flushPromises();
+
+    // Click product row to open product details drawer
+    await wrapper.find("tbody tr").trigger("click");
+    await flushPromises();
+
     await wrapper.get('input[aria-label="Correction value for Example"]').setValue("4.00");
     await wrapper.findAll("button").find((button) => button.text() === "Save correction")?.trigger("click");
     await flushPromises();
@@ -361,5 +381,142 @@ describe("App", () => {
     expect(api.fetchEvents).toHaveBeenCalledWith("document-events");
     expect(api.fetchDocument).toHaveBeenCalledWith("document-events");
     expect(wrapper.text()).toContain("Preparing quotation pages.");
+  });
+
+  it("opens the review dialog and records an approval with an optional reviewer note", async () => {
+    const document = {
+      id: "document-approve",
+      filename: "offer.json",
+      status: "needs_review",
+      quotation: {
+        quotation_reference: "REF-99",
+        supplier: { name: "MedSupply Co" },
+        commercial_terms: { currency: "USD" },
+        line_items: [
+          {
+            source_key: "item-1",
+            product: { trade_name: "Amoxicillin 500", inn: ["Amoxicillin"], dosage_form: "capsule" },
+            packaging: {},
+            quantity: { quoted_quantity: "1000", quoted_quantity_uom: "capsule" },
+            pricing: { quoted_price: { amount: "0.05", uom: "capsule" }, normalized_price: {} },
+            supply: {},
+            evidence: [{ canonical_field: "product.trade_name", confidence: "0.95", extraction_method: "semantic" }]
+          }
+        ],
+        revision: 2,
+        review_status: "unreviewed",
+        review_issues: []
+      },
+      reviews: []
+    };
+    api.fetchDocuments.mockResolvedValue([document]);
+    api.reviewDocument.mockResolvedValue({
+      ...document,
+      status: "approved",
+      quotation: { ...document.quotation, review_status: "approved", revision: 3 }
+    });
+    const wrapper = mount(App);
+    await flushPromises();
+
+    // Open the source
+    await wrapper.get("button.group").trigger("click");
+    await flushPromises();
+
+    // Open review dialog
+    const reviewBtn = wrapper.findAll("button").find((b) => b.text().includes("Review source"));
+    expect(reviewBtn).toBeDefined();
+    await reviewBtn?.trigger("click");
+    await flushPromises();
+
+    // Verify dialog content
+    expect(wrapper.text()).toContain("Review Source Decision");
+    expect(wrapper.text()).toContain("Record an overall approval or rejection for this source.");
+
+    // Enter an optional review note
+    const noteTextarea = wrapper.get("textarea#review-note");
+    await noteTextarea.setValue("Pricing confirmed against supplier catalog.");
+
+    // Click Approve source
+    const approveBtn = wrapper.findAll("button").find((b) => b.text() === "Approve source");
+    expect(approveBtn).toBeDefined();
+    await approveBtn?.trigger("click");
+    await flushPromises();
+
+    expect(api.reviewDocument).toHaveBeenCalledWith(
+      "document-approve",
+      "approve",
+      expect.objectContaining({
+        expected_revision: 2,
+        note: "Pricing confirmed against supplier catalog."
+      })
+    );
+  });
+
+  it("displays per-row reliability and opens the product details drawer when a product row is clicked", async () => {
+    const document = {
+      id: "document-multi-line",
+      filename: "quotation.pdf",
+      status: "needs_review",
+      source_name: "PharmaGlobal Ltd",
+      quotation: {
+        quotation_reference: "PG-2026",
+        supplier: { name: "PharmaGlobal" },
+        commercial_terms: { currency: "USD" },
+        line_items: [
+          {
+            source_key: "line-1",
+            product: { trade_name: "HighConfidenceItem", inn: ["Substance A"], dosage_form: "tablet" },
+            packaging: { primary_pack: "blister", units_per_pack: 10 },
+            quantity: { quoted_quantity: "5000", quoted_quantity_uom: "tablet" },
+            pricing: { quoted_price: { amount: "1.20", uom: "tablet" }, normalized_price: {} },
+            supply: { lead_time_days: 14 },
+            evidence: [{ canonical_field: "product.trade_name", confidence: "0.98", extraction_method: "table" }]
+          },
+          {
+            source_key: "line-2",
+            product: { trade_name: "LowerConfidenceItem", inn: ["Substance B"], dosage_form: "vial" },
+            packaging: { primary_pack: "vial", units_per_pack: 1 },
+            quantity: { quoted_quantity: "200", quoted_quantity_uom: "vial" },
+            pricing: { quoted_price: { amount: "15.00", uom: "vial" }, normalized_price: {} },
+            supply: { lead_time_days: 30 },
+            evidence: [{ canonical_field: "product.trade_name", confidence: "0.72", extraction_method: "ocr" }]
+          }
+        ],
+        revision: 1,
+        system_decision: "needs_review",
+        review_status: "unreviewed",
+        review_issues: []
+      },
+      extraction_coverage: { extracted: 12, expected: 12 },
+      reliability_summary: { High: 6, Medium: 4, Low: 2, "Not extracted": 0 },
+      reviews: []
+    };
+    api.fetchDocuments.mockResolvedValue([document]);
+    const wrapper = mount(App);
+    await flushPromises();
+
+    // Open the source
+    await wrapper.get("button.group").trigger("click");
+    await flushPromises();
+
+    // Check product breakdown contains both products
+    expect(wrapper.text()).toContain("HighConfidenceItem");
+    expect(wrapper.text()).toContain("LowerConfidenceItem");
+
+    // A row uses persisted reliability, never an averaged confidence percentage.
+    expect(wrapper.text()).toContain("Reliability");
+
+    // Verify first line is selected in drawer
+    expect(wrapper.text()).toContain("Substance A");
+
+    // Click second product row
+    const rows = wrapper.findAll("tbody tr");
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+    await rows[1].trigger("click");
+    await flushPromises();
+
+    // Verify drawer now shows second line
+    expect(wrapper.text()).toContain("Substance B");
+    expect(wrapper.text()).toContain("LowerConfidenceItem");
   });
 });
