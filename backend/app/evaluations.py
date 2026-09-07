@@ -8,15 +8,15 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.config import Config
-from app.domain.commercial_rules import apply_commercial_rules
-from app.domain.email_parser import parse_email
-from app.domain.email_reconciliation import reconcile_email_price_uoms
-from app.domain.json_extraction import JsonSemanticExtractor, profile_json, validate_source_facts
-from app.domain.pdf_parser import parse_native_pdf
-from app.infrastructure.models import EvaluationCaseRecord, EvaluationResultRecord, EvaluationRunRecord
+from app.config import Config
+from app.extraction.commercial import apply_commercial_rules
+from app.extraction.email_parser import parse_email
+from app.extraction.email_reconciliation import reconcile_email_price_uoms
+from app.extraction.json import JsonSemanticExtractor, profile_json, validate_source_facts
+from app.extraction.ocr_client import request_ocr
+from app.extraction.pdf_parser import parse_native_pdf
+from app.models import EvaluationCaseRecord, EvaluationResultRecord, EvaluationRunRecord
 from app.security.redaction import redact_for_model
-from app.workers.ocr_client import request_ocr
 
 
 def _dataset_fixture_path(golden_dataset_path: Path, fixture: str) -> Path:
@@ -185,7 +185,7 @@ def run_live_pdf_evaluation(
             }
         )
         started = perf_counter()
-        from app.domain.langchain_extractor import LangChainSemanticExtractor
+        from app.extraction.llm import LangChainSemanticExtractor
 
         extractor = LangChainSemanticExtractor(
             settings.gemini_api_key,
@@ -302,7 +302,7 @@ def run_live_email_evaluation(
     session.add(run)
     session.flush()
     passed = 0
-    from app.domain.langchain_extractor import LangChainSemanticExtractor
+    from app.extraction.llm import LangChainSemanticExtractor
 
     extractor = LangChainSemanticExtractor(
         settings.gemini_api_key,

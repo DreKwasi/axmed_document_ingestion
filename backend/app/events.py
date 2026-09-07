@@ -1,4 +1,4 @@
-"""Safe persisted event seam shared by API, worker, diagnostics, and SSE."""
+"""Persisted, redacted document-processing events used by the API and SSE."""
 
 import json
 import logging
@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.infrastructure.models import ProcessingEventRecord
+from app.models import ProcessingEventRecord
 from app.security.redaction import redact_for_model
 
 logger = logging.getLogger("app.events")
