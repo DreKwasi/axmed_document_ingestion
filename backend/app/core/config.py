@@ -1,9 +1,17 @@
+"""Centralized application configuration.
+
+Loads .env files once at import time and provides a single, typed config object
+without requiring scattered os.environ.get calls.
+"""
+
+import sys
 from functools import lru_cache
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
+WORKSPACE_ROOT = BACKEND_ROOT.parent
 
 
 def _backend_path(path: Path) -> Path:
@@ -11,7 +19,7 @@ def _backend_path(path: Path) -> Path:
 
 
 def _operational_database_url(database_url: str) -> str:
-    """Make relative SQLite URLs stable for API and Huey processes."""
+    """Make relative SQLite URLs stable regardless of invocation directory."""
     prefix = "sqlite:///"
     if not database_url.startswith(prefix) or database_url.endswith(":memory:"):
         return database_url
@@ -19,48 +27,40 @@ def _operational_database_url(database_url: str) -> str:
     return database_url if database_path.is_absolute() else f"{prefix}{_backend_path(database_path)}"
 
 
-class Settings(BaseSettings):
+class Config(BaseSettings):
+    """Application configuration with zero-prefix environment variable binding."""
+
     app_name: str = "Axmed Document Intelligence"
     environment: str = "development"
     database_url: str = "sqlite:///./data/app.db"
-    task_database_path: Path = Path("data/tasks.db")
     upload_dir: Path = Path("data/uploads")
-    max_upload_bytes: int = 5 * 1024 * 1024
-    recorded_mapping_dir: Path = Path("backend/evals/recorded_mappings")
+    max_upload_bytes: int = 15 * 1024 * 1024  # 15 MB
+    recorded_json_extraction_dir: Path = Path("backend/evals/recorded_json_extractions")
     golden_dataset_path: Path = Path("backend/evals/golden_dataset.json")
     event_poll_interval_ms: int = 250
-    background_job_dispatch_enabled: bool = True
-    learning_resolver_url: str | None = None
-    learning_resolver_token: str | None = None
-    learning_resolver_model: str | None = None
-    semantic_resolver_url: str | None = None
-    semantic_resolver_token: str | None = None
-    semantic_resolver_model: str | None = None
-    ocr_service_url: str | None = None
+    background_processing_enabled: bool = True
+
+    # OCR Service (hardcoded default endpoint)
+    ocr_service_url: str | None = "https://andrewsboateng137--axmed-paddle-ocr.modal.run/ocr"
     ocr_service_token: str | None = None
     ocr_request_timeout_seconds: int = 60
+
+    # Google Gemini
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-3.1-flash-lite"
+    gemini_request_timeout_seconds: int = 60
+
+    # HTTP & CORS
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
-    model_config = SettingsConfigDict(env_file=".env", env_prefix="AXMED_", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=None if "pytest" in sys.modules else (".env", BACKEND_ROOT / ".env", WORKSPACE_ROOT / ".env"),
+        extra="ignore",
+    )
 
     def model_post_init(self, _context: object) -> None:
         self.database_url = _operational_database_url(self.database_url)
-        self.task_database_path = _backend_path(self.task_database_path)
         self.upload_dir = _backend_path(self.upload_dir)
-
-    @property
-    def resolved_gemini_api_key(self) -> str | None:
-        import os
-
-        return self.gemini_api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-
-    @property
-    def resolved_gemini_model(self) -> str:
-        import os
-
-        return os.environ.get("GEMINI_MODEL") or self.gemini_model or "gemini-3.1-flash-lite"
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -68,5 +68,9 @@ class Settings(BaseSettings):
 
 
 @lru_cache
-def get_settings() -> Settings:
-    return Settings()
+def get_config() -> Config:
+    return Config()
+
+
+# Shared singleton instance for application composition.
+config: Config = get_config()
