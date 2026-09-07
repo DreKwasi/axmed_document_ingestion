@@ -89,7 +89,7 @@ Check in a corpus manifest from Slice 1. For each fixture it names the document 
 
 Each JSON upload is profiled in memory and then semantically extracted without cross-document memory. Facts carry raw value, JSONPath, method, confidence, rationale, normalization status, and optional canonical field. Direct JSON facts are accepted only when resolving their JSONPath produces the claimed value; invalid claims cause one retry while already validated facts remain.
 
-No schema fingerprint, stored mapping, alias-learning record, mapping confirmation, or automatic reuse is part of the current product. Mapping uncertainty does not affect extraction confidence. Only source readability, ambiguity, conflicts, and pointer/value validation do. A document fails only when no meaningful quotation facts are recovered.
+No schema fingerprint, stored mapping, alias-learning record, mapping confirmation, or automatic reuse is part of the current product. Mapping uncertainty does not affect extraction confidence. Only source readability, ambiguity, conflicts, and pointer/value validation do. Valid source facts remain stored even when unmapped, but a zero-product quotation is failed and excluded from human review.
 
 ### State and trust model
 
@@ -100,7 +100,13 @@ processing:    received → parsed → queued → processing → terminal | fail
 review status: pending_review → approved | rejected
 ```
 
-Per-field source clarity, association certainty, independent validation, conflicts, and OCR/parser warnings classify confidence without averaging. Derived values keep formula and validation status and receive no extraction-confidence band. Every successful source enters `pending_review`; the review queue contains all of them. Approval requires no note. A correction is an audited action with before/after patches that preserves `pending_review` until explicit approval, then sets `has_corrections`. Rejection requires one structured reason (`unreadable_source`, `incorrect_extraction`, `unsupported_document`, `duplicate`, `not_a_quotation`, or `other`) and may include a note. Commands are idempotent by request key and stale revisions conflict.
+Confidence is calculated in two independent dimensions. Extraction confidence answers whether the source was recovered faithfully; mapping confidence answers whether recovered values were assigned to the correct canonical fields. Neither is a completeness score, and neither can auto-approve a source.
+
+Extraction confidence is a transparent 0–100 weighted score with these factors: source format (20%), machine readability/native-vs-OCR recovery (30%), parser quality and cleanliness (25%), grounded source evidence quality (15%), and OCR line quality when OCR is used (10%). JSON and clean native text score highly; degraded PDFs, OCR-dependent images, parser warnings, weak OCR lines, and conflicting/ungrounded evidence reduce the score. The API returns the band, score, and factor explanations so the UI never presents an unexplained “lowest field band.”
+
+Mapping confidence is calculated per canonical leaf from direct source-path grounding, row/cell association, provenance quality, deterministic reconciliation, and explicit conflicts or ambiguity. It returns a score/band plus a deduplicated `mapping_issues` list. Mapping issues are actionable field-level problems only; they are not generated once per low-confidence field. The source table shows `Extraction confidence` and `Mapping confidence`; the old `Review issues` column and `lowest field band` label are removed. Product breakdown rows show mapping issue counts, and the product detail drawer groups issue messages under the affected Product, Pricing, Quantity & Packaging, Supply, or Regulatory section.
+
+Derived values keep formula and validation status and receive no extraction or mapping confidence. Every successful source with at least one product enters `pending_review`; zero-product results fail with a safe reason and contain no reviewable quotation. Approval requires no note. A correction is an audited action with before/after patches that preserves `pending_review` until explicit approval, then sets `has_corrections`. Rejection requires one structured reason (`unreadable_source`, `incorrect_extraction`, `unsupported_document`, `duplicate`, `not_a_quotation`, or `other`) and may include a note. Commands are idempotent by request key and stale revisions conflict.
 
 ### Local data and privacy boundary
 
@@ -188,6 +194,8 @@ Acceptance checks:
 - Native structure is persisted with page/source coordinates where the chosen parser supplies them.
 - Corpus-manifest comparison modes/tolerances—not ad hoc test values—govern expected results.
 - Incoterm/place, MOQ/quantity, price basis, discounts/surcharges, storage, and lead time remain distinct.
+- Transit, shipping, and delivery durations do not populate product lead time unless explicitly labelled as lead time.
+- Dosage form retains the complete source phrase; it is not split into route or packaging presentation.
 - Only unresolved redacted sections reach the semantic adapter, asserted from captured test payloads.
 - Parse-quality signals are recorded and clean native PDFs avoid OCR.
 
@@ -196,13 +204,14 @@ Acceptance checks:
 **Blocked by:** Slices 3 and 5  
 **Covers:** US-01, US-03, US-06, US-07
 
-Add a PaddleOCR/Modal port using the checked-in Piply benchmark reference. Route images and only poor PDF pages to OCR, merge evidence, and prefer null/low-confidence review issues over guesses. Build and test the client/contract now; request user authorization before the live Modal deployment.
+Add a PaddleOCR/Modal port using the checked-in Piply benchmark reference. Route images and only poor PDF pages to OCR, retain provider evidence, and prefer null/low-confidence review issues over guesses. Send Gemini the original source plus redacted OCR page text as a transcription aid; do not insert deterministic OCR row reconstruction or provide geometry as a mapping model.
 
 Acceptance checks:
 
 - Low-resolution PNG and glare-obscured JPEG take the OCR path; native PDFs do not.
 - OCR timeout/service failures retry within policy and end explicitly.
-- OCR confidence, page, bounds, and method attach to evidence.
+- OCR confidence, page, bounds, and method remain stored for audit, but Gemini receives only the readable OCR page text and original source media.
+- Tests prove OCR coordinates are absent from Gemini input and do not determine row or field associations.
 - The glare fixture preserves intentionally unreadable fields as null/low confidence; a mutation inserting a plausible number fails evaluation.
 - Modal contract tests run without credentials; after authorized deployment, live smoke and latency measurements against all degraded fixtures are required and labelled separately.
 

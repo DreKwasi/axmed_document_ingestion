@@ -459,14 +459,19 @@ usable text / table representation?
           ↓
        PaddleOCR
           ↓
-       OCR text + layout
+       OCR page text + original source
           ↓
-       LLM extraction
+       LLM semantic extraction
 ```
 
 Images generally enter through the PaddleOCR path directly.
 
-OCR should preserve layout information such as bounding boxes when available. The goal is to retain relationships between text regions, rows, columns, and labels rather than flattening everything into one string.
+OCR should preserve confidence and layout metadata in its stored provider result for audit and future tooling. That
+metadata does not drive canonical mapping in the current pipeline and is not supplied to Gemini as a row model.
+For images, the system runs two independent Gemini attempts: an OCR-assisted attempt receives readable OCR page text,
+and a direct-vision attempt receives the original image. They are peer results, never merged or automatically selected.
+A reviewer compares them and explicitly opens one result for quotation review. Neither attempt may assume OCR line order
+defines table rows.
 
 The original image remains the ground truth source for review.
 
@@ -535,18 +540,23 @@ Image
  ↓
 PaddleOCR
  ↓
-text + layout / bounding boxes
+readable page text
  ↓
-LLM extraction
+Gemini receives original image + OCR transcription
+ ↓
+semantic extraction
 ```
 
-The system does not require OCR to reconstruct a perfect table before extraction. The LLM receives the recovered text and layout representation and maps it into the canonical quotation model.
+There is no deterministic OCR table reconstruction or row mapping. OCR confidence and geometry remain stored for
+audit/debugging but do not control Gemini's interpretation.
 
 ---
 
 # 13. PII handling
 
-PII detection occurs before document content is sent to the LLM.
+OCR-derived text is redacted before it is sent to the LLM. The OCR semantic path also transmits the original source
+media so Gemini can inspect visual content that OCR may have misordered or omitted. This requires an approved model
+provider/data-processing boundary because text redaction cannot sanitize pixels in the attached source.
 
 Use:
 
@@ -723,6 +733,10 @@ Two apparently identical medicine prices aren't necessarily commercially compara
  "country_of_origin": null
 }
 ```
+
+`dosage_form` preserves the complete source phrase, such as `solution for injection` or
+`powder for oral suspension`. Route is not a separate field, and packaging presentation must not be split out of
+or appended to dosage form unless the source states it independently.
 
 ---
 
@@ -904,6 +918,10 @@ EUR 0.035 / tablet
 ```
 
 This is a system-derived value.
+
+Normalized price is available in product detail for comparison and audit, but it is not repeated in the product
+overview table. Its displayed precision must never exceed the quoted price's decimal precision; the stored
+`Decimal` value remains exact.
 
 ---
 
@@ -1102,7 +1120,11 @@ canonical normalization uncertain
 persist as an unmapped extracted source fact
 ```
 
-That is successful extraction. Canonical-mapping uncertainty never lowers extraction confidence, creates a review issue, or fails a document. A document fails only when no meaningful quotation facts can be recovered. Invalid claims get one corrective extraction attempt, while valid facts from the first attempt remain stored.
+That is successful source-fact extraction. Canonical-mapping uncertainty never lowers extraction confidence or
+creates a review issue. The product-review workflow still requires at least one normalized product line: when
+zero products are recovered, the source is marked `failed` with a safe explanation rather than being presented as
+pending human review. Any validated source facts remain stored as `not_reviewable`. Invalid claims get one
+corrective extraction attempt, while valid facts from the first attempt remain stored.
 
 Canonical quotation fields remain blank when normalization is not certain. `field_evidence` is used only for normalized canonical fields; generic extracted facts are stored separately and are not shown in the current product detail. Human decisions apply to the quotation result, not to a source-schema interpretation.
 
@@ -1291,106 +1313,45 @@ Conceptually:
 
 # 45. Confidence and extraction correctness
 
-Confidence answers one question: **how confidently did the system recover a value that the source actually states?** It does not measure schema completeness, commercial completeness, or whether normalization mapped a source fact to the right internal field.
+The system exposes two independent confidence measures: **extraction confidence** and **mapping confidence**. Neither is a completeness score or an approval rule; every recovered quotation still requires human review.
 
-The system keeps three separate concepts:
+## 45.1 Extraction confidence: did we recover the source faithfully?
 
-```text
-field confidence       = trustworthiness of an extracted source fact
-commercial availability = whether the information required to review an offer is available
-review status           = the human decision on the extracted source
-```
+Extraction confidence is a visible 0–100 score with a `High`, `Medium`, or `Low` band. It is calculated only from source-recovery quality:
 
-## 45.1 Field-level confidence
+| Factor | Weight | Examples |
+|---|---:|---|
+| Source format | 20% | machine-readable JSON scores above unstructured media |
+| Machine readability | 30% | native PDF text and clean email score above OCR-dependent media |
+| Parser quality | 25% | clean parse, mixed fallback, poor parse, or failed parse |
+| Grounded evidence quality | 15% | evidence recovered from the source, not model self-assessment |
+| OCR quality | 10% | OCR line confidence when OCR was used; neutral when it was not |
 
-Every extracted source fact is persisted with its numeric evidence, provenance, categorical **Confidence**, and safe reason. Numeric evidence supports policy and evaluation but is not a calibrated probability and is never displayed as a confidence percentage.
+The API returns each factor, weight, score, and plain-language reason. Glare, blur, cropping, damaged scans, OCR use, weak OCR lines, and parser warnings reduce extraction confidence. Canonical schema ambiguity never does.
 
-Confidence is decided independently for each extracted field from three factors:
+Confidence exists only for an assessable extraction result: at least one extracted product must be available for review. A source that fails with zero products returns `extraction_confidence: null` and `mapping_confidence: null`; it must display as failed, never as a low-percentage extraction.
 
-```text
-source evidence         how clearly the value was recovered
-association certainty   how clearly it belongs to the field, row, product, or source path
-independent validation  whether same-source evidence supports or contradicts it
-```
+## 45.2 Mapping confidence: did the recovered value land in the correct schema field?
 
-Confidence is not an arithmetic average. A material conflict overrides otherwise strong signals.
+Mapping confidence is calculated per canonical leaf and summarized for each product and source. It combines direct JSON-path grounding, row/cell or source-location association, provenance quality, deterministic reconciliation, and explicit conflicts. A clear `MOQ: 5,000 boxes` can therefore have high extraction confidence while its mapping to `quoted_quantity` has low mapping confidence.
 
-## 45.2 Source evidence
+The API returns a deduplicated `mapping_issues` list containing only actionable field-level concerns. Each issue identifies its canonical field, product-detail section, code, severity, and message. A low OCR score does not create dozens of mapping issues by itself.
 
-Strong source evidence includes a direct JSON value, clean native PDF text, clear email text, high-quality unambiguous OCR, or parser/OCR agreement. Glare, blur, cropping, damaged scans, uncertain OCR characters, and partially missing text weaken source evidence.
+## 45.3 Missing and derived values
 
-The internal OCR/provider number is one input to source-evidence quality, not the final confidence and not a calibrated probability.
+An absent source value is not a confidence penalty. A derived value has no extraction or mapping confidence; it retains only its origin, formula, and deterministic validation status.
 
-## 45.3 Association certainty
+## 45.4 Review presentation
 
-Strong association means the value has an unambiguous JSON path or clearly belongs to the expected table header, row, column, product, or email statement. Merged cells, multiline reconstruction, indirect prose references, overlapping OCR boxes, and ambiguous column alignment weaken association.
+The source table has `Extraction confidence` and `Mapping confidence` columns. `Review issues` and the opaque `lowest field band` presentation are retired. The mapping column can state, for example, `74% · 2 issues found`.
 
-## 45.4 Independent validation
-
-Where available, deterministic same-source checks support or contradict extraction correctness:
-
-```text
-quantity × unit price × (1 - discount) ≈ extended price
-unit price × units per pack ≈ pack price
-parser value = OCR value
-issue date <= valid-until date
-```
-
-A passing check can strengthen usable evidence to High. A failed check makes affected fields Low and routes review. Lack of an applicable validation does not prevent High when source evidence and association are independently strong.
-
-## 45.5 Decision rule
-
-The reviewer sees one of these categories:
-
-```text
-High    strong source evidence + strong association, or usable evidence strengthened by passed validation; no unresolved conflict
-Medium  the value is probably correct, but source/association has meaningful uncertainty and validation is limited
-Low     substantial risk that the value does not match the source because of weak evidence, ambiguity, conflict, or poor parsing
-```
-
-The stored reason retains all three inputs for audit and evaluation. The reviewer UI translates them into concise
-plain-language evidence summaries, rather than repeating raw internal factor strings for every field.
-
-## 45.6 Missing information and commercial availability
-
-A missing value is **not** a confidence category. If a supplier never states an MOQ, dosage form, manufacturer, shelf life, price, quantity, or regulatory status, that does not reduce the confidence of the values that were recovered. There is no universal “critical fields” list or key-field completeness gate.
-
-An absent value routes review only when the extraction pipeline has positive evidence of a failure, conflict, unsafe derivation, or source ambiguity. Mere absence is preserved as `null` and is not converted into a confidence or review issue.
-
-An Incoterm and its named place/country are commercial facts and must be extracted independently. A delivery location
-does not by itself establish a product's country of origin; origin requires an explicit manufacture/origin statement.
-
-## 45.7 Confidence is not schema-mapping correctness
-
-If the source clearly states `MOQ: 5,000 boxes`, recovering that label, number, and unit can have High confidence. Mapping it incorrectly to `quoted_quantity` is a normalization defect, not evidence that the source extraction was Low confidence.
-
-## 45.8 Derived values
-
-A system-calculated value is not an extracted source fact and receives no extraction-confidence band. It instead persists its origin, formula, and deterministic validation status:
-
-```text
-origin = derived
-calculation = 3.15 / 90
-validation_status = passed
-```
-
-## 45.9 Document and row summaries
-
-The document header does not show a generic percentage. It reports operational state, for example:
-
-```text
-5 products extracted
-Medium confidence (lowest extracted-field band)
-1 field requires review
-```
-
-Rows display the lowest confidence among their extracted fields only. The adjacent **Review issues** column separately names confidence exceptions, conflicts, parser/OCR warnings, and validation failures.
+Product breakdown rows show mapping confidence and their mapping issue count. In product detail, issues appear under the affected Product Identity, Pricing & Commercial Terms, Quantity & Packaging, Supply & Logistics, or Regulatory & Compliance section. Extraction confidence factors remain visible as a separate source-recovery explanation.
 
 ---
 
 # 46. Review status and human-in-the-loop decisions
 
-Every successful extraction requires human review before it can be approved. Confidence directs attention to
+Every successful extraction containing at least one product requires human review before it can be approved. Confidence directs attention to
 uncertain fields; it never permits approval to be skipped. There is no auto-approval state.
 
 ```text
@@ -1426,11 +1387,11 @@ silently approved.
 
 Example:
 
-| Product | Quantity | Price | Basis | Confidence | Review issues |
+| Product | Quantity | Price | Basis | Mapping confidence | Mapping issues |
 |---|---:|---:|---|---|---|
-| Azimax 250 | — | €0.134 | tablet | High | corrected later in email |
-| Sanotri-TLD | — | €0.035 | tablet | High | derived from pack price |
-| Scan item | 50,000 | ? | pack | Low | glare obscures price |
+| Azimax 250 | — | €0.134 | tablet | 96% | — |
+| Sanotri-TLD | — | €0.035 | tablet | 90% | price basis confirmed by reconciliation |
+| Scan item | 50,000 | ? | pack | 42% | confirm price field assignment |
 
 Approval is one click. A reviewer may correct values, then explicitly approve the corrected source; corrections
 preserve before/after values. Rejection requires a structured reason, not mandatory free text.
@@ -1516,6 +1477,11 @@ reason = OCR unavailable
 Retry structured extraction where appropriate.
 
 Then fail or request review rather than accepting malformed data.
+
+### No products extracted
+
+Fail the source with `No products could be extracted from this source.` Preserve any validated source facts for
+audit, but do not create an empty quotation for human review.
 
 ### Unreadable field
 
