@@ -453,6 +453,7 @@ def _sync_normalized_line_items(session: Session, quotation_id: str, canonical: 
                 normalized_price_uom=line.pricing.normalized_price.get("uom"),
                 normalized_price_calculation=line.pricing.normalized_price.get("calculation"),
                 normalized_price_derived=line.pricing.normalized_price.get("derived"),
+                normalized_price_validation_status=line.pricing.normalized_price.get("validation_status"),
                 lead_time_days=line.supply.lead_time_days,
                 shelf_life_months=line.supply.shelf_life_months,
                 minimum_remaining_shelf_life_percent=line.supply.minimum_remaining_shelf_life_percent,
@@ -611,6 +612,7 @@ def _normalized_line_items(session: Session, quotation_id: str) -> list[dict[str
                         "uom": row.normalized_price_uom,
                         "calculation": row.normalized_price_calculation,
                         "derived": row.normalized_price_derived,
+                        "validation_status": row.normalized_price_validation_status,
                     },
                 },
                 "supply": {
@@ -774,8 +776,12 @@ def _sync_field_values(
                 canonical_field=field_path,
                 value_json=json.dumps(value, default=str, sort_keys=True),
                 review_status="corrected" if field_path in corrected_fields else "unreviewed",
-                reliability=confidence_assessment.band if confidence_assessment else "Medium",
-                reliability_reason=confidence_assessment.reason if confidence_assessment else "Not assessed",
+                reliability=confidence_assessment.band if confidence_assessment else "Not applicable",
+                reliability_reason=(
+                    confidence_assessment.reason
+                    if confidence_assessment
+                    else "Derived value; extraction confidence does not apply"
+                ),
                 confidence=Decimal(str(matching_evidence.confidence)) if matching_evidence else Decimal("0.00"),
                 extraction_method=matching_evidence.extraction_method if matching_evidence else "unattributed",
                 source_path=matching_evidence.source_path if matching_evidence else None,
@@ -1251,7 +1257,9 @@ def serialize_document(session: Session, document: DocumentRecord) -> dict[str, 
                 "field_path": field_value.canonical_field,
                 "value": json.loads(field_value.value_json),
                 "review_status": field_value.review_status,
-                "confidence_band": field_value.reliability,
+                "confidence_band": (
+                    None if field_value.reliability == "Not applicable" else field_value.reliability
+                ),
                 "confidence_reason": field_value.reliability_reason,
                 "confidence": str(field_value.confidence),
                 "extraction_method": field_value.extraction_method,

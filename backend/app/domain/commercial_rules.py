@@ -69,6 +69,7 @@ def _price_and_pack(context: RuleContext) -> list[ReviewIssue]:
         "uom": context.line.packaging.unit_label or "unit",
         "calculation": f"{pricing.pack_price} / {units}",
         "derived": True,
+        "validation_status": "passed",
     }
     return issues
 
