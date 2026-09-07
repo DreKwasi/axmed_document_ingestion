@@ -54,7 +54,6 @@ describe("App", () => {
       status: "needs_review",
       source_system: "pdf",
       semantic_mapping_calls: 0,
-      extraction_coverage: { extracted: 6, expected: 6 },
       product_counts: { extracted: 1, failed: 0 },
       notes: ["Quantity extracted from the source table."],
       quotation: {
@@ -158,7 +157,7 @@ describe("App", () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain("New source structure detected");
-    expect(wrapper.text()).toContain("Extraction pending");
+    expect(wrapper.text()).toContain("Confidence pending");
     await wrapper.findAll("button").find((button) => button.text() === "Confirm mapping")?.trigger("click");
     await flushPromises();
     expect(api.confirmMapping).toHaveBeenCalledWith("document-1");
@@ -497,7 +496,7 @@ describe("App", () => {
     );
   });
 
-  it("displays confidence and identifies missing critical fields as review issues", async () => {
+  it("displays confidence and identifies low-confidence extracted fields as review issues", async () => {
     const document = {
       id: "document-multi-line",
       filename: "quotation.pdf",
@@ -535,20 +534,19 @@ describe("App", () => {
           {
             field_path: "line_items[1].product.inn",
             confidence_band: "Low",
-            confidence_reason: "Low-confidence OCR evidence"
+            confidence_reason: "source evidence: weak; association: limited; independent validation: unavailable"
           }
         ]
       },
-      extraction_coverage: { extracted: 12, expected: 12 },
       confidence_summary: { High: 6, Medium: 4, Low: 2 },
-      review_reasons: ["line_items[1].product.strength: Required commercial value is unavailable"],
+      review_reasons: ["line_items[1].product.inn: source evidence: weak; association: limited; independent validation: unavailable"],
       reviews: []
     };
     api.fetchDocuments.mockResolvedValue([document]);
     const wrapper = mount(App);
     await flushPromises();
 
-    expect(wrapper.text()).toContain("key fields available");
+    expect(wrapper.text()).toContain("lowest field band");
 
     // Open the source
     await wrapper.get("button.group").trigger("click");
@@ -559,7 +557,7 @@ describe("App", () => {
     expect(wrapper.text()).toContain("LowerConfidenceItem");
     expect(wrapper.text()).toContain("Confidence");
     expect(wrapper.text()).toContain("Review issues");
-    expect(wrapper.text()).toContain("Strength: Required commercial value is unavailable");
+    expect(wrapper.text()).toContain("Product / INN: source evidence: weak");
     expect(wrapper.text()).toContain("Low");
 
     // Click first product row to open drawer

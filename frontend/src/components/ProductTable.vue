@@ -167,7 +167,7 @@ function fieldLabel(path: string) {
               </span>
             </td>
 
-            <!-- Confidence summarizes the weakest critical field for the row. -->
+            <!-- Confidence summarizes the weakest extracted field for the row. -->
             <td class="px-4 py-4 align-top">
               <span
                 class="inline-flex items-center rounded-lg border px-2.5 py-1 text-[11px] font-bold"
