@@ -1,10 +1,9 @@
-"""Native-PDF parser boundary with explicit page-level quality signals."""
+"""LiteParse-backed PDF parser boundary with explicit page-level quality signals."""
 
 from dataclasses import dataclass
-from io import BytesIO
 
-from pypdf import PdfReader
-from pypdf.errors import PdfReadError
+from liteparse import LiteParse
+from liteparse.types import ParseError
 
 
 class PdfParseError(ValueError):
@@ -17,6 +16,10 @@ class ParsedPdfPage:
     text: str
     native_text_characters: int
     quality: str
+    width: float | None = None
+    height: float | None = None
+    raw_representation: dict[str, object] | None = None
+    text_items: tuple[dict[str, float | str | None], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -39,28 +42,37 @@ def _quality(text: str) -> str:
 
 
 def parse_native_pdf(data: bytes) -> ParsedPdf:
+    """Recover native reading order and table layout with the PRD-mandated LiteParse adapter."""
+
     if not data.startswith(b"%PDF-"):
         raise PdfParseError("The uploaded content does not have a PDF signature.")
     try:
-        reader = PdfReader(BytesIO(data), strict=True)
-        if reader.is_encrypted:
-            raise PdfParseError("Encrypted PDFs are not supported.")
-        extracted_pages: list[ParsedPdfPage] = []
-        for index, page in enumerate(reader.pages):
-            text = page.extract_text(extraction_mode="layout") or ""
-            extracted_pages.append(
-                ParsedPdfPage(
-                    page_number=index + 1,
-                    text=text.strip(),
-                    native_text_characters=len(text),
-                    quality=_quality(text),
-                )
+        result = LiteParse(install_if_not_available=False).parse(data, ocr_enabled=False, timeout=60)
+        pages = tuple(
+            ParsedPdfPage(
+                page_number=page.pageNum,
+                text=page.text.strip(),
+                native_text_characters=len(page.text),
+                quality=_quality(page.text),
+                width=page.width,
+                height=page.height,
+                raw_representation=page_data,
+                text_items=tuple(
+                    {
+                        "text": item.text,
+                        "x": item.x,
+                        "y": item.y,
+                        "width": item.width,
+                        "height": item.height,
+                        "confidence": item.confidence,
+                    }
+                    for item in page.textItems
+                ),
             )
-        pages = tuple(extracted_pages)
-    except (PdfReadError, OSError, ValueError) as error:
-        if isinstance(error, PdfParseError):
-            raise
-        raise PdfParseError("The uploaded PDF could not be read.") from error
+            for page, page_data in zip(result.pages, (result.json or {}).get("pages", []), strict=False)
+        )
+    except (ParseError, TimeoutError, OSError, ValueError) as error:
+        raise PdfParseError("LiteParse could not read the uploaded PDF.") from error
     if not pages:
         raise PdfParseError("The uploaded PDF has no pages.")
     return ParsedPdf(pages=pages)

@@ -90,9 +90,9 @@ def as_decimal(value: Any) -> Decimal | None:
 @dataclass(frozen=True)
 class MappingProposal:
     mapping: dict[str, Any]
-    input_tokens: int
-    output_tokens: int
-    estimated_cost_usd: Decimal
+    input_tokens: int | None
+    output_tokens: int | None
+    estimated_cost_usd: Decimal | None
     provider: str
     duration_ms: int
 
@@ -200,16 +200,20 @@ class ChainedSemanticMappingProvider:
 
 
 def extract_source_metadata(payload: dict[str, Any]) -> tuple[str, str | None]:
-    meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+    raw_meta = payload.get("meta")
+    meta: dict[str, Any] = raw_meta if isinstance(raw_meta, dict) else {}
     source_system = meta.get("source_system") or payload.get("source_system") or "unknown"
     schema_version = meta.get("export_version") or payload.get("schema_version")
     return str(source_system), str(schema_version) if schema_version is not None else None
 
 
-def make_evidence(canonical_field: str, source_path: str, method: str) -> Evidence:
+def make_evidence(
+    canonical_field: str, source_path: str, method: str, *, source_document: str | None = None
+) -> Evidence:
     return Evidence(
         canonical_field=canonical_field,
         source_path=source_path,
+        source_location=source_document,
         extraction_method=method,
         confidence=Decimal("0.99") if method == "deterministic_mapping" else Decimal("0.80"),
     )
@@ -226,7 +230,7 @@ def apply_mapping(
     def field(path_key: str, field_name: str) -> Any:
         source_path = quotation_paths.get(path_key)
         if source_path:
-            evidence.append(make_evidence(field_name, source_path, method))
+            evidence.append(make_evidence(field_name, source_path, method, source_document=source_document))
             return get_path(payload, source_path)
         return None
 
@@ -255,9 +259,13 @@ def apply_mapping(
                 )
             )
     for canonical, source_path in supplier_paths.items():
-        quotation.evidence.append(make_evidence(f"supplier.{canonical}", source_path, method))
+        quotation.evidence.append(
+            make_evidence(f"supplier.{canonical}", source_path, method, source_document=source_document)
+        )
     for canonical, source_path in commercial_paths.items():
-        quotation.evidence.append(make_evidence(f"commercial_terms.{canonical}", source_path, method))
+        quotation.evidence.append(
+            make_evidence(f"commercial_terms.{canonical}", source_path, method, source_document=source_document)
+        )
 
     collection_path = mapping["line_items"]["collection_path"]
     collection = get_path(payload, collection_path.removesuffix("[]"))
@@ -276,7 +284,9 @@ def apply_mapping(
             specification = fields.get(path_key)
             if specification:
                 source_path = specification if isinstance(specification, str) else specification.get("path", "constant")
-                evidence_list.append(make_evidence(canonical_field, source_path, method))
+                evidence_list.append(
+                    make_evidence(canonical_field, source_path, method, source_document=source_document)
+                )
                 return resolve_mapping_value(source_item, specification)
             return None
 
@@ -286,7 +296,9 @@ def apply_mapping(
             value = scalar(item, source_path)
             if value is not None:
                 strengths.append(Strength(ingredient=ingredient, value=as_decimal(value), unit="mg"))
-                item_evidence.append(make_evidence("product.strength", source_path, method))
+                item_evidence.append(
+                    make_evidence("product.strength", source_path, method, source_document=source_document)
+                )
 
         source_dosage_form = line("dosage_form", "product.dosage_form")
         if isinstance(source_dosage_form, str):

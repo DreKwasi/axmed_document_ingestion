@@ -28,6 +28,9 @@ def _upsert_invocation(
     status: str,
     duration_ms: int | None,
     metadata: dict[str, Any],
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    estimated_cost_usd: str | None = None,
 ) -> None:
     invocation = session.scalar(
         select(ModelInvocationRecord).where(
@@ -46,6 +49,9 @@ def _upsert_invocation(
             prompt_version="pdf-extraction-v1",
             status=status,
             duration_ms=duration_ms,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            estimated_cost_usd=estimated_cost_usd,
             safe_metadata_json=json.dumps(metadata, sort_keys=True),
         )
         session.add(invocation)
@@ -54,6 +60,9 @@ def _upsert_invocation(
     invocation.model = model
     invocation.status = status
     invocation.duration_ms = duration_ms
+    invocation.input_tokens = input_tokens
+    invocation.output_tokens = output_tokens
+    invocation.estimated_cost_usd = estimated_cost_usd
     invocation.safe_metadata_json = json.dumps(metadata, sort_keys=True)
 
 
@@ -131,6 +140,9 @@ def consume_pdf_extraction(session: Session, extraction_id: str, settings: Setti
             status="completed",
             duration_ms=telemetry.get("duration_ms", int((time.perf_counter() - started) * 1000)),
             metadata={"source_type": "pdf", "line_item_count": len(quotation.line_items)},
+            input_tokens=telemetry.get("input_tokens"),
+            output_tokens=telemetry.get("output_tokens"),
+            estimated_cost_usd=_cost_text(telemetry.get("estimated_cost_usd")),
         )
         record_event(
             session,
@@ -242,3 +254,7 @@ def run_pdf_extraction_job(
     engine = create_sqlite_engine(settings.database_url)
     with sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)() as session:
         consume_pdf_extraction(session, extraction_id, settings)
+
+
+def _cost_text(value: Any) -> str | None:
+    return None if value is None else str(value)
