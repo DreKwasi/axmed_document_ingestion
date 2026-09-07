@@ -1,1 +1,1 @@
-"""Huey task definitions and background job implementations."""
+"""Reusable extraction routines and external-service adapters."""
