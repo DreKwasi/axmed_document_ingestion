@@ -48,22 +48,19 @@ function productCounts(doc: DocumentResponse) {
 
 function statusKey(doc: DocumentResponse): "ready" | "review" | "needs_attention" | "processing" {
   if (doc.quotation?.review_status === "approved") return "ready";
-  if (doc.quotation?.review_status === "corrected") return "ready";
-  if (["failed", "rejected"].includes(doc.status) || doc.quotation?.review_status === "rejected" || (doc.quotation?.review_issues.some((issue) => issue.severity === "error") ?? false)) {
+  if (["failed", "rejected"].includes(doc.status) || doc.quotation?.review_status === "rejected") {
     return "needs_attention";
   }
   if (doc.status === "approved") return "ready";
-  if (doc.status === "auto_accepted") return "ready";
-  if (doc.status === "needs_review") return "review";
+  if (doc.status === "pending_review") return "review";
   return "processing";
 }
 
 function statusLabel(doc: DocumentResponse) {
-  if (doc.quotation?.review_status === "corrected") return "Corrected";
-  if (doc.status === "auto_accepted") return "Auto-accepted";
+  if (doc.status === "pending_review" && doc.quotation?.has_corrections) return "Review corrected";
   const map = {
     ready: "Ready",
-    review: "Review",
+    review: "Pending review",
     needs_attention: "Needs attention",
     processing: "Processing",
   };
@@ -92,7 +89,7 @@ function formatBadge(filename: string, sourceSystem?: string | null) {
 const batchProcessedCount = computed(() => {
   if (!props.activeBatch) return 0;
   return props.activeBatch.documents.filter((d) =>
-    ["needs_review", "approved", "rejected", "failed"].includes(d.status)
+    ["pending_review", "approved", "rejected", "failed"].includes(d.status)
   ).length;
 });
 </script>

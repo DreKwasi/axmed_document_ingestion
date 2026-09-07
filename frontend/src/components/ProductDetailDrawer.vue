@@ -66,12 +66,44 @@ const rowConfidence = computed(() => {
   return "—";
 });
 
-const confidenceExplanations = computed(() => {
+const confidenceSummary = computed(() => {
   const prefix = `line_items[${props.lineIndex}]`;
   const values = props.document.quotation?.field_reviews
     ?.filter((field) => field.field_path.startsWith(prefix) && field.confidence_reason)
     .map((field) => field.confidence_reason as string) ?? [];
-  return [...new Set(values)];
+  const factorValues = (factor: "source evidence" | "association" | "independent validation") =>
+    [...new Set(values.map((reason) => reason.match(new RegExp(`${factor}: ([^;]+)`))?.[1]).filter(Boolean))];
+  const source = factorValues("source evidence");
+  const association = factorValues("association");
+  const validation = factorValues("independent validation");
+  if (!source.length && !association.length && !validation.length) return [];
+
+  return [
+    {
+      label: "Source evidence",
+      detail: source.includes("weak") || source.includes("unverified")
+        ? "Some values were difficult to recover clearly from the source."
+        : "The values were recovered from clear source material.",
+    },
+    {
+      label: "Product linkage",
+      detail: association.includes("ambiguous") || association.includes("unverified")
+        ? "Some values could not be linked confidently to this product."
+        : association.includes("limited")
+          ? "The document supports these values, but some lack an exact row or cell reference."
+          : "The values are clearly linked to this product and source location.",
+    },
+    {
+      label: "Independent checks",
+      detail: validation.includes("conflicting")
+        ? "A source cross-check conflicts with one or more extracted values."
+        : validation.includes("passed") && validation.includes("unavailable")
+          ? "Applicable commercial checks passed; other fields have no comparable cross-check."
+          : validation.includes("passed")
+            ? "Applicable source cross-checks passed."
+            : "No independent cross-check applies to these fields.",
+    },
+  ];
 });
 
 function handleSave() {
@@ -118,13 +150,15 @@ function handleSave() {
 
     <!-- Drawer Body (Scrollable) -->
     <div class="flex-1 overflow-y-auto p-6 space-y-6 text-xs">
-      <div v-if="confidenceExplanations.length" class="rounded-2xl border border-amber-200 bg-amber-50/50 p-4">
-        <h3 class="text-xs font-bold uppercase tracking-wider text-amber-900">How confidence was determined</h3>
+      <div v-if="confidenceSummary.length" class="rounded-2xl border border-amber-200 bg-amber-50/50 p-4">
+        <h3 class="text-xs font-bold uppercase tracking-wider text-amber-900">Confidence summary</h3>
         <p class="mt-1 text-[11px] text-amber-800">
-          Confidence is based on source evidence, association with this product row, and independent validation.
+          This summarizes the evidence behind the product’s lowest confidence band.
         </p>
-        <ul class="mt-2 space-y-1 text-[11px] text-amber-900">
-          <li v-for="reason in confidenceExplanations" :key="reason">{{ reason }}</li>
+        <ul class="mt-3 space-y-2 text-[11px] text-amber-900">
+          <li v-for="item in confidenceSummary" :key="item.label">
+            <span class="font-bold">{{ item.label }}:</span> {{ item.detail }}
+          </li>
         </ul>
       </div>
 

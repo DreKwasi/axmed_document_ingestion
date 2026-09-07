@@ -31,6 +31,10 @@ const hasBlockingIssue = computed(() => {
   return props.document.quotation?.review_issues.some((issue) => issue.severity === "error") ?? false;
 });
 
+const approvalLabel = computed(() => {
+  return props.document.quotation?.has_corrections ? "Approve corrected source" : "Approve source";
+});
+
 const sourceTitle = computed(() => {
   if (props.document.source_name) return props.document.source_name;
   const supplier = props.document.quotation?.supplier.name;
@@ -63,7 +67,7 @@ function onReject() {
       <div class="flex items-start justify-between border-b border-slate-100 pb-4">
         <div>
           <h2 id="review-modal-title" class="text-xl font-bold text-slate-900">Review Source Decision</h2>
-          <p class="mt-1 text-xs text-slate-500">Record an overall approval or rejection for this source.</p>
+          <p class="mt-1 text-xs text-slate-500">Every completed extraction requires a human decision.</p>
         </div>
         <button
           type="button"
@@ -142,7 +146,7 @@ function onReject() {
           :disabled="busy || hasBlockingIssue"
           @click="onApprove"
         >
-          {{ busy ? "Saving…" : "Approve source" }}
+          {{ busy ? "Saving…" : approvalLabel }}
         </button>
       </div>
     </div>

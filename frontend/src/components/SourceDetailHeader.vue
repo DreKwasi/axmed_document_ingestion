@@ -16,20 +16,17 @@ const emit = defineEmits<{
 
 function statusKey(doc: DocumentResponse): "ready" | "review" | "needs_attention" | "processing" {
   if (doc.quotation?.review_status === "approved") return "ready";
-  if (doc.quotation?.review_status === "corrected") return "ready";
   if (["failed", "rejected"].includes(doc.status) || doc.quotation?.review_status === "rejected") return "needs_attention";
   if (doc.status === "approved") return "ready";
-  if (doc.status === "auto_accepted") return "ready";
-  if (doc.status === "needs_review") return "review";
+  if (doc.status === "pending_review") return "review";
   return "processing";
 }
 
 const statusLabel = computed(() => {
-  if (props.document.quotation?.review_status === "corrected") return "Corrected";
-  if (props.document.status === "auto_accepted") return "Auto-accepted";
+  if (props.document.status === "pending_review" && props.document.quotation?.has_corrections) return "Pending review after correction";
   const map = {
     ready: "Ready",
-    review: "Review",
+    review: "Pending human review",
     needs_attention: "Needs attention",
     processing: "Processing",
   };
@@ -66,8 +63,8 @@ const formatBadge = computed(() => {
 
 const canReview = computed(() => {
   return (
-    ["needs_review", "auto_accepted"].includes(props.document.status) &&
-    props.document.quotation?.review_status === "unreviewed"
+    props.document.status === "pending_review" &&
+    props.document.quotation?.review_status === "pending_review"
   );
 });
 
@@ -170,7 +167,7 @@ const statusDotClass = computed(() => {
 
       <!-- Schema and Extraction Metadata Strip -->
       <div class="mt-5 border-t border-slate-100 pt-4">
-        <div class="grid grid-cols-2 gap-3 sm:grid-cols-4 text-xs">
+        <div class="grid grid-cols-2 gap-3 md:grid-cols-5 text-xs">
           <div class="rounded-xl bg-slate-50 p-3 border border-slate-100">
             <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Source Schema / System</p>
             <p class="mt-1 font-semibold text-slate-800">
@@ -193,7 +190,7 @@ const statusDotClass = computed(() => {
           </div>
 
           <div class="rounded-xl bg-slate-50 p-3 border border-slate-100">
-            <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Commercial Terms</p>
+            <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Delivery Terms</p>
             <p class="mt-1 font-semibold text-slate-800">
               {{ document.quotation?.commercial_terms.currency || "USD" }}
               <span v-if="document.quotation?.commercial_terms.incoterm" class="text-slate-600">
@@ -202,6 +199,9 @@ const statusDotClass = computed(() => {
               <span v-if="document.quotation?.commercial_terms.incoterm_named_place" class="text-slate-500 text-[11px]">
                 ({{ document.quotation.commercial_terms.incoterm_named_place }})
               </span>
+            </p>
+            <p v-if="document.quotation?.commercial_terms.incoterm_country" class="mt-1 text-[11px] text-slate-500">
+              Delivery country: {{ document.quotation.commercial_terms.incoterm_country }}
             </p>
           </div>
 
@@ -212,6 +212,13 @@ const statusDotClass = computed(() => {
               <span v-if="document.quotation?.document_type" class="text-slate-500 text-[11px]">
                 · {{ document.quotation.document_type }}
               </span>
+            </p>
+          </div>
+
+          <div class="rounded-xl bg-slate-50 p-3 border border-slate-100">
+            <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Against RFQ</p>
+            <p class="mt-1 font-semibold text-slate-800 truncate" :title="document.quotation?.rfq_reference ?? '—'">
+              {{ document.quotation?.rfq_reference || "—" }}
             </p>
           </div>
         </div>
