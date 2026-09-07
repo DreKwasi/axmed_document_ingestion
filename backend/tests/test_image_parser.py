@@ -8,7 +8,7 @@ from app.core.settings import Settings
 from app.domain.image_parser import ImageParseError, parse_image
 from app.infrastructure.database import create_sqlite_engine
 from app.infrastructure.models import OcrJobRecord, ProcessingEventRecord
-from app.workers.ocr import consume_ocr
+from app.workers.ocr import consume_ocr, run_ocr_job
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 OCR_FIXTURES = PROJECT_ROOT / "backend/evals/fixtures/ocr"
@@ -69,3 +69,22 @@ def test_ocr_worker_exposes_missing_service_configuration_without_faking_a_resul
         )
         assert job is not None and job.status == "awaiting_service_configuration"
         assert [event.stage for event in events] == ["ocr_queued", "ocr_started", "ocr_awaiting_service_configuration"]
+
+
+def test_ocr_task_runner_uses_the_upload_directory_supplied_by_the_api(tmp_path, monkeypatch):
+    observed: dict[str, Path] = {}
+
+    def capture_settings(_session, _job_id, settings):
+        observed["upload_dir"] = settings.upload_dir
+
+    monkeypatch.setattr("app.workers.ocr.consume_ocr", capture_settings)
+    upload_dir = tmp_path / "uploads"
+
+    run_ocr_job(
+        "job-1",
+        f"sqlite:///{tmp_path / 'app.db'}",
+        str(tmp_path / "tasks.db"),
+        str(upload_dir),
+    )
+
+    assert observed["upload_dir"] == upload_dir
