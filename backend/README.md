@@ -34,9 +34,9 @@ The backend configuration is managed by Pydantic Settings in `app/core/settings.
 | :--- | :--- | :--- |
 | `GEMINI_API_KEY` | *(None)* | Google Gemini API key for live LangChain semantic reasoning. *(Also reads `GOOGLE_API_KEY` or `AXMED_GEMINI_API_KEY`)* |
 | `GEMINI_MODEL` | `gemini-3.1-flash-lite` | Model name for LangChain structured extraction and novel schema mapping |
-| `AXMED_DATABASE_URL` | `sqlite:///./data/app.db` | SQLAlchemy SQLite database URL for operational persistence |
-| `AXMED_TASK_DATABASE_PATH` | `data/tasks.db` | SQLite database file for Huey durable task queue |
-| `AXMED_UPLOAD_DIR` | `data/uploads` | Local directory for storing original uploaded files |
+| `AXMED_DATABASE_URL` | `sqlite:///./data/app.db` | SQLAlchemy SQLite database URL for operational persistence; relative SQLite paths resolve from `backend/` |
+| `AXMED_TASK_DATABASE_PATH` | `data/tasks.db` | SQLite database file for Huey durable task queue; relative paths resolve from `backend/` |
+| `AXMED_UPLOAD_DIR` | `data/uploads` | Local directory for storing original uploaded files; relative paths resolve from `backend/` |
 | `AXMED_MAX_UPLOAD_BYTES` | `5242880` (5 MB) | Maximum permitted file upload size |
 | `AXMED_OCR_SERVICE_URL` | *(None)* | Modal PaddleOCR microservice endpoint URL |
 | `AXMED_OCR_SERVICE_TOKEN` | *(None)* | Bearer authentication token for Modal OCR service |
