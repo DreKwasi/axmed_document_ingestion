@@ -38,11 +38,8 @@ class DocumentRecord(Base):
     content_sha256: Mapped[str] = mapped_column(String(64), index=True)
     source_system: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
     schema_version: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    schema_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(40), default="received", index=True)
     failure_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    semantic_mapping_calls: Mapped[int] = mapped_column(Integer, default=0)
-    mapping_source: Mapped[str | None] = mapped_column(String(40), nullable=True)
     parsed_summary_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -198,28 +195,11 @@ class ReviewRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
-class ReviewLearningRecord(Base):
-    __tablename__ = "review_learning"
-    __table_args__ = (UniqueConstraint("review_id", name="uq_review_learning_review"),)
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    document_id: Mapped[str] = mapped_column(ForeignKey("documents.id"), index=True)
-    review_id: Mapped[str] = mapped_column(ForeignKey("reviews.id"))
-    source_system: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
-    schema_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    status: Mapped[str] = mapped_column(String(40), default="queued")
-    context_json: Mapped[str] = mapped_column(Text)
-    result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-
 class ProcessingEventRecord(Base):
     __tablename__ = "processing_events"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     document_id: Mapped[str] = mapped_column(ForeignKey("documents.id"), index=True)
-    learning_id: Mapped[str | None] = mapped_column(ForeignKey("review_learning.id"), nullable=True, index=True)
     stage: Mapped[str] = mapped_column(String(80), index=True)
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -281,9 +261,6 @@ class ModelInvocationRecord(Base):
     __tablename__ = "model_invocations"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    learning_id: Mapped[str | None] = mapped_column(
-        ForeignKey("review_learning.id"), unique=True, nullable=True, index=True
-    )
     email_extraction_id: Mapped[str | None] = mapped_column(
         ForeignKey("email_extractions.id"), unique=True, nullable=True, index=True
     )
@@ -341,27 +318,24 @@ class QuotationFieldValueRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
-class SchemaMappingRecord(Base):
-    __tablename__ = "schema_mappings"
-    __table_args__ = (
-        UniqueConstraint("source_system", "source_schema_version", "schema_fingerprint", name="uq_mapping_schema"),
-    )
+class ExtractedSourceFactRecord(Base):
+    """A source-grounded quotation fact, with or without canonical normalization."""
+
+    __tablename__ = "extracted_source_facts"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    source_system: Mapped[str] = mapped_column(String(120), index=True)
-    source_schema_version: Mapped[str] = mapped_column(String(120), default="unknown")
-    schema_fingerprint: Mapped[str] = mapped_column(String(64), index=True)
-    mapping_json: Mapped[str] = mapped_column(Text)
-    transformation_version: Mapped[str] = mapped_column(String(30), default="1.0")
-    trust_state: Mapped[str] = mapped_column(String(40), default="proposed")
-    times_seen: Mapped[int] = mapped_column(Integer, default=1)
-    times_confirmed: Mapped[int] = mapped_column(Integer, default=0)
-    human_verified: Mapped[bool] = mapped_column(default=False)
-    conflict_count: Mapped[int] = mapped_column(Integer, default=0)
+    document_id: Mapped[str] = mapped_column(ForeignKey("documents.id"), index=True)
+    quotation_id: Mapped[str | None] = mapped_column(ForeignKey("quotations.id"), nullable=True, index=True)
+    label: Mapped[str] = mapped_column(String(255))
+    value_json: Mapped[str] = mapped_column(Text)
+    source_path: Mapped[str] = mapped_column(String(500), index=True)
+    extraction_method: Mapped[str] = mapped_column(String(80))
+    confidence: Mapped[Decimal] = mapped_column(Numeric(5, 4), nullable=False)
+    confidence_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    normalization_status: Mapped[str] = mapped_column(String(40), default="unmapped", index=True)
+    canonical_field: Mapped[str | None] = mapped_column(String(500), nullable=True, index=True)
+    review_status: Mapped[str] = mapped_column(String(40), default="pending_review", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    last_seen_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
 
 
 class EvaluationCaseRecord(Base):

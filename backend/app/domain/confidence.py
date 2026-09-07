@@ -153,7 +153,7 @@ def _classify_extracted_field(
     if signals.parser_quality in {"poor", "failed"}:
         return _confidence("Low", "weak", _association(evidence), validation)
     if evidence is None:
-        if signals.source_type in {"pdf", "json"} and signals.parser_quality not in {"poor", "failed"}:
+        if not signals.ocr_used and signals.parser_quality not in {"poor", "failed"}:
             return _confidence("Medium", "strong", "limited", validation)
         return _confidence("Low", "unverified", "unverified", validation)
 
@@ -168,7 +168,7 @@ def _classify_extracted_field(
 
 def _source_evidence(evidence: Evidence | None, signals: ConfidenceSignals) -> str:
     if evidence is None:
-        return "strong" if signals.source_type == "pdf" else "unverified"
+        return "strong" if not signals.ocr_used and signals.parser_quality not in {"poor", "failed"} else "unverified"
     if evidence.extraction_method in STRONG_SOURCE_METHODS:
         return "strong"
     if evidence.extraction_method == "ocr":

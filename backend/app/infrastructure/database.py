@@ -6,7 +6,7 @@ from alembic.config import Config
 from sqlalchemy import create_engine, event, inspect
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
-from app.core.settings import get_settings
+from app.core.config import get_config
 
 
 class Base(DeclarativeBase):
@@ -15,7 +15,7 @@ class Base(DeclarativeBase):
 
 def create_sqlite_engine(database_url: str | None = None):
     engine = create_engine(
-        database_url or get_settings().database_url,
+        database_url or get_config().database_url,
         connect_args={"check_same_thread": False},
     )
 
