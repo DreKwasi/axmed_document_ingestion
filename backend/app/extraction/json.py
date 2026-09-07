@@ -17,7 +17,7 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.domain.contracts import CanonicalQuotation
+from app.extraction.contracts import CanonicalQuotation
 
 
 class JsonSourceFact(BaseModel):
@@ -254,7 +254,7 @@ class LangChainJsonSemanticExtractor:
         source_document: str,
         invalid_source_paths: list[str] | None = None,
     ) -> JsonExtractionProposal | None:
-        from app.domain.langchain_extractor import LangChainSemanticExtractor
+        from app.extraction.llm import LangChainSemanticExtractor
 
         extractor = LangChainSemanticExtractor(
             api_key=self.api_key,

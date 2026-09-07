@@ -13,8 +13,8 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, Field
 
-from app.domain.contracts import CanonicalQuotation, Regulatory, Supply
-from app.domain.json_extraction import JsonSemanticExtraction
+from app.extraction.contracts import CanonicalQuotation, Regulatory, Supply
+from app.extraction.json import JsonSemanticExtraction
 
 CANONICAL_QUOTATION_PROMPT_VERSION = "canonical-quotation-v7"
 JSON_SEMANTIC_EXTRACTION_PROMPT_VERSION = "json-semantic-extraction-v1"
