@@ -12,11 +12,61 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (event: "close"): void;
-  (event: "saveCorrection", payload: { fieldPath: string; value: string; lineIndex: number }): void;
+  (event: "saveCorrection", payload: { fieldPath: string; value: unknown; lineIndex: number }): void;
 }>();
+
+type EditableField = { path: string; label: string; kind?: "json" | "boolean" };
+
+const editableFields: EditableField[] = [
+  { path: "product.trade_name", label: "Product identity · Trade name" },
+  { path: "product.inn", label: "Product identity · Active ingredients (INN)", kind: "json" },
+  { path: "product.strength", label: "Product identity · Strength", kind: "json" },
+  { path: "product.dosage_form", label: "Product identity · Dosage form" },
+  { path: "product.manufacturer", label: "Product identity · Manufacturer" },
+  { path: "product.country_of_origin", label: "Product identity · Country of origin" },
+  { path: "pricing.currency", label: "Pricing · Currency" },
+  { path: "pricing.quoted_price.amount", label: "Pricing · Quoted price" },
+  { path: "pricing.quoted_price.uom", label: "Pricing · Quoted price unit" },
+  { path: "pricing.pack_price", label: "Pricing · Pack price" },
+  { path: "pricing.discount", label: "Pricing · Discount" },
+  { path: "pricing.extended_price", label: "Pricing · Extended price" },
+  { path: "pricing.price_tiers", label: "Pricing · Price tiers", kind: "json" },
+  { path: "pricing.adjustments", label: "Pricing · Adjustments", kind: "json" },
+  { path: "quantity.quoted_quantity", label: "Quantity & packaging · Quoted quantity" },
+  { path: "quantity.quoted_quantity_uom", label: "Quantity & packaging · Quoted quantity unit" },
+  { path: "quantity.quantity_basis", label: "Quantity & packaging · Quantity basis" },
+  { path: "quantity.minimum_order_quantity", label: "Quantity & packaging · MOQ" },
+  { path: "quantity.minimum_order_quantity_uom", label: "Quantity & packaging · MOQ unit" },
+  { path: "packaging.description", label: "Quantity & packaging · Description" },
+  { path: "packaging.presentation", label: "Quantity & packaging · Presentation" },
+  { path: "packaging.primary_pack", label: "Quantity & packaging · Primary pack" },
+  { path: "packaging.units_per_pack", label: "Quantity & packaging · Units per pack" },
+  { path: "packaging.unit_label", label: "Quantity & packaging · Unit label" },
+  { path: "packaging.packs_per_shipper", label: "Quantity & packaging · Packs per shipper" },
+  { path: "supply.lead_time_days", label: "Supply · Lead time" },
+  { path: "supply.lead_time_min_days", label: "Supply · Minimum lead time" },
+  { path: "supply.lead_time_max_days", label: "Supply · Maximum lead time" },
+  { path: "supply.shelf_life_months", label: "Supply · Shelf life" },
+  { path: "supply.minimum_remaining_shelf_life_percent", label: "Supply · Minimum remaining shelf life" },
+  { path: "supply.storage_conditions", label: "Supply · Storage conditions" },
+  { path: "supply.cold_chain_required", label: "Supply · Cold chain required", kind: "boolean" },
+  { path: "regulatory.who_prequalified", label: "Regulatory · WHO prequalified", kind: "boolean" },
+  { path: "regulatory.who_pq_reference", label: "Regulatory · WHO PQ reference" },
+  { path: "regulatory.registered_markets", label: "Regulatory · Registered markets", kind: "json" },
+  { path: "regulatory.registration_reference", label: "Regulatory · Registration reference" },
+  { path: "regulatory.regulatory_status", label: "Regulatory · Regulatory status" },
+];
 
 const selectedField = ref("pricing.pack_price");
 const correctionValue = ref("");
+const showExtractionCalculation = ref(false);
+const showMappingExplanation = ref(false);
+const showMappingConcernDefinition = ref(false);
+const mappingConcernDefinition =
+  "A field score is based on how directly the source identifies the schema field, "
+  + "the strength of its source location/provenance, whether the value matches the expected category, "
+  + "and whether related values agree. A score below 100% means the evidence is less direct; "
+  + "it is not automatically an actionable issue.";
 
 // Pre-fill correctionValue when selectedField or lineItem changes
 watch(
@@ -26,20 +76,7 @@ watch(
       correctionValue.value = "";
       return;
     }
-    const item = props.lineItem;
-    if (selectedField.value === "pricing.pack_price") {
-      correctionValue.value = item.pricing.pack_price ?? item.pricing.quoted_price?.amount ?? "";
-    } else if (selectedField.value === "quantity.quoted_quantity") {
-      correctionValue.value = item.quantity.quoted_quantity ?? "";
-    } else if (selectedField.value === "quantity.minimum_order_quantity") {
-      correctionValue.value = item.quantity.minimum_order_quantity ?? "";
-    } else if (selectedField.value === "packaging.units_per_pack") {
-      correctionValue.value = item.packaging.units_per_pack ? String(item.packaging.units_per_pack) : "";
-    } else if (selectedField.value === "product.trade_name") {
-      correctionValue.value = item.product.trade_name ?? "";
-    } else {
-      correctionValue.value = "";
-    }
+    correctionValue.value = editableValue(props.lineItem, selectedField.value);
   },
   { immediate: true }
 );
@@ -50,10 +87,17 @@ function displayValue(value: string | number | boolean | null | undefined) {
   return String(value);
 }
 
-function displayPrice(value: string | null | undefined) {
+function decimalPlaces(value: string | null | undefined): number {
+  if (!value) return 0;
+  const plain = value.toLowerCase().split("e")[0];
+  return plain.includes(".") ? plain.split(".")[1].length : 0;
+}
+
+function displayPrice(value: string | null | undefined, precisionSource?: string | null) {
   if (value == null) return "—";
   const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric.toLocaleString(undefined, { maximumFractionDigits: 6 }) : value;
+  const maximumFractionDigits = precisionSource == null ? 6 : decimalPlaces(precisionSource);
+  return Number.isFinite(numeric) ? numeric.toLocaleString(undefined, { maximumFractionDigits }) : value;
 }
 
 function displayLeadTime(supply: LineItem["supply"]): string {
@@ -65,64 +109,122 @@ function displayLeadTime(supply: LineItem["supply"]): string {
   return supply.lead_time_days != null ? `${supply.lead_time_days} days` : "—";
 }
 
-const rowConfidence = computed(() => {
+const rowMappingConfidence = computed(() => {
   const values = props.document.quotation?.field_reviews
     ?.filter((field) => field.field_path.startsWith(`line_items[${props.lineIndex}]`))
-    .map((field) => field.confidence_band) ?? [];
-  if (values.includes("Low")) return "Low";
-  if (values.includes("Medium")) return "Medium";
-  if (values.includes("High")) return "High";
-  return "—";
+    .map((field) => field.mapping_confidence_score)
+    .filter((score): score is number => score != null) ?? [];
+  return values.length ? Math.round(values.reduce((sum, score) => sum + score, 0) / values.length) : null;
+});
+const rowMappingExplanation = computed(() => {
+  const fields = props.document.quotation?.field_reviews
+    ?.filter((field) => field.field_path.startsWith(`line_items[${props.lineIndex}]`)) ?? [];
+  const scores = fields.map((field) => field.mapping_confidence_score).filter((score): score is number => score != null);
+  if (!scores.length) return "No mapped fields are available to assess.";
+  const reasons = [...new Set(fields.map((field) => field.mapping_confidence_reason).filter((reason): reason is string => Boolean(reason)))];
+  const issueCount = (props.document.mapping_issues ?? []).filter((issue) => issue.field_path.startsWith(`line_items[${props.lineIndex}]`)).length;
+  return `Average of ${scores.length} mapped field score${scores.length === 1 ? "" : "s"}: ${rowMappingConfidence.value}%. ${reasons.join(" ")} Mapping issues are counted separately: ${issueCount}.`;
 });
 
-const confidenceSummary = computed(() => {
+const extractionFactors = computed(() => props.document.extraction_confidence?.factors ?? []);
+const extractionSummary = computed(() => {
+  const score = props.document.extraction_confidence?.score;
+  if (score == null) return "No extraction result is available to assess.";
+  if (score === 100) return "Source content was recovered successfully. No extraction-quality problems were detected.";
+  return "Source content was recovered with some uncertainty. See the calculation details for what affected this score.";
+});
+const extractionCalculation = computed(() => {
+  if (!extractionFactors.value.length) return "No calculation details are available.";
+  return extractionFactors.value
+    .map((factor) => `${factor.label} (${factor.weight}%): ${factor.score}% — ${factor.reason}`)
+    .join("\n");
+});
+
+function mappingIssuesFor(section: string) {
   const prefix = `line_items[${props.lineIndex}]`;
-  const values = props.document.quotation?.field_reviews
-    ?.filter((field) => field.field_path.startsWith(prefix) && field.confidence_reason)
-    .map((field) => field.confidence_reason as string) ?? [];
-  const factorValues = (factor: "source evidence" | "association" | "independent validation") =>
-    [...new Set(values.map((reason) => reason.match(new RegExp(`${factor}: ([^;]+)`))?.[1]).filter(Boolean))];
-  const source = factorValues("source evidence");
-  const association = factorValues("association");
-  const validation = factorValues("independent validation");
-  if (!source.length && !association.length && !validation.length) return [];
+  return (props.document.mapping_issues ?? []).filter(
+    (issue) => issue.field_path.startsWith(prefix) && issue.section === section
+  );
+}
 
-  return [
-    {
-      label: "Source evidence",
-      detail: source.includes("weak") || source.includes("unverified")
-        ? "Some values were difficult to recover clearly from the source."
-        : "The values were recovered from clear source material.",
-    },
-    {
-      label: "Product linkage",
-      detail: association.includes("ambiguous") || association.includes("unverified")
-        ? "Some values could not be linked confidently to this product."
-        : association.includes("limited")
-          ? "The document supports these values, but some lack an exact row or cell reference."
-          : "The values are clearly linked to this product and source location.",
-    },
-    {
-      label: "Consistency checks",
-      detail: validation.includes("conflicting")
-        ? "Some quoted figures do not reconcile with one another."
-        : validation.includes("passed") && validation.includes("unavailable")
-          ? "Comparable source figures reconcile; other fields have nothing comparable to check."
-        : validation.includes("passed")
-            ? "The comparable figures in this source reconcile."
-            : "This source has no comparable figures to cross-check.",
-    },
-  ];
-});
+function mappingConcernsFor(section: string) {
+  const prefix = `line_items[${props.lineIndex}]`;
+  return (props.document.quotation?.field_reviews ?? [])
+    .filter((field) => field.field_path.startsWith(prefix))
+    .filter((field) => field.mapping_confidence_score != null && field.mapping_confidence_score < 100)
+    .filter((field) => {
+      const suffix = field.field_path.slice(`${prefix}.`.length);
+      if (suffix.startsWith("product.")) return section === "product";
+      if (suffix.startsWith("pricing.")) return section === "pricing";
+      if (suffix.startsWith("quantity.") || suffix.startsWith("packaging.")) return section === "quantity_packaging";
+      if (suffix.startsWith("supply.")) return section === "supply";
+      if (suffix.startsWith("regulatory.")) return section === "regulatory";
+      return false;
+    })
+    .map((field) => ({
+      label: humanizeFieldPath(field.field_path.slice(`${prefix}.`.length)),
+      score: field.mapping_confidence_score as number,
+      reason: reviewerMappingReason(field.mapping_confidence_reason),
+    }));
+}
+
+function reviewerMappingReason(reason?: string | null): string {
+  if (!reason) return "This field has less than full mapping certainty.";
+  if (reason.includes("source evidence: usable") && reason.includes("association: limited")) {
+    return "The value was found in the source, but the source did not explicitly identify it as this field.";
+  }
+  if (reason.includes("independent validation: unavailable")) {
+    return "No second source value was available to confirm this mapping.";
+  }
+  return reason;
+}
+
+function humanizeFieldPath(path: string): string {
+  const labels: Record<string, string> = {
+    "product.country_of_origin": "Country of origin",
+    "product.trade_name": "Trade name",
+    "product.inn": "Active ingredients",
+    "product.strength": "Strength",
+    "product.dosage_form": "Dosage form",
+    "pricing.quoted_price.amount": "Quoted price",
+    "pricing.pack_price": "Pack price",
+    "quantity.quoted_quantity": "Quoted quantity",
+    "quantity.minimum_order_quantity": "Minimum order quantity",
+  };
+  if (labels[path]) return labels[path];
+  return path
+    .split(".")
+    .map((part) => part.replaceAll("_", " ").replace(/\b\w/g, (character) => character.toUpperCase()))
+    .join(" · ");
+}
 
 function handleSave() {
   if (!correctionValue.value.trim()) return;
+  const field = editableFields.find((item) => item.path === selectedField.value);
+  let value: unknown = correctionValue.value.trim();
+  if (field?.kind === "json") {
+    try {
+      value = JSON.parse(correctionValue.value);
+    } catch {
+      return;
+    }
+  } else if (field?.kind === "boolean") {
+    value = correctionValue.value.trim().toLowerCase() === "true";
+  }
   const path = `line_items.${props.lineIndex}.${selectedField.value}`;
   emit("saveCorrection", {
     fieldPath: path,
-    value: correctionValue.value.trim(),
+    value,
     lineIndex: props.lineIndex,
   });
+}
+
+function editableValue(item: LineItem, path: string): string {
+  const value = path.split(".").reduce<unknown>((current, segment) => (
+    current && typeof current === "object" ? (current as Record<string, unknown>)[segment] : undefined
+  ), item);
+  if (value == null) return "";
+  return typeof value === "object" ? JSON.stringify(value) : String(value);
 }
 </script>
 
@@ -139,8 +241,23 @@ function handleSave() {
           <span class="rounded-md bg-emerald-100 px-2 py-0.5 text-[11px] font-bold text-emerald-800">
             Line {{ lineIndex + 1 }}
           </span>
-          <span class="text-xs font-semibold text-slate-500">
-            Confidence: <strong class="text-emerald-700">{{ rowConfidence }}</strong>
+          <span class="relative text-xs font-semibold text-slate-500">
+            <button
+              type="button"
+              class="cursor-help rounded px-1 text-left hover:bg-slate-100"
+              :aria-expanded="showMappingExplanation"
+              aria-label="Explain mapping confidence"
+              @click.stop="showMappingExplanation = !showMappingExplanation"
+            >
+              Mapping confidence: <strong class="text-emerald-700">{{ rowMappingConfidence != null ? `${rowMappingConfidence}%` : "—" }}</strong>
+            </button>
+            <span
+              v-if="showMappingExplanation"
+              role="tooltip"
+              class="absolute right-0 top-7 z-50 w-72 rounded-lg border border-slate-200 bg-white p-3 text-[11px] font-normal leading-4 text-slate-700 shadow-lg"
+            >
+              {{ rowMappingExplanation }}
+            </span>
           </span>
         </div>
         <h2 id="product-drawer-title" class="mt-1 text-lg font-bold text-slate-900">
@@ -159,16 +276,39 @@ function handleSave() {
 
     <!-- Drawer Body (Scrollable) -->
     <div class="flex-1 overflow-y-auto p-6 space-y-6 text-xs">
-      <div v-if="confidenceSummary.length" class="rounded-2xl border border-amber-200 bg-amber-50/50 p-4">
-        <h3 class="text-xs font-bold uppercase tracking-wider text-amber-900">Confidence summary</h3>
-        <p class="mt-1 text-[11px] text-amber-800">
-          This summarizes the evidence behind the product’s lowest confidence band.
+      <div v-if="extractionFactors.length" class="rounded-2xl border border-sky-200 bg-sky-50/50 p-4">
+        <div class="flex items-center justify-between gap-3">
+          <h3 class="text-xs font-bold uppercase tracking-wider text-sky-900">Extraction confidence</h3>
+          <span class="relative">
+            <button
+              type="button"
+              class="flex h-5 w-5 items-center justify-center rounded-full border border-sky-300 text-[10px] font-bold text-sky-700 hover:bg-sky-100"
+              aria-label="How extraction confidence is calculated"
+              :aria-expanded="showExtractionCalculation"
+              @click.stop="showExtractionCalculation = !showExtractionCalculation"
+            >
+              ?
+            </button>
+            <span
+              v-if="showExtractionCalculation"
+              role="tooltip"
+              class="absolute right-0 top-7 z-50 w-80 rounded-lg border border-slate-200 bg-white p-3 text-[11px] font-normal leading-4 text-slate-700 shadow-lg"
+            >
+              <span class="font-semibold text-slate-900">How this is calculated</span>
+              <span class="mt-1 block">The score combines source format, readability, parser quality, recovered evidence, and OCR quality. Only observed recovery problems reduce the score.</span>
+              <span class="mt-2 block whitespace-pre-line">{{ extractionCalculation }}</span>
+            </span>
+          </span>
+        </div>
+        <p class="mt-1 text-[11px] text-sky-800">
+          {{ document.extraction_confidence?.score }}% · {{ extractionSummary }} Mapping is assessed separately.
         </p>
-        <ul class="mt-3 space-y-2 text-[11px] text-amber-900">
-          <li v-for="item in confidenceSummary" :key="item.label">
-            <span class="font-bold">{{ item.label }}:</span> {{ item.detail }}
-          </li>
-        </ul>
+        <span class="sr-only">{{ extractionCalculation }}</span>
+      </div>
+
+      <div v-if="showMappingConcernDefinition" role="tooltip" class="rounded-xl border border-amber-200 bg-amber-50 p-3 text-[11px] leading-4 text-amber-900">
+        <span class="font-semibold">How field mapping confidence is calculated:</span>
+        {{ mappingConcernDefinition }}
       </div>
 
       <!-- Edit / Correction Card (Clean & Inline) -->
@@ -180,7 +320,7 @@ function handleSave() {
           <span class="text-[11px] text-emerald-700">Editable review correction</span>
         </div>
         <p class="mt-1 text-[11px] text-emerald-800">
-          Select any field below to modify its value. Changes recalculate commercial terms automatically.
+          Every source-provided field in this product can be corrected here. Changes recalculate commercial terms automatically.
         </p>
 
         <div class="mt-3 grid grid-cols-1 sm:grid-cols-[160px_1fr_auto] gap-2 items-center">
@@ -189,18 +329,16 @@ function handleSave() {
             class="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 focus:border-emerald-600 focus:outline-none"
             aria-label="Correction field"
           >
-            <option value="pricing.pack_price">Pack price</option>
-            <option value="quantity.quoted_quantity">Quoted quantity</option>
-            <option value="quantity.minimum_order_quantity">MOQ</option>
-            <option value="packaging.units_per_pack">Units / pack</option>
-            <option value="product.trade_name">Trade name</option>
+            <option v-for="field in editableFields" :key="field.path" :value="field.path">
+              {{ field.label }}
+            </option>
           </select>
 
           <input
             v-model="correctionValue"
             class="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs text-slate-800 focus:border-emerald-600 focus:outline-none placeholder:text-slate-400"
             :aria-label="`Correction value for ${lineItem.product.trade_name ?? lineIndex}`"
-            placeholder="Enter corrected value"
+            :placeholder="editableFields.find((field) => field.path === selectedField)?.kind === 'json' ? 'Enter valid JSON' : 'Enter corrected value'"
             @keydown.enter="handleSave"
           />
 
@@ -220,6 +358,16 @@ function handleSave() {
         <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 border-b border-slate-100 pb-2 mb-3">
           Product Identity
         </h3>
+        <div v-if="mappingIssuesFor('product').length" class="mb-3 rounded-lg border border-rose-200 bg-rose-50 p-2 text-[11px] text-rose-800">
+          <p v-for="issue in mappingIssuesFor('product')" :key="`${issue.field_path}:${issue.code}`">{{ issue.message }}</p>
+        </div>
+        <div v-if="mappingConcernsFor('product').length" class="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] text-amber-900">
+          <p class="flex items-center gap-1 font-semibold">
+            {{ mappingConcernsFor('product').length }} field{{ mappingConcernsFor('product').length === 1 ? "" : "s" }} below full mapping confidence:
+            <button type="button" class="flex h-4 w-4 items-center justify-center rounded-full border border-amber-500 text-[9px] font-bold hover:bg-amber-100" aria-label="Explain field mapping confidence" :aria-expanded="showMappingConcernDefinition" @click.stop="showMappingConcernDefinition = !showMappingConcernDefinition">?</button>
+          </p>
+          <p v-for="concern in mappingConcernsFor('product')" :key="concern.label">{{ concern.label }} ({{ concern.score }}%): {{ concern.reason }}</p>
+        </div>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <span class="text-[10px] font-bold uppercase text-slate-400">Trade Name</span>
@@ -255,6 +403,16 @@ function handleSave() {
         <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 border-b border-slate-100 pb-2 mb-3">
           Pricing & Commercial Terms
         </h3>
+        <div v-if="mappingIssuesFor('pricing').length" class="mb-3 rounded-lg border border-rose-200 bg-rose-50 p-2 text-[11px] text-rose-800">
+          <p v-for="issue in mappingIssuesFor('pricing')" :key="`${issue.field_path}:${issue.code}`">{{ issue.message }}</p>
+        </div>
+        <div v-if="mappingConcernsFor('pricing').length" class="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] text-amber-900">
+          <p class="flex items-center gap-1 font-semibold">
+            {{ mappingConcernsFor('pricing').length }} field{{ mappingConcernsFor('pricing').length === 1 ? "" : "s" }} below full mapping confidence:
+            <button type="button" class="flex h-4 w-4 items-center justify-center rounded-full border border-amber-500 text-[9px] font-bold hover:bg-amber-100" aria-label="Explain field mapping confidence" :aria-expanded="showMappingConcernDefinition" @click.stop="showMappingConcernDefinition = !showMappingConcernDefinition">?</button>
+          </p>
+          <p v-for="concern in mappingConcernsFor('pricing')" :key="concern.label">{{ concern.label }} ({{ concern.score }}%): {{ concern.reason }}</p>
+        </div>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <span class="text-[10px] font-bold uppercase text-slate-400">Quoted Price</span>
@@ -271,7 +429,7 @@ function handleSave() {
           <div>
             <span class="text-[10px] font-bold uppercase text-slate-400">Normalized Price</span>
             <p class="font-bold text-emerald-700">
-              {{ lineItem.pricing.currency }} {{ displayPrice(lineItem.pricing.normalized_price.amount) }} / {{ lineItem.pricing.normalized_price.uom || "unit" }}
+              {{ lineItem.pricing.currency }} {{ displayPrice(lineItem.pricing.normalized_price.amount, lineItem.pricing.quoted_price.amount) }} / {{ lineItem.pricing.normalized_price.uom || "unit" }}
             </p>
             <span v-if="lineItem.pricing.normalized_price.calculation" class="text-[10px] text-slate-400">
               Formula: {{ lineItem.pricing.normalized_price.calculation }}
@@ -333,6 +491,16 @@ function handleSave() {
         <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 border-b border-slate-100 pb-2 mb-3">
           Quantity & Packaging
         </h3>
+        <div v-if="mappingIssuesFor('quantity_packaging').length" class="mb-3 rounded-lg border border-rose-200 bg-rose-50 p-2 text-[11px] text-rose-800">
+          <p v-for="issue in mappingIssuesFor('quantity_packaging')" :key="`${issue.field_path}:${issue.code}`">{{ issue.message }}</p>
+        </div>
+        <div v-if="mappingConcernsFor('quantity_packaging').length" class="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] text-amber-900">
+          <p class="flex items-center gap-1 font-semibold">
+            {{ mappingConcernsFor('quantity_packaging').length }} field{{ mappingConcernsFor('quantity_packaging').length === 1 ? "" : "s" }} below full mapping confidence:
+            <button type="button" class="flex h-4 w-4 items-center justify-center rounded-full border border-amber-500 text-[9px] font-bold hover:bg-amber-100" aria-label="Explain field mapping confidence" :aria-expanded="showMappingConcernDefinition" @click.stop="showMappingConcernDefinition = !showMappingConcernDefinition">?</button>
+          </p>
+          <p v-for="concern in mappingConcernsFor('quantity_packaging')" :key="concern.label">{{ concern.label }} ({{ concern.score }}%): {{ concern.reason }}</p>
+        </div>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <span class="text-[10px] font-bold uppercase text-slate-400">Quoted Quantity</span>
@@ -374,6 +542,16 @@ function handleSave() {
         <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 border-b border-slate-100 pb-2 mb-3">
           Supply & Logistics
         </h3>
+        <div v-if="mappingIssuesFor('supply').length" class="mb-3 rounded-lg border border-rose-200 bg-rose-50 p-2 text-[11px] text-rose-800">
+          <p v-for="issue in mappingIssuesFor('supply')" :key="`${issue.field_path}:${issue.code}`">{{ issue.message }}</p>
+        </div>
+        <div v-if="mappingConcernsFor('supply').length" class="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] text-amber-900">
+          <p class="flex items-center gap-1 font-semibold">
+            {{ mappingConcernsFor('supply').length }} field{{ mappingConcernsFor('supply').length === 1 ? "" : "s" }} below full mapping confidence:
+            <button type="button" class="flex h-4 w-4 items-center justify-center rounded-full border border-amber-500 text-[9px] font-bold hover:bg-amber-100" aria-label="Explain field mapping confidence" :aria-expanded="showMappingConcernDefinition" @click.stop="showMappingConcernDefinition = !showMappingConcernDefinition">?</button>
+          </p>
+          <p v-for="concern in mappingConcernsFor('supply')" :key="concern.label">{{ concern.label }} ({{ concern.score }}%): {{ concern.reason }}</p>
+        </div>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <span class="text-[10px] font-bold uppercase text-slate-400">Lead Time</span>
@@ -408,6 +586,16 @@ function handleSave() {
         <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 border-b border-slate-100 pb-2 mb-3">
           Regulatory & Compliance
         </h3>
+        <div v-if="mappingIssuesFor('regulatory').length" class="mb-3 rounded-lg border border-rose-200 bg-rose-50 p-2 text-[11px] text-rose-800">
+          <p v-for="issue in mappingIssuesFor('regulatory')" :key="`${issue.field_path}:${issue.code}`">{{ issue.message }}</p>
+        </div>
+        <div v-if="mappingConcernsFor('regulatory').length" class="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] text-amber-900">
+          <p class="flex items-center gap-1 font-semibold">
+            {{ mappingConcernsFor('regulatory').length }} field{{ mappingConcernsFor('regulatory').length === 1 ? "" : "s" }} below full mapping confidence:
+            <button type="button" class="flex h-4 w-4 items-center justify-center rounded-full border border-amber-500 text-[9px] font-bold hover:bg-amber-100" aria-label="Explain field mapping confidence" :aria-expanded="showMappingConcernDefinition" @click.stop="showMappingConcernDefinition = !showMappingConcernDefinition">?</button>
+          </p>
+          <p v-for="concern in mappingConcernsFor('regulatory')" :key="concern.label">{{ concern.label }} ({{ concern.score }}%): {{ concern.reason }}</p>
+        </div>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <span class="text-[10px] font-bold uppercase text-slate-400">WHO Prequalified</span>

@@ -1,14 +1,15 @@
 <script setup lang="ts">
+import { ref } from "vue";
 import type { LineItem } from "@/types";
 
 const props = defineProps<{
   lineItems: LineItem[];
-  reviewIssues: Array<{ field_path: string; code: string; message: string; severity: string }>;
-  reviewReasons?: string[];
+  mappingIssues: Array<{ field_path: string; code: string; message: string; severity: string }>;
   fieldReviews?: Array<{
     field_path: string;
-    confidence_band: "High" | "Medium" | "Low" | null;
-    confidence_reason?: string | null;
+    mapping_confidence_band: "High" | "Medium" | "Low" | null;
+    mapping_confidence_score: number | null;
+    mapping_confidence_reason?: string | null;
   }>;
   selectedIndex: number;
 }>();
@@ -16,6 +17,9 @@ const props = defineProps<{
 const emit = defineEmits<{
   (event: "selectLine", index: number): void;
 }>();
+
+const activeMappingTooltip = ref<number | null>(null);
+const showMappingDefinition = ref(false);
 
 function displayValue(value: string | number | boolean | null | undefined) {
   if (value == null || value === "") return "—";
@@ -29,28 +33,38 @@ function displayPrice(value: string | null | undefined) {
   return Number.isFinite(numeric) ? numeric.toLocaleString(undefined, { maximumFractionDigits: 6 }) : value;
 }
 
-function confidenceForLine(index: number): "High" | "Medium" | "Low" | "—" {
+function mappingConfidenceForLine(index: number): number | null {
   const values = props.fieldReviews
     ?.filter((field) => field.field_path.startsWith(`line_items[${index}]`))
-    .map((field) => field.confidence_band) ?? [];
-  if (values.includes("Low")) return "Low";
-  if (values.includes("Medium")) return "Medium";
-  if (values.includes("High")) return "High";
-  return "—";
+    .map((field) => field.mapping_confidence_score)
+    .filter((score): score is number => score != null) ?? [];
+  return values.length ? Math.round(values.reduce((sum, score) => sum + score, 0) / values.length) : null;
 }
 
-function confidenceBadgeClass(confidence: string): string {
-  if (confidence === "High") return "bg-emerald-50 text-emerald-700 border-emerald-200";
-  if (confidence === "Medium") return "bg-amber-50 text-amber-700 border-amber-200";
-  if (confidence === "Low") return "bg-rose-50 text-rose-700 border-rose-200";
+function mappingConfidenceExplanation(index: number): string {
+  const fields = props.fieldReviews?.filter((field) => field.field_path.startsWith(`line_items[${index}]`)) ?? [];
+  const scores = fields.map((field) => field.mapping_confidence_score).filter((score): score is number => score != null);
+  if (!scores.length) return "No mapped fields are available to assess.";
+  const reasons = [...new Set(fields.map((field) => field.mapping_confidence_reason).filter((reason): reason is string => Boolean(reason)))];
+  const issueCount = mappingIssueCountForLine(index);
+  return `Average of ${scores.length} mapped field score${scores.length === 1 ? "" : "s"}: ${mappingConfidenceForLine(index)}%. ${reasons.join(" ")} Mapping issues are counted separately: ${issueCount}.`;
+}
+
+function confidenceBadgeClass(confidence: number | null): string {
+  if (confidence == null) return "bg-slate-100 text-slate-600 border-slate-200";
+  if (confidence >= 85) return "bg-emerald-50 text-emerald-700 border-emerald-200";
+  if (confidence >= 65) return "bg-amber-50 text-amber-700 border-amber-200";
+  if (confidence < 65) return "bg-rose-50 text-rose-700 border-rose-200";
   return "bg-slate-100 text-slate-600 border-slate-200";
 }
 
-function reviewIssuesForLine(index: number) {
+function mappingIssueCountForLine(index: number): number {
   const prefix = `line_items[${index}]`;
-  return props.reviewIssues
-    .filter((issue) => issue.field_path.startsWith(prefix))
-    .map((issue) => ({ key: `${issue.field_path}:${issue.code}`, message: issue.message }));
+  return props.mappingIssues.filter((issue) => issue.field_path.startsWith(prefix)).length;
+}
+
+function toggleMappingTooltip(index: number) {
+  activeMappingTooltip.value = activeMappingTooltip.value === index ? null : index;
 }
 </script>
 
@@ -60,7 +74,7 @@ function reviewIssuesForLine(index: number) {
       <div>
         <h2 class="text-base font-bold text-slate-900">Product breakdown</h2>
         <p class="mt-0.5 text-xs text-slate-500">
-          {{ lineItems.length }} extracted products · Confidence summarizes source support; review issues explain what needs attention.
+          {{ lineItems.length }} extracted products · Mapping confidence reflects certainty that values landed on the right schema fields.
         </p>
       </div>
     </div>
@@ -70,11 +84,33 @@ function reviewIssuesForLine(index: number) {
         <thead class="bg-slate-50 text-[10px] font-bold uppercase tracking-wider text-slate-500 border-b border-slate-100">
           <tr>
             <th class="px-6 py-3.5">Product</th>
-            <th class="px-4 py-3.5">Dosage / Presentation</th>
+            <th class="px-4 py-3.5">Dosage form</th>
             <th class="px-4 py-3.5">Quoted quantity</th>
             <th class="px-4 py-3.5">Quoted Price</th>
-            <th class="px-4 py-3.5">Confidence</th>
-            <th class="px-4 py-3.5">Review issues</th>
+            <th class="relative px-4 py-3.5">
+              <span class="inline-flex items-center gap-1">
+                Mapping confidence
+                <button
+                  type="button"
+                  class="flex h-4 w-4 items-center justify-center rounded-full border border-slate-400 text-[9px] font-bold normal-case hover:border-emerald-700 hover:text-emerald-700"
+                  aria-label="How mapping confidence is calculated"
+                  :aria-expanded="showMappingDefinition"
+                  @click.stop="showMappingDefinition = !showMappingDefinition"
+                >
+                  ?
+                </button>
+              </span>
+              <span
+                v-if="showMappingDefinition"
+                role="tooltip"
+                class="absolute left-4 top-10 z-50 w-80 rounded-lg border border-slate-200 bg-white p-3 text-left text-[11px] font-normal normal-case leading-4 tracking-normal text-slate-700 shadow-lg"
+              >
+                <span class="font-semibold text-slate-900">How mapping confidence is built</span>
+                <span class="mt-1 block">We score each mapped field based on whether the source value is attached to the correct schema field, has reliable source provenance, matches the expected value category, and agrees with related values. The product score is the average of those field scores.</span>
+                <span class="mt-1 block">Mapping issues are counted separately and do not represent missing fields.</span>
+              </span>
+            </th>
+            <th class="px-4 py-3.5">Mapping issues</th>
             <th class="px-4 py-3.5 text-right"></th>
           </tr>
         </thead>
@@ -94,15 +130,12 @@ function reviewIssuesForLine(index: number) {
               <span class="mt-0.5 block text-slate-500 text-[11px]">
                 {{ item.product.inn.join(" · ") || "INN not specified" }}
               </span>
-              <span v-if="item.product.manufacturer" class="mt-0.5 block text-slate-400 text-[10px]">
-                {{ item.product.manufacturer }}
-              </span>
             </td>
 
-            <!-- Dosage form / Presentation -->
+            <!-- Dosage form -->
             <td class="px-4 py-4 align-top text-slate-700">
               <span class="block font-medium">
-                {{ [item.product.dosage_form, item.packaging.presentation].filter(Boolean).join(" · ") || "—" }}
+                {{ item.product.dosage_form || "—" }}
               </span>
             </td>
 
@@ -125,36 +158,40 @@ function reviewIssuesForLine(index: number) {
               <span v-if="item.pricing.quoted_price.uom" class="text-slate-500">
                 / {{ item.pricing.quoted_price.uom }}
               </span>
-              <span
-                v-if="item.pricing.normalized_price?.amount"
-                class="mt-0.5 block text-[11px] text-slate-500 font-normal"
-              >
-                Normalized: {{ item.pricing.currency }} {{ displayPrice(item.pricing.normalized_price.amount) }} / {{ item.pricing.normalized_price.uom || "unit" }}
-              </span>
             </td>
 
-            <!-- Confidence summarizes the weakest extracted field for the row. -->
             <td class="px-4 py-4 align-top">
-              <span
-                class="inline-flex items-center rounded-lg border px-2.5 py-1 text-[11px] font-bold"
-                :class="confidenceBadgeClass(confidenceForLine(index))"
-              >
-                {{ confidenceForLine(index) }}
-              </span>
-            </td>
-
-            <!-- Explicit parser and policy review issues. -->
-            <td class="px-4 py-4 align-top">
-              <div v-if="reviewIssuesForLine(index).length" class="space-y-1">
-                <span
-                  v-for="issue in reviewIssuesForLine(index)"
-                  :key="issue.key"
-                  class="block max-w-[180px] rounded-md bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-700 border border-rose-200"
+              <span class="relative inline-flex">
+                <button
+                  type="button"
+                  class="inline-flex items-center rounded-lg border px-2.5 py-1 text-[11px] font-bold"
+                  :class="confidenceBadgeClass(mappingConfidenceForLine(index))"
+                  :aria-expanded="activeMappingTooltip === index"
+                  :title="mappingConfidenceExplanation(index)"
+                  aria-label="Explain mapping confidence"
+                  @click.stop="toggleMappingTooltip(index)"
                 >
-                  {{ issue.message }}
+                  {{ mappingConfidenceForLine(index) != null ? `${mappingConfidenceForLine(index)}%` : "—" }}
+                </button>
+                <span
+                  v-if="activeMappingTooltip === index"
+                  role="tooltip"
+                  class="absolute left-0 top-8 z-50 w-72 rounded-lg border border-slate-200 bg-white p-3 text-[11px] font-normal leading-4 text-slate-700 shadow-lg"
+                >
+                  {{ mappingConfidenceExplanation(index) }}
                 </span>
-              </div>
-              <span v-else class="text-slate-300">—</span>
+              </span>
+            </td>
+
+            <td class="px-4 py-4 align-top">
+              <span
+                class="inline-flex min-w-7 items-center justify-center rounded-lg border px-2.5 py-1 text-[11px] font-bold"
+                :class="mappingIssueCountForLine(index) > 0
+                  ? 'border-rose-200 bg-rose-50 text-rose-700'
+                  : 'border-slate-200 bg-slate-50 text-slate-500'"
+              >
+                {{ mappingIssueCountForLine(index) }}
+              </span>
             </td>
 
             <!-- Action -->

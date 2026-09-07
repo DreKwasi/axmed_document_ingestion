@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ref } from "vue";
 import type { DocumentResponse } from "@/types";
 import { sourceDocumentUrl } from "@/api";
 
@@ -13,6 +14,8 @@ const emit = defineEmits<{
   (event: "delete", document: DocumentResponse): void;
 }>();
 
+const activeMappingTooltip = ref<string | null>(null);
+
 function sourceName(doc: DocumentResponse) {
   if (doc.source_name) return doc.source_name;
   const supplier = doc.quotation?.supplier.name;
@@ -23,19 +26,11 @@ function sourceName(doc: DocumentResponse) {
   return filename.replace(/\b\w/g, (c) => c.toUpperCase()) || "Untitled source";
 }
 
-function sourceConfidence(doc: DocumentResponse) {
-  const summary = doc.confidence_summary;
-  if (!summary) return "—";
-  if (summary.Low) return "Low";
-  if (summary.Medium) return "Medium";
-  if (summary.High) return "High";
-  return "—";
-}
-
-function documentIssueCount(doc: DocumentResponse) {
-  const parserIssues = doc.quotation?.review_issues.length ?? 0;
-  const policyIssues = doc.review_reasons?.length ?? 0;
-  return parserIssues + policyIssues;
+function confidenceClass(band?: string | null) {
+  if (band === "High") return "text-emerald-700";
+  if (band === "Medium") return "text-amber-700";
+  if (band === "Low") return "text-rose-700";
+  return "text-slate-400";
 }
 
 function productCounts(doc: DocumentResponse) {
@@ -87,6 +82,17 @@ function formatBadge(filename: string, sourceSystem?: string | null) {
   return sourceSystem?.toUpperCase() || "DOC";
 }
 
+function mappingConfidenceExplanation(doc: DocumentResponse): string {
+  const score = doc.mapping_confidence?.score;
+  if (score == null) return "No mapped fields are available to assess.";
+  const issueCount = doc.mapping_confidence?.issue_count ?? 0;
+  return `This is the average confidence that extracted values were assigned to the correct schema fields: ${score}%. Mapping issues are counted separately: ${issueCount}.`;
+}
+
+function toggleMappingTooltip(documentId: string) {
+  activeMappingTooltip.value = activeMappingTooltip.value === documentId ? null : documentId;
+}
+
 </script>
 
 <template>
@@ -107,8 +113,8 @@ function formatBadge(filename: string, sourceSystem?: string | null) {
           <thead class="bg-slate-50 text-[10px] font-bold uppercase tracking-wider text-slate-500 border-b border-slate-100">
             <tr>
               <th class="px-6 py-3.5">Source</th>
-              <th class="px-4 py-3.5">Confidence</th>
-              <th class="px-4 py-3.5">Review issues</th>
+              <th class="px-4 py-3.5">Extraction confidence</th>
+              <th class="px-4 py-3.5">Mapping confidence</th>
               <th class="px-4 py-3.5">Products</th>
               <th class="px-4 py-3.5">Status</th>
               <th class="px-6 py-3.5 text-right">Actions</th>
@@ -154,16 +160,44 @@ function formatBadge(filename: string, sourceSystem?: string | null) {
                 </div>
               </td>
 
-              <!-- Lowest field confidence summarizes the source without averaging. -->
               <td class="px-4 py-4 align-top">
-                <span class="font-bold text-slate-800">{{ sourceConfidence(doc) }}</span>
-                <span class="block text-[10px] text-slate-500">lowest field band</span>
+                <span class="font-bold" :class="confidenceClass(doc.extraction_confidence?.band)">
+                  {{ doc.extraction_confidence ? `${doc.extraction_confidence.score}%` : "—" }}
+                </span>
+                <span class="block text-[10px] text-slate-500">
+                  {{ doc.extraction_confidence?.band || (doc.status === "failed" ? "Failed" : "Pending") }}
+                </span>
               </td>
 
-              <!-- Issues -->
               <td class="px-4 py-4 align-top font-semibold">
-                <span :class="documentIssueCount(doc) ? 'text-rose-600' : 'text-slate-400'">
-                  {{ documentIssueCount(doc) || "None" }}
+                <span class="relative inline-flex">
+                  <button
+                    type="button"
+                    :class="confidenceClass(doc.mapping_confidence?.band)"
+                    class="font-semibold"
+                    :aria-expanded="activeMappingTooltip === doc.id"
+                    :title="mappingConfidenceExplanation(doc)"
+                    aria-label="Explain mapping confidence"
+                    @click.stop="toggleMappingTooltip(doc.id)"
+                  >
+                    {{ doc.mapping_confidence?.score != null ? `${doc.mapping_confidence.score}%` : "—" }}
+                  </button>
+                  <span
+                    v-if="activeMappingTooltip === doc.id"
+                    role="tooltip"
+                    class="absolute right-0 top-6 z-50 w-72 rounded-lg border border-slate-200 bg-white p-3 text-[11px] font-normal leading-4 text-slate-700 shadow-lg"
+                  >
+                    {{ mappingConfidenceExplanation(doc) }}
+                  </span>
+                </span>
+                <span
+                  v-if="doc.mapping_confidence?.issue_count"
+                  class="block text-[10px] font-semibold text-rose-600"
+                >
+                  {{ doc.mapping_confidence.issue_count }} {{ doc.mapping_confidence.issue_count === 1 ? "issue" : "issues" }} found
+                </span>
+                <span v-else class="block text-[10px] text-slate-500">
+                  {{ doc.status === "failed" ? "Not applicable" : "No issues found" }}
                 </span>
               </td>
 

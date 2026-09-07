@@ -24,6 +24,9 @@ function statusKey(doc: DocumentResponse): "ready" | "review" | "needs_attention
 
 const statusLabel = computed(() => {
   if (props.document.status === "failed") return "Extraction failed";
+  if (props.document.status === "pending_review" && !props.document.quotation && props.document.image_extraction_attempts?.length) {
+    return "Compare extraction results";
+  }
   if (props.document.status === "rejected" || props.document.quotation?.review_status === "rejected") return "Rejected";
   if (props.document.status === "pending_review" && props.document.quotation?.has_corrections) return "Pending review after correction";
   const map = {
@@ -46,12 +49,9 @@ const sourceTitle = computed(() => {
 });
 
 const confidence = computed(() => {
-  const summary = props.document.confidence_summary;
-  if (!summary) return "Confidence pending";
-  if (summary.Low) return "Low confidence";
-  if (summary.Medium) return "Medium confidence";
-  if (summary.High) return "High confidence";
-  return "Confidence unavailable";
+  const summary = props.document.extraction_confidence;
+  if (!summary) return "Extraction confidence pending";
+  return `Extraction confidence ${summary.score}% (${summary.band})`;
 });
 
 const hsCodes = computed(() => props.document.quotation?.commercial_terms.hs_codes?.filter(Boolean) ?? []);
@@ -144,7 +144,7 @@ const statusDotClass = computed(() => {
 
             <span class="text-slate-300">·</span>
 
-            <!-- Source confidence is the lowest extracted-field band, not an average. -->
+            <!-- Extraction confidence describes source recovery only. -->
             <span class="font-medium text-slate-600">
               {{ confidence }}
             </span>
