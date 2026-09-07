@@ -11,27 +11,26 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.application.processing_events import record_event
-from app.core.config import Config
-from app.domain.commercial_rules import apply_commercial_rules
-from app.domain.confidence import (
+from app.config import Config
+from app.events import record_event
+from app.extraction.commercial import apply_commercial_rules
+from app.extraction.confidence import (
     ConfidenceSignals,
     ReviewAssessment,
     assess_review_readiness,
     field_confidence_for_path,
 )
-from app.domain.contracts import CanonicalQuotation
-from app.domain.email_parser import parse_email
-from app.domain.image_parser import ImageParseError, parse_image
-from app.domain.json_extraction import (
+from app.extraction.contracts import CanonicalQuotation
+from app.extraction.email_parser import parse_email
+from app.extraction.image_parser import ImageParseError, parse_image
+from app.extraction.json import (
     JsonSemanticExtractor,
     JsonSourceFact,
     profile_json,
     validate_source_facts,
 )
-from app.domain.pdf_parser import PdfParseError, parse_native_pdf
-from app.infrastructure.models import (
-    BatchRecord,
+from app.extraction.pdf_parser import PdfParseError, parse_native_pdf
+from app.models import (
     DocumentArtifactRecord,
     DocumentRecord,
     EmailExtractionRecord,
@@ -108,7 +107,6 @@ def ingest_email(
     content_type: str | None,
     data: bytes,
     settings: Config,
-    batch_id: str | None = None,
 ) -> DocumentRecord:
     if not filename.lower().endswith(".eml"):
         raise UploadValidationError("The upload is not an EML file.")
@@ -123,7 +121,6 @@ def ingest_email(
     (Path(settings.upload_dir) / stored_filename).write_bytes(data)
     document = DocumentRecord(
         id=document_id,
-        batch_id=batch_id,
         original_filename=Path(filename).name,
         stored_filename=stored_filename,
         media_type="message/rfc822",
@@ -168,7 +165,6 @@ def ingest_pdf(
     content_type: str | None,
     data: bytes,
     settings: Config,
-    batch_id: str | None = None,
 ) -> DocumentRecord:
     if not filename.lower().endswith(".pdf"):
         raise UploadValidationError("The upload is not a PDF file.")
@@ -186,7 +182,6 @@ def ingest_pdf(
     (Path(settings.upload_dir) / stored_filename).write_bytes(data)
     document = DocumentRecord(
         id=document_id,
-        batch_id=batch_id,
         original_filename=Path(filename).name,
         stored_filename=stored_filename,
         media_type="application/pdf",
@@ -279,7 +274,6 @@ def ingest_image(
     content_type: str | None,
     data: bytes,
     settings: Config,
-    batch_id: str | None = None,
 ) -> DocumentRecord:
     if not filename.lower().endswith((".png", ".jpg", ".jpeg")):
         raise UploadValidationError("The upload is not a supported image file.")
@@ -298,7 +292,6 @@ def ingest_image(
     (Path(settings.upload_dir) / stored_filename).write_bytes(data)
     document = DocumentRecord(
         id=document_id,
-        batch_id=batch_id,
         original_filename=Path(filename).name,
         stored_filename=stored_filename,
         media_type=parsed.media_type,
@@ -1097,7 +1090,6 @@ def ingest_json(
     data: bytes,
     settings: Config,
     extractor: JsonSemanticExtractor,
-    batch_id: str | None = None,
 ) -> DocumentRecord:
     validate_json_upload(filename, content_type, data, settings)
     payload = read_json(data)
@@ -1113,7 +1105,6 @@ def ingest_json(
     (upload_dir / safe_name).write_bytes(data)
     document = DocumentRecord(
         id=document_id,
-        batch_id=batch_id,
         original_filename=Path(filename).name,
         stored_filename=safe_name,
         media_type="application/json",
@@ -1377,7 +1368,6 @@ def serialize_document(session: Session, document: DocumentRecord) -> dict[str, 
     )
     return {
         "id": document.id,
-        "batch_id": document.batch_id,
         "filename": document.original_filename,
         "source_name": _source_name(document, quotation_payload),
         "status": document.status,
@@ -1520,7 +1510,6 @@ def ingest_failed_document(
     content_type: str | None,
     error_message: str,
     settings: Config,
-    batch_id: str | None = None,
 ) -> DocumentRecord:
     document_id = str(uuid4())
     suffix = Path(filename).suffix or ".bin"
@@ -1531,7 +1520,6 @@ def ingest_failed_document(
         (upload_dir / stored_filename).write_bytes(data)
     document = DocumentRecord(
         id=document_id,
-        batch_id=batch_id,
         original_filename=Path(filename).name if filename else "upload",
         stored_filename=stored_filename,
         media_type=content_type or "application/octet-stream",
@@ -1542,39 +1530,3 @@ def ingest_failed_document(
     session.add(document)
     session.commit()
     return document
-
-
-def create_batch(session: Session, name: str | None = None) -> BatchRecord:
-    batch = BatchRecord(name=name or f"Batch {uuid4().hex[:8]}")
-    session.add(batch)
-    session.commit()
-    return batch
-
-
-def serialize_batch(session: Session, batch: BatchRecord) -> dict[str, Any]:
-    docs = session.scalars(
-        select(DocumentRecord).where(DocumentRecord.batch_id == batch.id).order_by(DocumentRecord.created_at)
-    ).all()
-    status_counts: dict[str, int] = {}
-    for doc in docs:
-        status_counts[doc.status] = status_counts.get(doc.status, 0) + 1
-
-    terminal_statuses = {
-        "pending_extraction",
-        "pending_review",
-        "approved",
-        "rejected",
-        "failed",
-    }
-    is_completed = len(docs) > 0 and all(doc.status in terminal_statuses for doc in docs)
-
-    return {
-        "id": batch.id,
-        "name": batch.name,
-        "created_at": batch.created_at.isoformat() if batch.created_at else None,
-        "updated_at": batch.updated_at.isoformat() if batch.updated_at else None,
-        "total_documents": len(docs),
-        "status_counts": status_counts,
-        "is_completed": is_completed,
-        "documents": [serialize_document(session, doc) for doc in docs],
-    }
