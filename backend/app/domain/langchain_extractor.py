@@ -1,7 +1,7 @@
 """LangChain and Gemini (gemini-3.1-flash-lite) semantic extraction and reasoning engine.
 
 Provides structured Pydantic extraction across email threads, native PDFs, OCR scans,
-and progressive novel JSON schema mapping per PRD Sections 5, 31, 42, and 43.
+and per-document JSON semantic fact extraction.
 """
 
 import json
@@ -14,17 +14,10 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, Field
 
 from app.domain.contracts import CanonicalQuotation, Regulatory, Supply
-from app.domain.schema_mapping import MappingProposal
+from app.domain.json_extraction import JsonSemanticExtraction
 
 CANONICAL_QUOTATION_PROMPT_VERSION = "canonical-quotation-v7"
-
-
-class ProposedMappingSchema(BaseModel):
-    required_fields: dict[str, str] = Field(default_factory=dict)
-    quotation: dict[str, str | None] = Field(default_factory=dict)
-    supplier: dict[str, str | None] = Field(default_factory=dict)
-    commercial_terms: dict[str, str | None] = Field(default_factory=dict)
-    line_items: dict[str, Any] = Field(default_factory=dict)
+JSON_SEMANTIC_EXTRACTION_PROMPT_VERSION = "json-semantic-extraction-v1"
 
 
 class SemanticLineItemEnrichment(BaseModel):
@@ -42,13 +35,20 @@ class SemanticEnrichment(BaseModel):
 class LangChainSemanticExtractor:
     """Structured semantic extraction engine powered by LangChain and Google Gemini."""
 
-    def __init__(self, api_key: str, model: str = "gemini-3.1-flash-lite"):
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "gemini-3.1-flash-lite",
+        request_timeout_seconds: int = 60,
+    ):
         self.api_key = api_key
         self.model_name = model or "gemini-3.1-flash-lite"
         self._llm = ChatGoogleGenerativeAI(
             model=self.model_name,
-            google_api_key=self.api_key,
+            api_key=self.api_key,
             temperature=0.0,
+            request_timeout=request_timeout_seconds,
+            retries=0,
         )
 
     def extract_canonical_quotation(
@@ -229,52 +229,57 @@ class LangChainSemanticExtractor:
             **usage,
         }
 
-    def propose_schema_mapping(
+    def extract_json_quotation(
         self,
-        unmapped_payload: dict[str, Any],
-        schema_fingerprint: str,
+        payload: dict[str, Any],
+        profile: dict[str, Any],
         *,
-        source_system: str = "unknown",
-    ) -> MappingProposal:
-        """Analyze unfamiliar supplier schema paths and propose a canonical mapping per PRD §31."""
+        source_document: str,
+        invalid_source_paths: list[str],
+    ) -> tuple[JsonSemanticExtraction, dict[str, Any]]:
+        """Extract a quotation from one arbitrary JSON document without schema reuse."""
         started_at = time.perf_counter()
 
         system_prompt = (
-            "You are a schema mapping intelligence specialist for pharmaceutical procurement.\n"
-            "Analyze the given raw supplier JSON payload structure and keys, and map the source dot-notation paths "
-            "to Axmed canonical fields (quotation_reference, rfq_reference, issue_date, valid_until, supplier name, "
-            "currency, incoterms, line items collection_path, trade_name, inn, quoted_price_amount, "
-            "quoted_price_uom, pack_price, moq, units_per_pack). For every price source, map its amount and "
-            "its source-specific basis separately. Do not use a generic `pack` constant unless the source schema "
-            "itself explicitly defines the price as per pack.\n"
-            "Return a structured ProposedMappingSchema object."
+            "You extract supplier quotation facts from one JSON source document. This is not a schema-mapping task.\n"
+            "Return a canonical quotation only where the source supports that interpretation, plus every "
+            "quotation-relevant fact you recover. Each fact needs a JSONPath source_path.\n"
+            "Use extraction_method `direct_json` only when fact.value exactly equals the scalar at source_path. "
+            "Use `semantic_extraction` only for a clearly stated narrative interpretation; its source_path must point "
+            "to the containing source text. Do not invent calculations or conversions.\n"
+            "canonical_field is optional. If a fact cannot be confidently normalized into the canonical quotation, "
+            "leave canonical_field null and keep it as an unmapped fact. That is a successful extraction and must not "
+            "lower confidence. Do not emit a canonical value without a supporting source fact.\n"
+            "The canonical quotation has a rigid schema, but the incoming JSON has no assumed structure. Do not infer "
+            "a relationship merely because source keys look similar."
         )
 
-        sample_context = {
-            "source_system": source_system,
-            "schema_fingerprint": schema_fingerprint,
-            "payload_sample": unmapped_payload,
+        context = {
+            "source_document": source_document,
+            "structural_inventory": profile,
+            "source_json": payload,
+            "invalid_source_paths_from_previous_attempt": invalid_source_paths,
         }
 
-        structured_llm = self._llm.with_structured_output(ProposedMappingSchema, include_raw=True)
-        mapping_prompt = f"Propose a canonical field mapping for this schema:\n\n{json.dumps(sample_context, indent=2)}"
+        structured_llm = self._llm.with_structured_output(JsonSemanticExtraction, include_raw=True)
         result = structured_llm.invoke(
             [
                 SystemMessage(content=system_prompt),
-                HumanMessage(content=mapping_prompt),
+                HumanMessage(
+                    content=f"Extract quotation facts from this JSON document:\n\n{json.dumps(context, indent=2)}"
+                ),
             ]
         )
 
-        mapping_result, usage = _structured_result(result, ProposedMappingSchema)
+        extraction, usage = _structured_result(result, JsonSemanticExtraction)
         duration_ms = max(1, int((time.perf_counter() - started_at) * 1000))
-        return MappingProposal(
-            mapping=mapping_result.model_dump(),
-            input_tokens=usage["input_tokens"],
-            output_tokens=usage["output_tokens"],
-            estimated_cost_usd=usage["estimated_cost_usd"],
-            provider=f"google-gemini/{self.model_name}",
-            duration_ms=duration_ms,
-        )
+        return extraction, {
+            "provider": "google-gemini",
+            "model": self.model_name,
+            "prompt_version": JSON_SEMANTIC_EXTRACTION_PROMPT_VERSION,
+            "duration_ms": duration_ms,
+            **usage,
+        }
 
 
 def merge_semantic_enrichment(

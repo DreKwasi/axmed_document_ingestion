@@ -47,6 +47,14 @@ def _price_and_pack(context: RuleContext) -> list[ReviewIssue]:
     pricing = context.line.pricing
     units = context.line.packaging.units_per_pack
     if pricing.pack_price is None:
+        if pricing.quoted_price.amount is not None and pricing.quoted_price.uom:
+            pricing.normalized_price = {
+                "amount": pricing.quoted_price.amount,
+                "uom": pricing.quoted_price.uom,
+                "calculation": "quoted_price.amount",
+                "derived": True,
+                "validation_status": "passed",
+            }
         return []
     # ``pack_price`` has already been classified by the mapping/reasoning
     # layer. It does not license a global assumption that the source UOM is
@@ -143,7 +151,7 @@ def validate_and_derive(quotation: CanonicalQuotation) -> CanonicalQuotation:
 
     New canonical fields do not change this module unless they introduce a
     deterministic calculation or constraint. Supplier field aliases stay in
-    schema mapping.
+    semantic extraction.
     """
 
     rule_codes = {code for rule in RULES for code in rule.codes}
