@@ -54,7 +54,7 @@ def test_pack_price_does_not_invent_a_generic_uom_when_source_basis_is_unknown()
     assert result.line_items[0].pricing.quoted_price.uom is None
 
 
-def test_correction_creates_a_new_unapproved_revision_and_preserves_audit(client, sanova_bytes):
+def test_correction_creates_a_corrected_revision_and_preserves_audit(client, sanova_bytes):
     document = confirmed_sanova(client, sanova_bytes)
     revision = document["quotation"]["revision"]
     response = client.post(
@@ -70,7 +70,7 @@ def test_correction_creates_a_new_unapproved_revision_and_preserves_audit(client
     assert response.status_code == 200
     corrected = response.json()
     assert corrected["quotation"]["revision"] == revision + 1
-    assert corrected["quotation"]["review_status"] == "unreviewed"
+    assert corrected["quotation"]["review_status"] == "corrected"
     assert corrected["quotation"]["line_items"][0]["pricing"]["pack_price"] == "4.00"
     assert (
         corrected["quotation"]["line_items"][0]["pricing"]["normalized_price"]["amount"]
@@ -132,7 +132,12 @@ def test_review_commands_are_idempotent_and_reject_stale_revisions(client, sanov
     )
     stale = client.post(
         f"/api/v1/documents/{document['id']}/reviews/reject",
-        json={"request_id": "rejection-1", "expected_revision": revision, "note": "Stale."},
+        json={
+            "request_id": "rejection-1",
+            "expected_revision": revision,
+            "rejection_reason": "incorrect_extraction",
+            "note": "Stale.",
+        },
     )
 
     assert first.status_code == 200
@@ -143,6 +148,45 @@ def test_review_commands_are_idempotent_and_reject_stale_revisions(client, sanov
     assert replay.json()["quotation"]["revision"] == revision + 1
     assert stale.status_code == 409
     assert "revision" in stale.json()["detail"].lower()
+
+
+def test_rejection_requires_a_structured_reason_and_preserves_it(client, sanova_bytes):
+    document = confirmed_sanova(client, sanova_bytes)
+    revision = document["quotation"]["revision"]
+
+    missing_reason = client.post(
+        f"/api/v1/documents/{document['id']}/reviews/reject",
+        json={"request_id": "no-reason", "expected_revision": revision},
+    )
+    rejected = client.post(
+        f"/api/v1/documents/{document['id']}/reviews/reject",
+        json={
+            "request_id": "reasoned-rejection",
+            "expected_revision": revision,
+            "rejection_reason": "incorrect_extraction",
+            "note": "Quoted quantity is not in the source.",
+        },
+    )
+
+    assert missing_reason.status_code == 422
+    assert rejected.status_code == 200
+    assert rejected.json()["quotation"]["review_status"] == "rejected"
+    assert rejected.json()["reviews"][0]["rejection_reason"] == "incorrect_extraction"
+
+
+def test_review_queue_contains_only_unreviewed_exceptions(client, sanova_bytes):
+    document = confirmed_sanova(client, sanova_bytes)
+
+    queue = client.get("/api/v1/review-queue")
+    approved = client.post(
+        f"/api/v1/documents/{document['id']}/reviews/approve",
+        json={"request_id": "queue-approval", "expected_revision": document["quotation"]["revision"]},
+    )
+
+    assert queue.status_code == 200
+    assert [item["id"] for item in queue.json()] == [document["id"]]
+    assert approved.status_code == 200
+    assert client.get("/api/v1/review-queue").json() == []
 
 
 def test_invalid_commercial_values_surface_review_issues(client, sanova_bytes):

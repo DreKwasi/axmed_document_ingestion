@@ -47,6 +47,7 @@ from app.infrastructure.models import (
     EvaluationResultRecord,
     ModelInvocationRecord,
     ProcessingEventRecord,
+    QuotationRecord,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -61,6 +62,7 @@ class ReviewCommand(BaseModel):
     request_id: str = Field(min_length=1, max_length=120)
     expected_revision: int = Field(ge=1)
     note: str | None = Field(default=None, max_length=2_000)
+    rejection_reason: str | None = Field(default=None, max_length=80)
     patches: list[ReviewPatch] = Field(default_factory=list)
 
 
@@ -287,6 +289,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         documents = session.scalars(select(DocumentRecord).order_by(DocumentRecord.created_at.desc())).all()
         return [serialize_document(session, document) for document in documents]
 
+    @app.get("/api/v1/review-queue")
+    def list_review_queue(session: SessionDep):
+        """Return only unresolved exceptions; accepted records remain in the source list."""
+
+        documents = session.scalars(
+            select(DocumentRecord)
+            .join(QuotationRecord, QuotationRecord.document_id == DocumentRecord.id)
+            .where(
+                QuotationRecord.system_decision == "needs_review",
+                QuotationRecord.review_status == "unreviewed",
+            )
+            .order_by(DocumentRecord.created_at.desc())
+        ).all()
+        return [serialize_document(session, document) for document in documents]
+
     @app.post("/api/v1/batches", status_code=201)
     async def upload_batch(
         session: SessionDep,
@@ -390,6 +407,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Unknown review action.")
         if action == "correct" and not command.patches:
             raise HTTPException(status_code=422, detail="A correction requires at least one patch.")
+        if action == "reject" and not command.rejection_reason:
+            raise HTTPException(status_code=422, detail="A rejection reason is required.")
         try:
             document = apply_review_action(
                 session, document_id, f"{action}ed" if action != "approve" else "approved", command.model_dump()
