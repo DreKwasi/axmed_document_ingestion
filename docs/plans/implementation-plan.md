@@ -4,7 +4,7 @@
 > Status: approved for full scope; publish dependency-ordered work into `TODOS.md` before implementation.
 > Strategy: ship tracer-bullet vertical slices, each demoable through the running FastAPI and Vue application.
 > Critical thesis: deterministic extraction and remembered mappings handle known structure; AI handles novelty and ambiguity.
-> Trust boundary: no extraction becomes accepted data until human review; missing or unreadable values remain explicit.
+> Trust boundary: the system may auto-accept only clean high-reliability records; human approval is recorded only when a person reviews. Missing or unreadable values remain explicit.
 > Source: `docs/product/axmed_document_intelligence_prd.md` and the checked-in synthetic corpus in `sample_documents/`.
 
 ## 1. Outcome and scope
@@ -15,7 +15,7 @@ The finished take-home should demonstrate one coherent workflow:
 2. Observe durable processing progress.
 3. Receive a canonical quotation with original commercial meaning intact.
 4. See derived values, uncertainty, validation issues, and source evidence separately.
-5. Correct, approve, or reject the result.
+5. Route exceptions to review, then correct, approve, or reject the result with an auditable outcome.
 6. Re-upload a known supplier schema and demonstrate less model work, lower latency, and lower cost.
 
 ### Required product stories
@@ -103,14 +103,15 @@ This project does not build a medicine-catalogue RAG layer. Its retrieval-like m
 
 ### State and trust model
 
-Keep processing and review decisions separate:
+Keep processing, system routing, and human outcomes separate:
 
 ```text
-processing: received → parsed → queued → processing → needs_review | failed
-review:    unreviewed → approved | rejected
+processing:      received → parsed → queued → processing → terminal | failed
+system decision: auto_accepted | needs_review
+human outcome:   unreviewed → approved | corrected | rejected
 ```
 
-A correction is an audited quotation revision, not a terminal trust state; it remains unreviewed/needs-review until explicitly approved. Commands are idempotent by request key, stale revisions conflict, and downstream acceptance requires the current revision to be approved. Event writes and status transitions occur in the same application transaction where practical.
+The system decision is made after extraction from critical-field coverage, observable field reliability, deterministic validation, conflicts, and OCR/parser warnings; it is not a model-confidence average. The default review queue contains only `needs_review` + `unreviewed` exceptions, while `auto_accepted` records remain visible in the source list. Approval requires no note. A correction is a terminal, audited human outcome with before/after patches. Rejection requires one structured reason (`unreadable_source`, `incorrect_extraction`, `unsupported_document`, `duplicate`, `not_a_quotation`, or `other`) and may include a note. Commands are idempotent by request key and stale revisions conflict.
 
 ### Local data and privacy boundary
 

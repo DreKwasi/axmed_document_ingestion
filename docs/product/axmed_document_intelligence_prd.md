@@ -1490,85 +1490,89 @@ Conceptually:
 
 ---
 
-# 45. Confidence model
+# 45. Confidence, coverage, and review policy
 
-Do not rely solely on:
+The product must not expose a document-level percentage called `confidence`. A percentage conflates two different questions: how much of the quotation was recovered and how trustworthy each recovered value is.
 
-```text
-LLM confidence = 0.94
-```
-
-Confidence should combine observable signals.
-
-Examples of positive signals:
+The system keeps three separate concepts:
 
 ```text
-direct JSON field
-exact known mapping
-human-verified schema mapping
-native PDF text
-successful arithmetic validation
-multiple agreeing signals
+extraction coverage  = how many key fields were recovered
+field reliability    = High | Medium | Low | Not extracted
+review decision      = system routing and human outcome
 ```
 
-Negative signals:
+## 45.1 Extraction coverage
+
+Coverage is based on key quotation fields, not every property in the canonical schema. The UI presents an interpretable count such as `5 of 8 key fields extracted`; it does not present that count as an accuracy percentage. High coverage does not imply high reliability, and low coverage does not invalidate reliable fields that were recovered.
+
+## 45.2 Field reliability
+
+Every persisted extracted field has a categorical reliability and a safe reason. Reliability is derived from observable evidence, never solely from the model's self-assessment.
+
+Signals include direct JSON values, trusted/human-verified mappings, native parser quality, OCR quality, ambiguity, derivation, correction/revision signals, arithmetic reconciliation, missing units, validation errors, and conflicting source evidence. A numeric score may exist internally for policy evaluation but is not a calibrated probability and is not shown as a percentage.
+
+## 45.3 Critical fields and conflict policy
+
+Critical commercial fields are product identity/INN, strength, dosage form, quoted price, price UOM, currency, and quoted quantity where applicable. Important fields include pack size, MOQ, Incoterm, discount, and lead time.
+
+A missing or non-High critical field, a deterministic validation error, material OCR/parser warning, or conflicting evidence forces review. A conflict is not averaged away: the affected field is Low with a conflict reason and the record is routed to review.
+
+## 45.4 Document and row summaries
+
+Document summaries describe operational state and coverage, for example:
 
 ```text
-OCR required
-low OCR confidence
-ambiguous field mapping
-derived from incomplete packaging information
-conflicting prices
-missing unit
-unresolved Incoterm context
-validation failure
+5 of 8 key fields extracted
+1 product requires review
+Review required
 ```
 
-Field-level confidence is preferable to one document-wide score.
+Rows display their own reliability so one damaged product does not make every product suspect. Raw document confidence percentages are not displayed.
 
 ---
 
-# 46. Review status
+# 46. Review status and human-in-the-loop decisions
 
-Useful states might conceptually include:
+System routing and human decisions are distinct, persisted states. Neither is inferred from a successful extraction.
 
 ```text
-pending
-processing
-needs_review
-approved
-corrected
-rejected
-failed
+SYSTEM DECISION: auto_accepted | needs_review
+HUMAN OUTCOME:  unreviewed | approved | corrected | rejected
 ```
 
-Exact implementation naming can be decided during development.
+`auto_accepted` means the system judged the result safe enough to bypass the default manual queue; it does not mean a human approved it. It requires complete and High-reliability critical fields, passing deterministic checks, no material parser/OCR uncertainty, and no conflicts.
+
+`needs_review` is the exception route. It is selected for missing/unreliable critical values, validation errors, conflicts, ambiguity, poor OCR/parser quality, or unsafe derivation. The default review queue shows these exceptions, while auto-accepted records remain available in the broader source list.
+
+`approved` means a reviewer inspected and accepted the record. An approval note is optional. `corrected` means a reviewer changed one or more values; the audit trail stores before/after values and an optional note. `rejected` requires a structured reason and permits an optional note.
+
+Allowed rejection reasons are:
+
+```text
+unreadable_source
+incorrect_extraction
+unsupported_document
+duplicate
+not_a_quotation
+other
+```
 
 ---
 
 # 47. Review experience
 
-The user should be able to quickly answer:
-
-> What did the system extract?
-
-> What is uncertain?
-
-> Where did this value come from?
-
-> Did the system calculate this or did the supplier actually say it?
-
-The interface should prioritize suspicious fields.
+The review workspace is exception-based. It tells a reviewer what was extracted, why it was routed to review, each field's source/reliability, and whether a value is supplier-provided or derived. It prioritizes suspicious fields and does not ask reviewers to inspect every auto-accepted record.
 
 Example:
 
-| Product | Quantity | Price | Basis | Confidence | Issue |
-|---|---:|---:|---|---:|---|
-| Azimax 250 | — | €0.134 | tablet | High | corrected in email |
+| Product | Quantity | Price | Basis | Reliability | Issue |
+|---|---:|---:|---|---|---|
+| Azimax 250 | — | €0.134 | tablet | High | corrected later in email |
 | Sanotri-TLD | — | €0.035 | tablet | High | derived from pack price |
 | Scan item | 50,000 | ? | pack | Low | glare obscures price |
 
-The reviewer shouldn't have to manually inspect every field when 95% of the extraction is straightforward.
+Approval is one click. Corrections preserve before/after values. Rejection requires a structured reason, not mandatory free text.
 
 ---
 
