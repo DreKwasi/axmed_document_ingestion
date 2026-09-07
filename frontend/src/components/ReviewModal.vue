@@ -11,16 +11,18 @@ const props = defineProps<{
 const emit = defineEmits<{
   (event: "close"): void;
   (event: "approve", note?: string): void;
-  (event: "reject", note?: string): void;
+  (event: "reject", payload: { reason: string; note?: string }): void;
 }>();
 
 const note = ref("");
+const rejectionReason = ref("incorrect_extraction");
 
 watch(
   () => props.isOpen,
   (open) => {
     if (open) {
       note.value = "";
+      rejectionReason.value = "incorrect_extraction";
     }
   }
 );
@@ -43,7 +45,7 @@ function onApprove() {
 }
 
 function onReject() {
-  emit("reject", note.value.trim() || undefined);
+  emit("reject", { reason: rejectionReason.value, note: note.value.trim() || undefined });
 }
 </script>
 
@@ -78,8 +80,8 @@ function onReject() {
         <p><span class="font-semibold text-slate-700">File:</span> {{ document.filename }}</p>
         <p v-if="document.quotation">
           <span class="font-semibold text-slate-700">Products:</span> {{ document.quotation.line_items.length }} extracted
-          <span v-if="document.extraction_confidence" class="ml-2 font-semibold text-slate-700">
-            · Overall Confidence: {{ document.extraction_confidence }}
+          <span v-if="document.extraction_coverage" class="ml-2 font-semibold text-slate-700">
+            · {{ document.extraction_coverage.extracted }} of {{ document.extraction_coverage.expected }} key fields extracted
           </span>
         </p>
       </div>
@@ -96,6 +98,24 @@ function onReject() {
           :aria-label="`Review note for ${document.filename}`"
           placeholder="Add a reason or context for this approval or rejection..."
         ></textarea>
+      </div>
+
+      <div class="mt-4">
+        <label for="rejection-reason" class="block text-xs font-semibold text-slate-700 mb-1.5">
+          Rejection reason <span class="text-rose-600">(required to reject)</span>
+        </label>
+        <select
+          id="rejection-reason"
+          v-model="rejectionReason"
+          class="w-full rounded-xl border border-slate-300 bg-white p-3 text-sm text-slate-800 focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 focus:outline-none"
+        >
+          <option value="incorrect_extraction">Incorrect extraction</option>
+          <option value="unreadable_source">Unreadable source</option>
+          <option value="unsupported_document">Unsupported document</option>
+          <option value="duplicate">Duplicate</option>
+          <option value="not_a_quotation">Not a quotation</option>
+          <option value="other">Other</option>
+        </select>
       </div>
 
       <div v-if="hasBlockingIssue" class="mt-3 rounded-lg bg-rose-50 border border-rose-200 p-3 text-xs text-rose-700">
