@@ -4,11 +4,12 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
-from app.core.settings import Settings
-from app.domain.email_parser import parse_email
-from app.infrastructure.database import create_sqlite_engine
-from app.infrastructure.models import EmailExtractionRecord, ModelInvocationRecord, ProcessingEventRecord
-from app.workers.email_extraction import consume_email_extraction
+from app.config import Config
+from app.database import create_sqlite_engine
+from app.extraction.contracts import CanonicalQuotation
+from app.extraction.email_parser import parse_email
+from app.extraction.email_processing import consume_email_extraction
+from app.models import EmailExtractionRecord, ModelInvocationRecord, ProcessingEventRecord
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 EMAIL_FIXTURE = PROJECT_ROOT / "backend/evals/fixtures/documents/RE_RFQ-2026-0244_Novara_quotation.eml"
@@ -30,10 +31,10 @@ def test_email_parser_uses_one_redacted_plain_text_body_without_rendering_html()
 
 def test_email_upload_persists_a_redacted_summary_without_inventing_a_quotation(client):
     source = EMAIL_FIXTURE.read_bytes()
-    response = client.post("/api/v1/documents", files={"file": ("novara.eml", source, "message/rfc822")})
+    response = client.post("/api/v1/documents", files={"files": ("novara.eml", source, "message/rfc822")})
 
     assert response.status_code == 201
-    document = response.json()
+    document = response.json()[0]
     assert document["status"] == "needs_semantic_extraction"
     assert document["quotation"] is None
     assert document["parsed_summary"]["subject"].startswith("RE: RFQ-2026-0244")
@@ -41,70 +42,63 @@ def test_email_upload_persists_a_redacted_summary_without_inventing_a_quotation(
     assert document["email_extraction"]["status"] == "queued"
 
 
-class _ResolverResponse:
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_args):
-        return False
-
-    def read(self):
-        return json.dumps(
-            {
-                "quotation": {
-                    "document_type": "email_offer",
-                    "supplier": {"name": "Novara"},
-                    "line_items": [
-                        {
-                            "product": {"trade_name": "Azimax 250"},
-                            "pricing": {"currency": "EUR", "quoted_price": {"amount": "0.134", "uom": "tablet"}},
-                            "evidence": [
-                                {
-                                    "canonical_field": "pricing.quoted_price.amount",
-                                    "source_path": "email:body:later-correction",
-                                    "supersedes_source_path": "email:body:initial-quote",
-                                    "extraction_method": "llm_extraction",
-                                    "confidence": "0.95",
-                                }
-                            ],
-                        }
-                    ],
-                }
-            }
-        ).encode()
-
-
 def test_email_worker_uses_redacted_context_and_persists_reviewable_quotation(client_settings, monkeypatch):
     client, base_settings = client_settings
     source = EMAIL_FIXTURE.read_bytes()
-    document = client.post("/api/v1/documents", files={"file": ("novara.eml", source, "message/rfc822")}).json()
+    document = client.post(
+        "/api/v1/documents", files={"files": ("novara.eml", source, "message/rfc822")}
+    ).json()[0]
     engine = create_sqlite_engine(base_settings.database_url)
     factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
     submitted: list[dict] = []
 
-    def fake_urlopen(request, timeout):
-        assert timeout == 30
-        submitted.append(json.loads(request.data.decode()))
-        return _ResolverResponse()
+    class FakeExtractor:
+        def __init__(self, **_kwargs):
+            pass
 
-    monkeypatch.setattr("app.workers.resolver.urlopen", fake_urlopen)
+        def extract_canonical_quotation(self, context, *, source_type):
+            assert source_type == "email"
+            submitted.append(context)
+            return (
+                CanonicalQuotation.model_validate(
+                    {
+                        "document_type": "email_offer",
+                        "supplier": {"name": "Novara"},
+                        "line_items": [
+                            {
+                                "product": {"trade_name": "Azimax 250"},
+                                "pricing": {"currency": "EUR", "quoted_price": {"amount": "0.134", "uom": "tablet"}},
+                                "evidence": [
+                                    {
+                                        "canonical_field": "pricing.quoted_price.amount",
+                                        "source_path": "email:body:later-correction",
+                                        "supersedes_source_path": "email:body:initial-quote",
+                                        "extraction_method": "llm_extraction",
+                                        "confidence": "0.95",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ),
+                {"duration_ms": 1},
+            )
+
+    monkeypatch.setattr("app.extraction.llm.LangChainSemanticExtractor", FakeExtractor)
     with factory() as session:
         consume_email_extraction(
             session,
             document["email_extraction"]["id"],
-            Settings(
+            Config(
                 database_url=base_settings.database_url,
-                task_database_path=base_settings.task_database_path,
-                semantic_resolver_url="https://resolver.example/v1/extract",
-                semantic_resolver_token="test-secret",
-                semantic_resolver_model="test-model",
+                gemini_api_key="test-key",
+                gemini_model="test-model",
             ),
         )
 
-    assert submitted[0]["operation"] == "email_quotation_extraction"
     assert "giulia.ferraro@novarafarma.it" not in json.dumps(submitted)
     assert "Giulia Ferraro" not in json.dumps(submitted)
-    assert submitted[0]["context"]["supplier_organization"] == "Novara Farmaceutici S.p.A."
+    assert submitted[0]["supplier_organization"] == "Novara Farmaceutici S.p.A."
     with factory() as session:
         extraction = session.get(EmailExtractionRecord, document["email_extraction"]["id"])
         invocation = session.scalar(

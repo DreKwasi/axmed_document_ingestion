@@ -1,7 +1,7 @@
 from decimal import Decimal
 
-from app.domain.confidence import ConfidenceSignals, assess_review_readiness, field_confidence_for_path
-from app.domain.contracts import (
+from app.extraction.confidence import ConfidenceSignals, assess_review_readiness, field_confidence_for_path
+from app.extraction.contracts import (
     CanonicalQuotation,
     Evidence,
     LineItem,
@@ -90,6 +90,19 @@ def test_clean_native_pdf_without_leaf_provenance_is_medium_not_a_review_failure
 
     result = assess_review_readiness(
         CanonicalQuotation(line_items=[line_item]), ConfidenceSignals(source_type="pdf")
+    )
+
+    assert result.system_decision == "pending_review"
+    assert {field.band for field in result.fields.values()} == {"Medium"}
+    assert not result.review_reasons
+
+
+def test_clean_native_email_without_leaf_provenance_is_medium_not_a_review_failure():
+    line_item = complete_line_item()
+    line_item.evidence = []
+
+    result = assess_review_readiness(
+        CanonicalQuotation(line_items=[line_item]), ConfidenceSignals(source_type="email")
     )
 
     assert result.system_decision == "pending_review"

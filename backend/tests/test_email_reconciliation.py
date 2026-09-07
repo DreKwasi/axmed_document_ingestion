@@ -1,7 +1,7 @@
 from decimal import Decimal
 
-from app.domain.contracts import CanonicalQuotation, LineItem, Pricing, Product, QuotedPrice
-from app.domain.email_reconciliation import reconcile_email_price_uoms
+from app.extraction.contracts import CanonicalQuotation, LineItem, Pricing, Product, QuotedPrice
+from app.extraction.email_reconciliation import reconcile_email_price_uoms
 
 
 def test_explicit_email_price_uom_overrides_model_normalization_when_amount_matches():
