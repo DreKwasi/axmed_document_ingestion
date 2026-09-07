@@ -125,6 +125,7 @@ def consume_ocr_job(
     job_id: str,
     database_url: str | None = None,
     task_database_path: str | None = None,
+    upload_dir: str | None = None,
     service_url: str | None = None,
     service_token: str | None = None,
 ) -> None:
@@ -132,6 +133,7 @@ def consume_ocr_job(
         job_id,
         database_url or settings.database_url,
         task_database_path or str(settings.task_database_path),
+        upload_dir or str(settings.upload_dir),
         service_url if service_url is not None else settings.ocr_service_url,
         service_token if service_token is not None else settings.ocr_service_token,
     )
@@ -142,7 +144,8 @@ def enqueue_ocr_job(
     *,
     database_url: str,
     task_database_path: str,
+    upload_dir: str,
     service_url: str | None,
     service_token: str | None,
 ) -> None:
-    consume_ocr_job(job_id, database_url, task_database_path, service_url, service_token)
+    consume_ocr_job(job_id, database_url, task_database_path, upload_dir, service_url, service_token)

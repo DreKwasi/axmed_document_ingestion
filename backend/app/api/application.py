@@ -233,6 +233,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         response["ocr"]["id"],
                         database_url=active_settings.database_url,
                         task_database_path=str(active_settings.task_database_path),
+                        upload_dir=str(active_settings.upload_dir),
                         service_url=active_settings.ocr_service_url,
                         service_token=active_settings.ocr_service_token,
                     )

@@ -118,12 +118,14 @@ def run_ocr_job(
     job_id: str,
     database_url: str,
     task_database_path: str,
+    upload_dir: str,
     service_url: str | None = None,
     service_token: str | None = None,
 ) -> None:
     settings = Settings(
         database_url=database_url,
         task_database_path=Path(task_database_path),
+        upload_dir=Path(upload_dir),
         ocr_service_url=service_url,
         ocr_service_token=service_token,
     )
