@@ -56,6 +56,15 @@ function displayPrice(value: string | null | undefined) {
   return Number.isFinite(numeric) ? numeric.toLocaleString(undefined, { maximumFractionDigits: 6 }) : value;
 }
 
+function displayLeadTime(supply: LineItem["supply"]): string {
+  const minimum = supply.lead_time_min_days;
+  const maximum = supply.lead_time_max_days;
+  if (minimum != null && maximum != null) return minimum === maximum ? `${minimum} days` : `${minimum}–${maximum} days`;
+  if (minimum != null) return `From ${minimum} days`;
+  if (maximum != null) return `Up to ${maximum} days`;
+  return supply.lead_time_days != null ? `${supply.lead_time_days} days` : "—";
+}
+
 const rowConfidence = computed(() => {
   const values = props.document.quotation?.field_reviews
     ?.filter((field) => field.field_path.startsWith(`line_items[${props.lineIndex}]`))
@@ -94,14 +103,14 @@ const confidenceSummary = computed(() => {
           : "The values are clearly linked to this product and source location.",
     },
     {
-      label: "Independent checks",
+      label: "Consistency checks",
       detail: validation.includes("conflicting")
-        ? "A source cross-check conflicts with one or more extracted values."
+        ? "Some quoted figures do not reconcile with one another."
         : validation.includes("passed") && validation.includes("unavailable")
-          ? "Applicable commercial checks passed; other fields have no comparable cross-check."
-          : validation.includes("passed")
-            ? "Applicable source cross-checks passed."
-            : "No independent cross-check applies to these fields.",
+          ? "Comparable source figures reconcile; other fields have nothing comparable to check."
+        : validation.includes("passed")
+            ? "The comparable figures in this source reconcile."
+            : "This source has no comparable figures to cross-check.",
     },
   ];
 });
@@ -227,10 +236,8 @@ function handleSave() {
             </p>
           </div>
           <div>
-            <span class="text-[10px] font-bold uppercase text-slate-400">Dosage Form / Route</span>
-            <p class="font-medium text-slate-800">
-              {{ [lineItem.product.dosage_form, lineItem.product.route].filter(Boolean).join(" · ") || "—" }}
-            </p>
+            <span class="text-[10px] font-bold uppercase text-slate-400">Dosage Form</span>
+            <p class="font-medium text-slate-800">{{ lineItem.product.dosage_form || "—" }}</p>
           </div>
           <div>
             <span class="text-[10px] font-bold uppercase text-slate-400">Manufacturer</span>
@@ -371,7 +378,7 @@ function handleSave() {
           <div>
             <span class="text-[10px] font-bold uppercase text-slate-400">Lead Time</span>
             <p class="font-medium text-slate-800">
-              {{ lineItem.supply.lead_time_days ? `${lineItem.supply.lead_time_days} days` : "—" }}
+              {{ displayLeadTime(lineItem.supply) }}
             </p>
           </div>
           <div>
@@ -420,12 +427,6 @@ function handleSave() {
           <div>
             <span class="text-[10px] font-bold uppercase text-slate-400">Regulatory Status</span>
             <p class="font-medium text-slate-800">{{ lineItem.regulatory?.regulatory_status || "—" }}</p>
-          </div>
-          <div>
-            <span class="text-[10px] font-bold uppercase text-slate-400">HS / ATC Code</span>
-            <p class="font-medium text-slate-800">
-              {{ [lineItem.regulatory?.hs_code, lineItem.regulatory?.atc_code].filter(Boolean).join(" · ") || "—" }}
-            </p>
           </div>
         </div>
       </div>

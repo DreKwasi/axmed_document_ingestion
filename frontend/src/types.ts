@@ -12,7 +12,6 @@ export type LineItem = {
     inn: string[];
     strength: Array<{ ingredient?: string | null; value?: string | null; unit?: string | null; per_value?: string | null; per_unit?: string | null }>;
     dosage_form?: string | null;
-    route?: string | null;
     manufacturer?: string | null;
     country_of_origin?: string | null;
   };
@@ -28,8 +27,8 @@ export type LineItem = {
     price_tiers?: Array<{ min_quantity?: string | null; max_quantity?: string | null; quantity_uom?: string | null; price?: string | null; price_uom?: string | null }>;
     adjustments?: Array<{ type: string; value?: string | null; value_type?: string | null; condition?: string | null }>;
   };
-  supply: { lead_time_days?: number | null; shelf_life_months?: number | null; minimum_remaining_shelf_life_percent?: string | null; storage_conditions?: string | null; cold_chain_required?: boolean | null };
-  regulatory: { who_prequalified?: boolean | null; who_pq_reference?: string | null; registered_markets?: string[]; registration_reference?: string | null; regulatory_status?: string | null; hs_code?: string | null; atc_code?: string | null };
+  supply: { lead_time_days?: number | null; lead_time_min_days?: number | null; lead_time_max_days?: number | null; shelf_life_months?: number | null; minimum_remaining_shelf_life_percent?: string | null; storage_conditions?: string | null; cold_chain_required?: boolean | null };
+  regulatory: { who_prequalified?: boolean | null; who_pq_reference?: string | null; registered_markets?: string[]; registration_reference?: string | null; regulatory_status?: string | null };
   evidence: Evidence[];
 };
 
@@ -38,7 +37,7 @@ export type Quotation = {
   rfq_reference?: string | null;
   document_type?: string | null;
   supplier: { name?: string | null; country?: string | null };
-  commercial_terms: { currency?: string | null; incoterm?: string | null; incoterm_named_place?: string | null; incoterm_country?: string | null };
+  commercial_terms: { currency?: string | null; incoterm?: string | null; incoterm_named_place?: string | null; incoterm_country?: string | null; hs_codes?: string[] };
   line_items: LineItem[];
   field_reviews?: Array<{
     field_path: string;

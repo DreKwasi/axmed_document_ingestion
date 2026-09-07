@@ -130,13 +130,10 @@ function fieldLabel(path: string) {
               </span>
             </td>
 
-            <!-- Dosage & Route / Presentation -->
+            <!-- Dosage form / Presentation -->
             <td class="px-4 py-4 align-top text-slate-700">
               <span class="block font-medium">
                 {{ [item.product.dosage_form, item.packaging.presentation].filter(Boolean).join(" · ") || "—" }}
-              </span>
-              <span v-if="item.product.route" class="mt-0.5 block text-slate-400 text-[11px]">
-                {{ item.product.route }}
               </span>
             </td>
 

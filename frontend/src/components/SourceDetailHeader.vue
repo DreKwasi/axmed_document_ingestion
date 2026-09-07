@@ -52,6 +52,8 @@ const confidence = computed(() => {
   return "Confidence unavailable";
 });
 
+const hsCodes = computed(() => props.document.quotation?.commercial_terms.hs_codes?.filter(Boolean) ?? []);
+
 const formatBadge = computed(() => {
   const lower = props.document.filename.toLowerCase();
   if (lower.endsWith(".pdf")) return "PDF";
@@ -202,6 +204,9 @@ const statusDotClass = computed(() => {
             </p>
             <p v-if="document.quotation?.commercial_terms.incoterm_country" class="mt-1 text-[11px] text-slate-500">
               Delivery country: {{ document.quotation.commercial_terms.incoterm_country }}
+            </p>
+            <p v-if="hsCodes.length" class="mt-1 text-[11px] text-slate-500">
+              HS codes: {{ hsCodes.join(" · ") }}
             </p>
           </div>
 
