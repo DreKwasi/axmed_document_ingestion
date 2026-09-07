@@ -118,7 +118,6 @@ def run_recorded_evaluation(
                 payload,
                 cold_proposal.mapping,
                 source_document=str(fixture_path),
-                method="llm_extraction",
             )
             cold_duration_ms = max(1, int((perf_counter() - cold_started) * 1000))
             warm_payload = json.loads(json.dumps(payload))
@@ -129,7 +128,6 @@ def run_recorded_evaluation(
                 warm_payload,
                 cold_proposal.mapping,
                 source_document=str(fixture_path),
-                method="deterministic_mapping",
             )
             warm_duration_ms = max(1, int((perf_counter() - warm_started) * 1000))
             warm_calls = 0

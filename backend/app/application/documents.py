@@ -1122,7 +1122,6 @@ def ingest_json(
                 payload,
                 mapping_json,
                 source_document=document.original_filename,
-                method="deterministic_mapping",
             )
         except (InvalidOperation, TypeError, ValidationError, ValueError):
             document.status = "failed"
@@ -1189,7 +1188,6 @@ def ingest_json(
             payload,
             proposal.mapping,
             source_document=document.original_filename,
-            method="llm_extraction",
         )
     except (InvalidOperation, TypeError, ValidationError, ValueError):
         document.status = "failed"
@@ -1226,7 +1224,6 @@ def confirm_mapping(session: Session, document_id: str, settings: Settings) -> D
         payload,
         json.loads(mapping.mapping_json),
         source_document=document.original_filename,
-        method="deterministic_mapping",
     )
     document.status = "pending_review"
     document.mapping_source = "confirmed_mapping"

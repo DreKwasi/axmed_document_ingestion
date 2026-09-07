@@ -10,7 +10,6 @@ from typing import Any, Protocol
 from app.domain.contracts import (
     CanonicalQuotation,
     CommercialTerms,
-    Evidence,
     LineItem,
     Packaging,
     Pricing,
@@ -207,39 +206,22 @@ def extract_source_metadata(payload: dict[str, Any]) -> tuple[str, str | None]:
     return str(source_system), str(schema_version) if schema_version is not None else None
 
 
-def make_evidence(
-    canonical_field: str, source_path: str, method: str, *, source_document: str | None = None
-) -> Evidence:
-    return Evidence(
-        canonical_field=canonical_field,
-        source_path=source_path,
-        source_location=source_document,
-        extraction_method=method,
-        confidence=Decimal("0.99") if method == "deterministic_mapping" else Decimal("0.80"),
-    )
-
-
-def apply_mapping(
-    payload: dict[str, Any], mapping: dict[str, Any], *, source_document: str, method: str
-) -> CanonicalQuotation:
+def apply_mapping(payload: dict[str, Any], mapping: dict[str, Any], *, source_document: str) -> CanonicalQuotation:
     quotation_paths = mapping["quotation"]
     supplier_paths = mapping["supplier"]
     commercial_paths = mapping["commercial_terms"]
-    evidence: list[Evidence] = []
-
-    def field(path_key: str, field_name: str) -> Any:
+    def field(path_key: str) -> Any:
         source_path = quotation_paths.get(path_key)
         if source_path:
-            evidence.append(make_evidence(field_name, source_path, method, source_document=source_document))
             return get_path(payload, source_path)
         return None
 
     quotation = CanonicalQuotation(
-        quotation_reference=field("quotation_reference", "quotation_reference"),
-        rfq_reference=field("rfq_reference", "rfq_reference"),
-        document_type=field("document_type", "document_type"),
-        issue_date=field("issue_date", "issue_date"),
-        valid_until=field("valid_until", "valid_until"),
+        quotation_reference=field("quotation_reference"),
+        rfq_reference=field("rfq_reference"),
+        document_type=field("document_type"),
+        issue_date=field("issue_date"),
+        valid_until=field("valid_until"),
         supplier=Supplier(
             **{canonical: get_path(payload, source_path) for canonical, source_path in supplier_paths.items()}
         ),
@@ -247,7 +229,6 @@ def apply_mapping(
             **{canonical: get_path(payload, source_path) for canonical, source_path in commercial_paths.items()}
         ),
         source={"document_name": source_document, "document_format": "json"},
-        evidence=evidence,
     )
     for field_path, source_path in mapping.get("required_fields", {}).items():
         if get_path(payload, source_path) is None:
@@ -258,35 +239,18 @@ def apply_mapping(
                     message="A required source value is absent; the canonical value remains null.",
                 )
             )
-    for canonical, source_path in supplier_paths.items():
-        quotation.evidence.append(
-            make_evidence(f"supplier.{canonical}", source_path, method, source_document=source_document)
-        )
-    for canonical, source_path in commercial_paths.items():
-        quotation.evidence.append(
-            make_evidence(f"commercial_terms.{canonical}", source_path, method, source_document=source_document)
-        )
-
     collection_path = mapping["line_items"]["collection_path"]
     collection = get_path(payload, collection_path.removesuffix("[]"))
     if not isinstance(collection, list):
         raise ValueError(f"Mapping collection path did not resolve to a list: {collection_path}")
     fields = mapping["line_items"]["fields"]
     for item in collection:
-        item_evidence: list[Evidence] = []
-
         def line(
             path_key: str,
-            canonical_field: str,
             source_item: dict[str, Any] = item,
-            evidence_list: list[Evidence] = item_evidence,
         ) -> Any:
             specification = fields.get(path_key)
             if specification:
-                source_path = specification if isinstance(specification, str) else specification.get("path", "constant")
-                evidence_list.append(
-                    make_evidence(canonical_field, source_path, method, source_document=source_document)
-                )
                 return resolve_mapping_value(source_item, specification)
             return None
 
@@ -296,56 +260,52 @@ def apply_mapping(
             value = scalar(item, source_path)
             if value is not None:
                 strengths.append(Strength(ingredient=ingredient, value=as_decimal(value), unit="mg"))
-                item_evidence.append(
-                    make_evidence("product.strength", source_path, method, source_document=source_document)
-                )
 
-        source_dosage_form = line("dosage_form", "product.dosage_form")
+        source_dosage_form = line("dosage_form")
         if isinstance(source_dosage_form, str):
             dosage_form, presentation = _core_dosage_form(source_dosage_form)
         else:
             dosage_form, presentation = source_dosage_form, None
         line_item = LineItem(
-            source_key=line("source_key", "source_key"),
+            source_key=line("source_key"),
             product=Product(
-                trade_name=line("trade_name", "product.trade_name"),
-                inn=line("inn", "product.inn") or [],
+                trade_name=line("trade_name"),
+                inn=line("inn") or [],
                 strength=strengths,
                 dosage_form=dosage_form,
-                manufacturer=line("manufacturer", "product.manufacturer"),
-                country_of_origin=line("country_of_origin", "product.country_of_origin"),
+                manufacturer=line("manufacturer"),
+                country_of_origin=line("country_of_origin"),
             ),
             packaging=Packaging(
-                description=line("pack_description", "packaging.description"),
+                description=line("pack_description"),
                 presentation=presentation,
-                primary_pack=line("primary_pack", "packaging.primary_pack"),
-                units_per_pack=line("units_per_pack", "packaging.units_per_pack"),
-                unit_label=line("unit_label", "packaging.unit_label"),
-                packs_per_shipper=line("packs_per_shipper", "packaging.packs_per_shipper"),
+                primary_pack=line("primary_pack"),
+                units_per_pack=line("units_per_pack"),
+                unit_label=line("unit_label"),
+                packs_per_shipper=line("packs_per_shipper"),
             ),
             quantity=Quantity(
-                minimum_order_quantity=as_decimal(line("minimum_order_quantity", "quantity.minimum_order_quantity")),
-                minimum_order_quantity_uom=line("minimum_order_quantity_uom", "quantity.minimum_order_quantity_uom"),
+                minimum_order_quantity=as_decimal(line("minimum_order_quantity")),
+                minimum_order_quantity_uom=line("minimum_order_quantity_uom"),
             ),
             pricing=Pricing(
                 currency=quotation.commercial_terms.currency,
-                pack_price=as_decimal(line("pack_price", "pricing.pack_price")),
+                pack_price=as_decimal(line("pack_price")),
                 quoted_price=QuotedPrice(
-                    amount=as_decimal(line("quoted_price_amount", "pricing.quoted_price.amount")),
-                    uom=line("quoted_price_uom", "pricing.quoted_price.uom"),
+                    amount=as_decimal(line("quoted_price_amount")),
+                    uom=line("quoted_price_uom"),
                 ),
             ),
             supply=Supply(
-                lead_time_days=line("lead_time_days", "supply.lead_time_days"),
-                shelf_life_months=line("shelf_life_months", "supply.shelf_life_months"),
-                storage_conditions=line("storage_conditions", "supply.storage_conditions"),
+                lead_time_days=line("lead_time_days"),
+                shelf_life_months=line("shelf_life_months"),
+                storage_conditions=line("storage_conditions"),
             ),
             regulatory=Regulatory(
-                who_prequalified=line("who_prequalified", "regulatory.who_prequalified"),
-                who_pq_reference=line("who_pq_reference", "regulatory.who_pq_reference"),
-                registered_markets=line("registered_markets", "regulatory.registered_markets") or [],
+                who_prequalified=line("who_prequalified"),
+                who_pq_reference=line("who_pq_reference"),
+                registered_markets=line("registered_markets") or [],
             ),
-            evidence=item_evidence,
         )
         for field_path, source_path in mapping["line_items"].get("required_fields", {}).items():
             if scalar(item, source_path) is None:

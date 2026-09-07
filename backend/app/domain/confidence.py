@@ -11,7 +11,7 @@ from decimal import Decimal
 
 from app.domain.contracts import CanonicalQuotation, Evidence, LineItem
 
-STRONG_SOURCE_METHODS = {"human_corrected", "deterministic_mapping", "direct_json"}
+STRONG_SOURCE_METHODS = {"human_corrected", "direct_json"}
 
 
 @dataclass(frozen=True)
@@ -153,7 +153,7 @@ def _classify_extracted_field(
     if signals.parser_quality in {"poor", "failed"}:
         return _confidence("Low", "weak", _association(evidence), validation)
     if evidence is None:
-        if signals.source_type == "pdf" and signals.parser_quality not in {"poor", "failed"}:
+        if signals.source_type in {"pdf", "json"} and signals.parser_quality not in {"poor", "failed"}:
             return _confidence("Medium", "strong", "limited", validation)
         return _confidence("Low", "unverified", "unverified", validation)
 
