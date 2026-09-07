@@ -3,8 +3,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from app.api.application import create_app
-from app.core.settings import Settings
+from app.api import create_app
+from app.config import Config
 from app.security.redaction import redact_for_model, redact_text
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -57,23 +57,22 @@ def test_redact_for_model_recursive():
 
 
 def test_processing_events_and_invocations_do_not_leak_raw_text_or_pii(tmp_path: Path):
-    settings = Settings(
+    settings = Config(
         database_url=f"sqlite:///{tmp_path / 'audit.db'}",
-        task_database_path=tmp_path / "tasks.db",
         upload_dir=tmp_path / "uploads",
-        recorded_mapping_dir=PROJECT_ROOT / "backend/evals/recorded_mappings",
+        recorded_json_extraction_dir=PROJECT_ROOT / "backend/evals/recorded_json_extractions",
         golden_dataset_path=PROJECT_ROOT / "backend/evals/golden_dataset.json",
-        background_job_dispatch_enabled=False,
+        background_processing_enabled=False,
     )
     with TestClient(create_app(settings)) as client:
         # Ingest EML containing contact info
         eml_bytes = EMAIL_FIXTURE.read_bytes()
         res = client.post(
             "/api/v1/documents",
-            files={"file": ("novara.eml", eml_bytes, "message/rfc822")},
+            files={"files": ("novara.eml", eml_bytes, "message/rfc822")},
         )
         assert res.status_code == 201
-        doc_id = res.json()["id"]
+        doc_id = res.json()[0]["id"]
 
         # Check events endpoint
         events_res = client.get(f"/api/v1/documents/{doc_id}/events")
@@ -83,9 +82,4 @@ def test_processing_events_and_invocations_do_not_leak_raw_text_or_pii(tmp_path:
         assert "claudia.meyer@novara-pharma.de" not in events_dump
         assert "+49" not in events_dump
 
-        # Check diagnostics endpoint
-        diag_res = client.get("/api/v1/diagnostics")
-        assert diag_res.status_code == 200
-        diag_dump = json.dumps(diag_res.json())
-        assert "claudia.meyer@novara-pharma.de" not in diag_dump
-        assert "+49" not in diag_dump
+        assert client.get("/api/v1/diagnostics").status_code == 404

@@ -14,8 +14,8 @@ def test_redaction_removes_contact_pii_without_removing_allowed_supplier_context
 def test_event_stream_rejects_an_invalid_reconnect_cursor(client, sanova_bytes):
     document = client.post(
         "/api/v1/documents",
-        files={"file": ("sanova.json", sanova_bytes, "application/json")},
-    ).json()
+        files={"files": ("sanova.json", sanova_bytes, "application/json")},
+    ).json()[0]
 
     response = client.get(
         f"/api/v1/documents/{document['id']}/events/stream",

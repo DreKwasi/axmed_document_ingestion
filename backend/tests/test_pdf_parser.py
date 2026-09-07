@@ -5,17 +5,19 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
-from app.core.settings import Settings
-from app.domain.pdf_parser import ParsedPdf, ParsedPdfPage, PdfParseError, parse_native_pdf
-from app.infrastructure.database import create_sqlite_engine
-from app.infrastructure.models import (
+from app.config import Config
+from app.database import create_sqlite_engine
+from app.extraction.contracts import CanonicalQuotation
+from app.extraction.llm import SemanticEnrichment
+from app.extraction.pdf_parser import ParsedPdf, ParsedPdfPage, PdfParseError, parse_native_pdf
+from app.extraction.pdf_processing import consume_pdf_extraction
+from app.models import (
     ModelInvocationRecord,
     PdfExtractionRecord,
     ProcessingEventRecord,
     QuotationLineItemRecord,
     QuotationRecord,
 )
-from app.workers.pdf_extraction import consume_pdf_extraction
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PDF_FIXTURES = PROJECT_ROOT / "backend/evals/fixtures/documents"
@@ -57,10 +59,10 @@ def test_native_pdf_parser_rejects_non_pdf_content():
 def test_pdf_upload_persists_page_quality_metadata_and_never_exposes_native_text(client):
     source = (PDF_FIXTURES / "farmaceutica_andina_proforma_FA-COT-2026-118.pdf").read_bytes()
 
-    response = client.post("/api/v1/documents", files={"file": ("andina.pdf", source, "application/pdf")})
+    response = client.post("/api/v1/documents", files={"files": ("andina.pdf", source, "application/pdf")})
 
     assert response.status_code == 201
-    document = response.json()
+    document = response.json()[0]
     assert document["status"] == "needs_semantic_extraction"
     assert document["parsed_summary"] == {"page_count": 2, "needs_ocr_pages": []}
     artifact_quality = [
@@ -81,7 +83,7 @@ def test_pdf_upload_persists_page_quality_metadata_and_never_exposes_native_text
 
 def test_pdf_with_poor_native_page_creates_a_targeted_ocr_job(client, monkeypatch):
     monkeypatch.setattr(
-        "app.application.documents.parse_native_pdf",
+        "app.documents.parse_native_pdf",
         lambda _data: ParsedPdf(
             pages=(
                 ParsedPdfPage(page_number=1, text="native text", native_text_characters=11, quality="poor"),
@@ -97,64 +99,61 @@ def test_pdf_with_poor_native_page_creates_a_targeted_ocr_job(client, monkeypatc
 
     response = client.post(
         "/api/v1/documents",
-        files={"file": ("partially-scanned.pdf", b"%PDF-placeholder", "application/pdf")},
+        files={"files": ("partially-scanned.pdf", b"%PDF-placeholder", "application/pdf")},
     )
 
     assert response.status_code == 201
-    document = response.json()
+    document = response.json()[0]
     assert document["status"] == "needs_ocr"
     assert document["ocr"] == {"id": document["ocr"]["id"], "status": "queued", "selected_pages": [1]}
     assert document["pdf_extraction"] is None
 
 
-class _ResolverResponse:
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_args):
-        return False
-
-    def read(self):
-        return json.dumps(
-            {
-                "quotation": {
-                    "document_type": "supplier_quotation",
-                    "supplier": {"name": "Farmaceutica Andina S.A.S."},
-                    "line_items": [{"product": {"trade_name": "Amoxicillin"}}],
-                }
-            }
-        ).encode()
-
-
 def test_pdf_worker_uses_redacted_page_context_and_persists_reviewable_quotation(client_settings, monkeypatch):
     client, base_settings = client_settings
     source = (PDF_FIXTURES / "farmaceutica_andina_proforma_FA-COT-2026-118.pdf").read_bytes()
-    document = client.post("/api/v1/documents", files={"file": ("andina.pdf", source, "application/pdf")}).json()
+    document = client.post(
+        "/api/v1/documents", files={"files": ("andina.pdf", source, "application/pdf")}
+    ).json()[0]
     engine = create_sqlite_engine(base_settings.database_url)
     factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
     submitted: list[dict] = []
 
-    def fake_urlopen(request, timeout):
-        assert timeout == 30
-        submitted.append(json.loads(request.data.decode()))
-        return _ResolverResponse()
+    class FakeExtractor:
+        def __init__(self, **_kwargs):
+            pass
 
-    monkeypatch.setattr("app.workers.resolver.urlopen", fake_urlopen)
+        def extract_canonical_quotation(self, context, *, source_type):
+            assert source_type == "pdf"
+            submitted.append(context)
+            return (
+                CanonicalQuotation.model_validate(
+                    {
+                        "document_type": "supplier_quotation",
+                        "supplier": {"name": "Farmaceutica Andina S.A.S."},
+                        "line_items": [{"product": {"trade_name": "Amoxicillin"}}],
+                    }
+                ),
+                {"duration_ms": 1},
+            )
+
+        def enrich_line_items_from_semantic_sections(self, context, quotation):
+            return SemanticEnrichment(), {"duration_ms": 1}
+
+    monkeypatch.setattr("app.extraction.llm.LangChainSemanticExtractor", FakeExtractor)
     with factory() as session:
         consume_pdf_extraction(
             session,
             document["pdf_extraction"]["id"],
-            Settings(
+            Config(
                 database_url=base_settings.database_url,
-                task_database_path=base_settings.task_database_path,
-                semantic_resolver_url="https://resolver.example/v1/extract",
-                semantic_resolver_model="test-model",
+                gemini_api_key="test-key",
+                gemini_model="test-model",
             ),
         )
 
-    assert submitted[0]["operation"] == "pdf_quotation_extraction"
     assert "exportaciones@fandina.com.co" not in json.dumps(submitted)
-    semantic_context = submitted[0]["context"]
+    semantic_context = submitted[0]
     assert "liteparse" in json.dumps(semantic_context)
     assert semantic_context["document_plan"]["source_representation"] == "native_pdf_reading_order"
     assert semantic_context["document_plan"]["structured_page_numbers"] == [1]
