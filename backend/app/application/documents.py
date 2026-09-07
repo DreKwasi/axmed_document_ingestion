@@ -1,7 +1,6 @@
 import hashlib
 import json
-from collections.abc import Callable
-from dataclasses import dataclass
+import re
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -1107,11 +1106,11 @@ def serialize_document(session: Session, document: DocumentRecord) -> dict[str, 
         quotation_payload["line_items"] = normalized_items
         quotation_payload["revision"] = quotation.revision
         quotation_payload["review_status"] = quotation.review_status
-        field_values = session.scalars(
+        field_values = list(session.scalars(
             select(QuotationFieldValueRecord)
             .where(QuotationFieldValueRecord.quotation_id == quotation.id)
             .order_by(QuotationFieldValueRecord.canonical_field)
-        ).all()
+        ))
         quotation_payload["field_reviews"] = [
             {
                 "field_path": field_value.canonical_field,
@@ -1136,6 +1135,7 @@ def serialize_document(session: Session, document: DocumentRecord) -> dict[str, 
         "id": document.id,
         "batch_id": document.batch_id,
         "filename": document.original_filename,
+        "source_name": _source_name(document, quotation_payload),
         "status": document.status,
         "failure_reason": document.failure_reason,
         "source_system": document.source_system,
@@ -1144,6 +1144,9 @@ def serialize_document(session: Session, document: DocumentRecord) -> dict[str, 
         "semantic_mapping_calls": document.semantic_mapping_calls,
         "mapping_source": document.mapping_source,
         "parsed_summary": _safe_parsed_summary(document),
+        "extraction_confidence": _extraction_confidence(quotation_payload),
+        "product_counts": _product_counts(document, quotation_payload),
+        "notes": _document_notes(document, quotation_payload),
         "artifacts": [
             {
                 "kind": artifact.kind,
@@ -1196,6 +1199,53 @@ def serialize_document(session: Session, document: DocumentRecord) -> dict[str, 
         "pdf_extraction": _serialize_pdf_extraction(session, document.id),
         "ocr": _serialize_ocr_job(session, document.id),
     }
+
+
+def _source_name(document: DocumentRecord, quotation_payload: dict[str, Any] | None) -> str:
+    supplier_name = ((quotation_payload or {}).get("supplier") or {}).get("name")
+    reference = (quotation_payload or {}).get("quotation_reference")
+    if supplier_name and reference:
+        return f"{supplier_name} · {reference}"
+    if supplier_name:
+        return f"{supplier_name} quotation"
+    filename = Path(document.original_filename).stem.replace("_", " ").replace("-", " ").strip()
+    return filename.title() or "Untitled source"
+
+
+def _extraction_confidence(quotation_payload: dict[str, Any] | None) -> str | None:
+    if not quotation_payload:
+        return None
+    evidence = list(quotation_payload.get("evidence", []))
+    evidence.extend(
+        item_evidence
+        for line_item in quotation_payload.get("line_items") or []
+        for item_evidence in line_item.get("evidence", [])
+    )
+    values = [Decimal(str(item["confidence"])) for item in evidence if item.get("confidence") is not None]
+    return None if not values else f"{(min(values) * 100).quantize(Decimal('1'))}%"
+
+
+def _product_counts(document: DocumentRecord, quotation_payload: dict[str, Any] | None) -> dict[str, int]:
+    line_items = (quotation_payload or {}).get("line_items") or []
+    failed_positions = {
+        int(match.group(1))
+        for issue in (quotation_payload or {}).get("review_issues", [])
+        if issue.get("severity") == "error"
+        for match in [re.match(r"line_items\[(\d+)\]", issue.get("field_path", ""))]
+        if match
+    }
+    failed = len(failed_positions)
+    if document.status == "failed" and not line_items:
+        failed = 1
+    return {"extracted": len(line_items), "failed": failed}
+
+
+def _document_notes(document: DocumentRecord, quotation_payload: dict[str, Any] | None) -> list[str]:
+    notes: list[str] = []
+    if document.failure_reason:
+        notes.append(document.failure_reason)
+    notes.extend(issue["message"] for issue in (quotation_payload or {}).get("review_issues", [])[:2])
+    return notes
 
 
 def _serialize_email_extraction(session: Session, document_id: str) -> dict[str, str] | None:

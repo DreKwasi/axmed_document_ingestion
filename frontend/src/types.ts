@@ -57,6 +57,7 @@ export type DocumentResponse = {
   id: string;
   batch_id?: string | null;
   filename: string;
+  source_name?: string | null;
   status: "needs_mapping_confirmation" | "needs_mapping_resolution" | "needs_review" | "failed" | string;
   failure_reason?: string | null;
   source_system?: string | null;
@@ -65,6 +66,9 @@ export type DocumentResponse = {
   semantic_mapping_calls: number;
   mapping_source?: string | null;
   parsed_summary?: { subject?: string; message_id?: string | null; page_count?: number; needs_ocr_pages?: number[] } | null;
+  extraction_confidence?: string | null;
+  product_counts?: { extracted: number; failed: number };
+  notes?: string[];
   mapping?: {
     id: string;
     trust_state: string;
@@ -82,6 +86,17 @@ export type DocumentResponse = {
   }>;
   learning?: Array<{ id: string; review_id: string; status: string }>;
   ocr?: { id: string; status: string; selected_pages: number[] } | null;
+};
+
+export type ProcessingEvent = {
+  id: number;
+  document_id: string;
+  learning_id?: string | null;
+  stage: string;
+  phase: string;
+  message: string;
+  metadata: Record<string, unknown>;
+  created_at?: string | null;
 };
 
 export type BatchResponse = {

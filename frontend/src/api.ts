@@ -1,4 +1,4 @@
-import type { BatchResponse, DocumentResponse, EvaluationsResponse } from "@/types";
+import type { BatchResponse, DocumentResponse, EvaluationsResponse, ProcessingEvent } from "@/types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
 
@@ -54,6 +54,10 @@ export function eventStreamUrl(documentId: string, afterId = 0): string {
 
 export function fetchDocument(documentId: string): Promise<DocumentResponse> {
   return request(`/api/v1/documents/${documentId}`);
+}
+
+export function fetchEvents(documentId: string, afterId = 0): Promise<ProcessingEvent[]> {
+  return request(`/api/v1/documents/${documentId}/events?after_id=${afterId}`);
 }
 
 export function reviewDocument(
