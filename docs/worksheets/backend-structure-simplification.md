@@ -39,19 +39,28 @@
 
 ## Tests, app run, and validation
 
-Pending.
+- `bin/agent-validate full` passes: frontend lint, 12 component tests, production build, 2 Playwright journeys, Ruff, mypy, 90 backend tests, and 5 evaluation-runner tests.
+- The running API returned HTTP 200 from `/health` and exposed only the retained document/review/event routes.
+- The live database upgraded to Alembic `20260907_21`; the existing zero-product image is now `failed` with a safe reason, while completed human decisions are excluded from the backfill.
+- Browser inspection confirmed the Home table shows the failed source as `EXTRACTION FAILED`, the Zenith product table shows only quoted price, and the detail drawer shows a normalized price with bounded precision.
+- The existing Zenith JSON source was explicitly re-extracted; Oxytocin now persists and displays `solution for injection`.
 
 ## Review findings and resolutions
 
-Pending.
+- Independent reviewer command was unavailable. Separate manual passes covered behavior/test strength, code structure, and security/performance/UX.
+- Quality: added regression coverage for complete dosage phrases, zero-product failure, preserved non-reviewable facts, display precision, and migration safety.
+- Code quality: removed the lossy dosage/presentation splitter and kept the zero-product terminal decision at the shared quotation persistence boundary.
+- Security/UX: user-safe failure reasons remain on the original source; approved/rejected records are not rewritten; raw source data is not added to logs or the UI.
+- Full validation initially exposed Playwright files sharing one temporary database concurrently; the suite now uses one worker because the configured E2E server is shared.
+- `bin/agent-sweep` completed without additional warnings; the remaining working-tree changes pass `git diff --check`.
 
 ## Docs updated
 
-Pending.
+- Product PRD, implementation plan, architecture, backend map, README files, test catalog, this worksheet, and agent feedback.
 
 ## Handoff / remaining work
 
-Pending.
+- No required implementation work remains for this request.
 
 ## Final commit and tag
 
