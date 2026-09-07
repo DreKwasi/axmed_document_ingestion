@@ -5,33 +5,17 @@ from uuid import uuid4
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.infrastructure.database import Base
+from app.database import Base
 
 
 def new_id() -> str:
     return str(uuid4())
 
 
-class BatchRecord(Base):
-    __tablename__ = "batches"
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    name: Mapped[str] = mapped_column(String(255))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
-
-    documents: Mapped[list["DocumentRecord"]] = relationship(
-        back_populates="batch", order_by="DocumentRecord.created_at"
-    )
-
-
 class DocumentRecord(Base):
     __tablename__ = "documents"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    batch_id: Mapped[str | None] = mapped_column(ForeignKey("batches.id"), nullable=True, index=True)
     original_filename: Mapped[str] = mapped_column(String(255))
     stored_filename: Mapped[str] = mapped_column(String(255), unique=True)
     media_type: Mapped[str] = mapped_column(String(100))
@@ -46,7 +30,6 @@ class DocumentRecord(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    batch: Mapped["BatchRecord | None"] = relationship(back_populates="documents")
     quotation: Mapped["QuotationRecord | None"] = relationship(back_populates="document", uselist=False)
 
 
