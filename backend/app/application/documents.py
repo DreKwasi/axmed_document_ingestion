@@ -18,7 +18,7 @@ from app.domain.confidence import (
     ConfidenceSignals,
     ReviewAssessment,
     assess_review_readiness,
-    field_reliability_for_path,
+    field_confidence_for_path,
 )
 from app.domain.contracts import CanonicalQuotation
 from app.domain.email_parser import parse_email
@@ -367,6 +367,38 @@ def _upsert_quotation(session: Session, document: DocumentRecord, quotation: Can
         assessment=assessment,
     )
     return stored
+
+
+def reassess_persisted_confidence(session: Session) -> int:
+    """Reapply the current confidence policy without re-extracting source content.
+
+    The canonical quotation snapshot and raw numeric evidence stay intact. Only
+    categorical confidence, availability-driven routing, and field projections
+    are refreshed, so a policy change cannot masquerade as a new extraction.
+    """
+
+    refreshed = 0
+    documents = session.scalars(select(DocumentRecord).order_by(DocumentRecord.created_at)).all()
+    for document in documents:
+        quotation = session.scalar(select(QuotationRecord).where(QuotationRecord.document_id == document.id))
+        if quotation is None:
+            continue
+        canonical = CanonicalQuotation.model_validate_json(quotation.payload_json)
+        parsed_summary = _safe_parsed_summary(document) or {}
+        assessment = assess_review_readiness(
+            canonical,
+            ConfidenceSignals(
+                source_type=document.source_system,
+                ocr_used=document.source_system == "image" or bool(parsed_summary.get("needs_ocr_pages")),
+                parser_quality="poor" if bool(parsed_summary.get("needs_ocr_pages")) else None,
+            ),
+        )
+        quotation.system_decision = assessment.system_decision
+        if document.status in {"needs_review", "auto_accepted"}:
+            document.status = assessment.system_decision
+        _sync_field_values(session, document.id, quotation, canonical, assessment=assessment)
+        refreshed += 1
+    return refreshed
 
 
 def _sync_normalized_line_items(session: Session, quotation_id: str, canonical: CanonicalQuotation) -> None:
@@ -733,7 +765,7 @@ def _sync_field_values(
         line_item_position = None
         if field_path.startswith("line_items["):
             line_item_position = int(field_path.split("[", 1)[1].split("]", 1)[0])
-        reliability = field_reliability_for_path(field_path, assessment) if assessment else None
+        confidence_assessment = field_confidence_for_path(field_path, assessment) if assessment else None
         session.add(
             QuotationFieldValueRecord(
                 document_id=document_id,
@@ -742,8 +774,8 @@ def _sync_field_values(
                 canonical_field=field_path,
                 value_json=json.dumps(value, default=str, sort_keys=True),
                 review_status="corrected" if field_path in corrected_fields else "unreviewed",
-                reliability=reliability.reliability if reliability else "Medium",
-                reliability_reason=reliability.reason if reliability else "Not assessed",
+                reliability=confidence_assessment.band if confidence_assessment else "Medium",
+                reliability_reason=confidence_assessment.reason if confidence_assessment else "Not assessed",
                 confidence=Decimal(str(matching_evidence.confidence)) if matching_evidence else Decimal("0.00"),
                 extraction_method=matching_evidence.extraction_method if matching_evidence else "unattributed",
                 source_path=matching_evidence.source_path if matching_evidence else None,
@@ -1219,8 +1251,8 @@ def serialize_document(session: Session, document: DocumentRecord) -> dict[str, 
                 "field_path": field_value.canonical_field,
                 "value": json.loads(field_value.value_json),
                 "review_status": field_value.review_status,
-                "reliability": field_value.reliability,
-                "reliability_reason": field_value.reliability_reason,
+                "confidence_band": field_value.reliability,
+                "confidence_reason": field_value.reliability_reason,
                 "confidence": str(field_value.confidence),
                 "extraction_method": field_value.extraction_method,
                 "source_path": field_value.source_path,
@@ -1258,7 +1290,7 @@ def serialize_document(session: Session, document: DocumentRecord) -> dict[str, 
             "extracted": assessment.coverage_extracted,
             "expected": assessment.coverage_expected,
         },
-        "reliability_summary": _reliability_summary(field_values),
+        "confidence_summary": _confidence_summary(field_values),
         "review_reasons": [] if assessment is None else list(assessment.review_reasons),
         "product_counts": _product_counts(document, quotation_payload),
         "notes": _document_notes(document, quotation_payload),
@@ -1328,8 +1360,8 @@ def _source_name(document: DocumentRecord, quotation_payload: dict[str, Any] | N
     return filename.title() or "Untitled source"
 
 
-def _reliability_summary(field_values: list[QuotationFieldValueRecord]) -> dict[str, int]:
-    summary = {"High": 0, "Medium": 0, "Low": 0, "Not extracted": 0}
+def _confidence_summary(field_values: list[QuotationFieldValueRecord]) -> dict[str, int]:
+    summary = {"High": 0, "Medium": 0, "Low": 0}
     for field in field_values:
         if field.reliability in summary:
             summary[field.reliability] += 1

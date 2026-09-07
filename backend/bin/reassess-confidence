@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+"""Refresh persisted confidence bands after a confidence-policy change."""
+
+from app.application.documents import reassess_persisted_confidence
+from app.infrastructure.database import SessionLocal
+
+
+def main() -> None:
+    with SessionLocal() as session:
+        refreshed = reassess_persisted_confidence(session)
+        session.commit()
+    print(f"Reassessed confidence for {refreshed} quotation(s).")
+
+
+if __name__ == "__main__":
+    main()

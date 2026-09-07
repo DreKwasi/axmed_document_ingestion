@@ -22,12 +22,12 @@ def complete_line_item(method: str = "direct_json") -> LineItem:
             dosage_form="tablet",
         ),
         quantity=Quantity(quoted_quantity=Decimal("100")),
-        pricing=Pricing(quoted_price=QuotedPrice(amount=Decimal("1.25"), uom="tablet")),
+        pricing=Pricing(currency="USD", quoted_price=QuotedPrice(amount=Decimal("1.25"), uom="tablet")),
         evidence=[
             Evidence(canonical_field=field, extraction_method=method, confidence=Decimal("0.01"))
             for field in (
-                "product.inn", "product.strength", "product.dosage_form", "quantity.quoted_quantity",
-                "pricing.quoted_price.amount", "pricing.quoted_price.uom",
+                "product.inn", "product.strength", "product.dosage_form", "pricing.currency",
+                "quantity.quoted_quantity", "pricing.quoted_price.amount", "pricing.quoted_price.uom",
             )
         ],
     )
@@ -39,11 +39,11 @@ def test_complete_direct_extraction_is_auto_accepted_without_a_numeric_score():
     )
 
     assert result.system_decision == "auto_accepted"
-    assert (result.coverage_extracted, result.coverage_expected) == (6, 6)
-    assert {field.reliability for field in result.fields.values()} == {"High"}
+    assert (result.coverage_extracted, result.coverage_expected) == (7, 7)
+    assert {field.band for field in result.fields.values()} == {"High"}
 
 
-def test_missing_quantity_and_ocr_route_an_extraction_to_review():
+def test_missing_required_quantity_routes_to_review_without_creating_low_confidence():
     line_item = complete_line_item("ocr")
     line_item.quantity.quoted_quantity = None
 
@@ -52,8 +52,9 @@ def test_missing_quantity_and_ocr_route_an_extraction_to_review():
     )
 
     assert result.system_decision == "needs_review"
-    assert result.fields["line_items[0].quantity.quoted_quantity"].reliability == "Not extracted"
-    assert any("OCR-derived" in reason for reason in result.review_reasons)
+    assert "line_items[0].quantity.quoted_quantity" not in result.fields
+    assert any("Required commercial value is unavailable" in reason for reason in result.review_reasons)
+    assert result.fields["line_items[0].product.inn"].band == "Low"
 
 
 def test_conflicting_critical_value_cannot_be_averaged_away():
@@ -72,4 +73,13 @@ def test_conflicting_critical_value_cannot_be_averaged_away():
     result = assess_review_readiness(quotation, ConfidenceSignals(source_type="pdf"))
 
     assert result.system_decision == "needs_review"
-    assert result.fields["line_items[0].pricing.quoted_price.amount"].reliability == "Low"
+    assert result.fields["line_items[0].pricing.quoted_price.amount"].band == "Low"
+
+
+def test_missing_optional_schema_fields_do_not_route_a_complete_offer_to_review():
+    result = assess_review_readiness(
+        CanonicalQuotation(line_items=[complete_line_item()]), ConfidenceSignals(source_type="json")
+    )
+
+    assert result.system_decision == "auto_accepted"
+    assert all("minimum_order_quantity" not in reason for reason in result.review_reasons)
