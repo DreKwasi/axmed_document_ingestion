@@ -290,24 +290,20 @@ onBeforeUnmount(() => eventSources.forEach((source) => source.close()));
 <template>
   <div class="min-h-screen bg-[#f4f6f1] text-[#173b38]">
     <header class="border-b border-[#dce5de] bg-white">
-      <div class="mx-auto flex min-h-16 max-w-[1500px] flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-8 lg:px-12">
-        <div class="flex min-w-0 items-center gap-5 sm:gap-8">
-          <span class="text-sm font-black tracking-[0.28em] text-[#123b37]">AXMED</span>
-          <nav aria-label="Primary navigation" class="flex items-center gap-1 border-l border-[#dce5de] pl-4 sm:pl-8">
-            <button class="rounded-md px-3 py-2 text-sm font-bold text-[#123b37] transition hover:bg-[#f2f7f3]" :aria-current="selectedDocument ? undefined : 'page'" @click="closeDocument">Home</button>
-            <button class="rounded-md px-3 py-2 text-sm font-bold text-[#39705a] transition hover:bg-[#f2f7f3] hover:text-[#123b37]" :disabled="busy" @click="openIngest">{{ busy ? "Ingesting…" : "Ingest source" }}</button>
-          </nav>
-        </div>
+      <div class="mx-auto flex min-h-16 max-w-[1500px] items-center px-4 py-3 sm:px-8 lg:px-12">
+        <span class="text-sm font-black tracking-[0.28em] text-[#123b37]">AXMED</span>
         <input ref="fileInput" class="sr-only" type="file" accept="application/json,.json,message/rfc822,.eml,application/pdf,.pdf,image/png,.png,image/jpeg,.jpg,.jpeg" multiple @change="chooseFile" />
       </div>
     </header>
 
     <main class="mx-auto max-w-[1500px] px-4 py-7 sm:px-8 sm:py-10 lg:px-12 lg:py-12">
       <div v-if="!selectedDocument" class="space-y-7 sm:space-y-8">
-        <section class="border-b border-[#dce5de] pb-7 sm:pb-8">
-          <p class="mb-3 text-xs font-black uppercase tracking-[0.22em] text-[#d46537]">Home</p>
-          <h1 class="text-4xl font-black tracking-[-0.05em] text-[#123b37] sm:text-5xl">Home</h1>
-          <p class="mt-3 max-w-2xl text-base leading-7 text-[#617a74]">Review uploaded supplier sources and open any source for its product breakdown.</p>
+        <section class="flex flex-col gap-5 border-b border-[#dce5de] pb-7 sm:flex-row sm:items-end sm:justify-between sm:pb-8">
+          <div>
+            <h1 class="text-4xl font-black tracking-[-0.05em] text-[#123b37] sm:text-5xl">Home</h1>
+            <p class="mt-3 max-w-2xl text-base leading-7 text-[#617a74]">Review uploaded supplier sources and open any source for its product breakdown.</p>
+          </div>
+          <button class="w-full shrink-0 rounded-md bg-[#123b37] px-4 py-3 text-sm font-bold text-white shadow-[0_2px_0_#0b2825] transition hover:bg-[#1b514a] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#d46537] disabled:cursor-not-allowed disabled:bg-[#8aa09a] disabled:shadow-none sm:w-auto" :disabled="busy" @click="openIngest">{{ busy ? "Ingesting…" : "Ingest source" }}</button>
         </section>
 
         <section class="grid grid-cols-2 gap-3 sm:grid-cols-4">

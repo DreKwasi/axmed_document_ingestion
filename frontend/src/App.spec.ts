@@ -29,16 +29,20 @@ describe("App", () => {
 
   afterEach(() => vi.unstubAllGlobals());
 
-  it("opens on Home and removes the Evaluation Lab navigation", async () => {
+  it("keeps one Home title and places the ingest action in the main page", async () => {
     const wrapper = mount(App);
     await flushPromises();
 
-    expect(wrapper.text()).toContain("Home");
+    expect(wrapper.findAll("h1").filter((heading) => heading.text() === "Home")).toHaveLength(1);
     expect(wrapper.text()).not.toContain("Your sources, at a glance.");
     expect(wrapper.text()).not.toContain("Evaluation Lab");
     expect(wrapper.text()).not.toContain("Review desk");
     expect(wrapper.text()).not.toContain("Supplier intelligence");
-    expect(wrapper.find("nav").exists()).toBe(true);
+    expect(wrapper.find("nav").exists()).toBe(false);
+    const ingestButton = wrapper.findAll("button").find((button) => button.text() === "Ingest source");
+    expect(ingestButton?.classes()).toContain("bg-[#123b37]");
+    expect(ingestButton?.classes()).toContain("text-white");
+    expect(ingestButton?.element.closest("header")).toBeNull();
     expect(api.fetchDocuments).toHaveBeenCalledOnce();
   });
 
