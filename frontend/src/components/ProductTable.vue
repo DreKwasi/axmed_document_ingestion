@@ -4,7 +4,12 @@ import type { LineItem } from "@/types";
 const props = defineProps<{
   lineItems: LineItem[];
   reviewIssues: Array<{ field_path: string; code: string; message: string; severity: string }>;
-  fieldReviews?: Array<{ field_path: string; reliability: "High" | "Medium" | "Low" | "Not extracted" }>;
+  reviewReasons?: string[];
+  fieldReviews?: Array<{
+    field_path: string;
+    confidence_band: "High" | "Medium" | "Low";
+    confidence_reason?: string | null;
+  }>;
   selectedIndex: number;
 }>();
 
@@ -24,25 +29,59 @@ function displayPrice(value: string | null | undefined) {
   return Number.isFinite(numeric) ? numeric.toLocaleString(undefined, { maximumFractionDigits: 6 }) : value;
 }
 
-function reliabilityForLine(index: number): string {
+function confidenceForLine(index: number): "High" | "Medium" | "Low" | "—" {
   const values = props.fieldReviews
     ?.filter((field) => field.field_path.startsWith(`line_items[${index}]`))
-    .map((field) => field.reliability) ?? [];
-  for (const reliability of ["Not extracted", "Low", "Medium", "High"] as const) {
-    if (values.includes(reliability)) return reliability;
-  }
+    .map((field) => field.confidence_band) ?? [];
+  if (values.includes("Low")) return "Low";
+  if (values.includes("Medium")) return "Medium";
+  if (values.includes("High")) return "High";
   return "—";
 }
 
-function reliabilityBadgeClass(reliability: string): string {
-  if (reliability === "High") return "bg-emerald-50 text-emerald-700 border-emerald-200";
-  if (reliability === "Medium") return "bg-amber-50 text-amber-700 border-amber-200";
-  if (reliability === "Low" || reliability === "Not extracted") return "bg-rose-50 text-rose-700 border-rose-200";
+function confidenceBadgeClass(confidence: string): string {
+  if (confidence === "High") return "bg-emerald-50 text-emerald-700 border-emerald-200";
+  if (confidence === "Medium") return "bg-amber-50 text-amber-700 border-amber-200";
+  if (confidence === "Low") return "bg-rose-50 text-rose-700 border-rose-200";
   return "bg-slate-100 text-slate-600 border-slate-200";
 }
 
-function issuesForLine(issues: Array<{ field_path: string; code?: string; message: string }>, index: number) {
-  return issues.filter((issue) => issue.field_path.startsWith(`line_items[${index}]`));
+function reviewIssuesForLine(index: number) {
+  const prefix = `line_items[${index}]`;
+  const extractedIssues = props.reviewIssues
+    .filter((issue) => issue.field_path.startsWith(prefix))
+    .map((issue) => ({ key: `${issue.field_path}:${issue.code}`, message: issue.message }));
+  const policyIssues = props.fieldReviews
+    ?.filter((field) => field.field_path.startsWith(prefix) && field.confidence_band === "Low")
+    .map((field) => ({
+      key: field.field_path,
+      message: `${fieldLabel(field.field_path)}: ${field.confidence_reason ?? "requires review"}`,
+    })) ?? [];
+  const sourcePolicyIssues = props.reviewReasons
+    ?.filter((reason) => reason.startsWith(prefix))
+    .map((reason) => {
+      const [fieldPath, message] = reason.split(": ", 2);
+      return { key: fieldPath, message: `${fieldLabel(fieldPath)}: ${message ?? "requires review"}` };
+    }) ?? [];
+  return [...extractedIssues, ...policyIssues, ...sourcePolicyIssues].filter(
+    (issue, position, issues) => issues.findIndex((candidate) => candidate.key === issue.key) === position
+  );
+}
+
+function fieldLabel(path: string) {
+  const labels: Record<string, string> = {
+    "product.inn": "Product / INN",
+    "product.strength": "Strength",
+    "product.dosage_form": "Dosage form",
+    "pricing.currency": "Currency",
+    "pricing.quoted_price.amount": "Quoted price",
+    "pricing.quoted_price.uom": "Price unit",
+    "quantity.quoted_quantity": "Quoted quantity",
+  };
+  const suffix = path.replace(/^line_items\[\d+\]\./, "");
+  if (labels[suffix]) return labels[suffix];
+  const field = suffix.split(".").at(-1)?.replace(/\[\d+\]/g, "") ?? "Field";
+  return field.replace(/_/g, " ").replace(/\b\w/g, (character) => character.toUpperCase());
 }
 </script>
 
@@ -52,7 +91,7 @@ function issuesForLine(issues: Array<{ field_path: string; code?: string; messag
       <div>
         <h2 class="text-base font-bold text-slate-900">Product breakdown</h2>
         <p class="mt-0.5 text-xs text-slate-500">
-          {{ lineItems.length }} extracted products · Click any row to inspect all columns and edit fields.
+          {{ lineItems.length }} extracted products · Confidence summarizes source support; review issues explain what needs attention.
         </p>
       </div>
     </div>
@@ -65,8 +104,8 @@ function issuesForLine(issues: Array<{ field_path: string; code?: string; messag
             <th class="px-4 py-3.5">Dosage / Presentation</th>
             <th class="px-4 py-3.5">Quoted quantity</th>
             <th class="px-4 py-3.5">Quoted Price</th>
-            <th class="px-4 py-3.5">Reliability</th>
-            <th class="px-4 py-3.5">Issue</th>
+            <th class="px-4 py-3.5">Confidence</th>
+            <th class="px-4 py-3.5">Review issues</th>
             <th class="px-4 py-3.5 text-right"></th>
           </tr>
         </thead>
@@ -128,22 +167,22 @@ function issuesForLine(issues: Array<{ field_path: string; code?: string; messag
               </span>
             </td>
 
-            <!-- Row reliability is derived from persisted field assessments. -->
+            <!-- Confidence summarizes the weakest critical field for the row. -->
             <td class="px-4 py-4 align-top">
               <span
                 class="inline-flex items-center rounded-lg border px-2.5 py-1 text-[11px] font-bold"
-                :class="reliabilityBadgeClass(reliabilityForLine(index))"
+                :class="confidenceBadgeClass(confidenceForLine(index))"
               >
-                {{ reliabilityForLine(index) }}
+                {{ confidenceForLine(index) }}
               </span>
             </td>
 
-            <!-- Review Issues -->
+            <!-- Explicit parser and policy review issues. -->
             <td class="px-4 py-4 align-top">
-              <div v-if="issuesForLine(reviewIssues, index).length" class="space-y-1">
+              <div v-if="reviewIssuesForLine(index).length" class="space-y-1">
                 <span
-                  v-for="issue in issuesForLine(reviewIssues, index)"
-                  :key="issue.code"
+                  v-for="issue in reviewIssuesForLine(index)"
+                  :key="issue.key"
                   class="block max-w-[180px] rounded-md bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-700 border border-rose-200"
                 >
                   {{ issue.message }}

@@ -43,8 +43,9 @@ export type Quotation = {
     field_path: string;
     value: unknown;
     review_status: string;
-    reliability: "High" | "Medium" | "Low" | "Not extracted";
-    reliability_reason?: string | null;
+    confidence_band: "High" | "Medium" | "Low";
+    confidence_reason?: string | null;
+    /** Raw evidence score retained for audit/evaluation; not user-facing confidence. */
     confidence: string;
     extraction_method: string;
     source_path?: string | null;
@@ -71,7 +72,7 @@ export type DocumentResponse = {
   parsed_summary?: { subject?: string; message_id?: string | null; page_count?: number; needs_ocr_pages?: number[] } | null;
   system_decision?: "auto_accepted" | "needs_review" | null;
   extraction_coverage?: { extracted: number; expected: number } | null;
-  reliability_summary?: Record<"High" | "Medium" | "Low" | "Not extracted", number>;
+  confidence_summary?: Record<"High" | "Medium" | "Low", number>;
   review_reasons?: string[];
   product_counts?: { extracted: number; failed: number };
   notes?: string[];

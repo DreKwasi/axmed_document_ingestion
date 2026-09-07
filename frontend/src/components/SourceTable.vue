@@ -31,7 +31,9 @@ function coverage(doc: DocumentResponse) {
 }
 
 function documentIssueCount(doc: DocumentResponse) {
-  return doc.quotation?.review_issues.length ?? 0;
+  const parserIssues = doc.quotation?.review_issues.length ?? 0;
+  const policyIssues = doc.review_reasons?.length ?? 0;
+  return parserIssues + policyIssues;
 }
 
 function productCounts(doc: DocumentResponse) {
@@ -172,7 +174,7 @@ const batchProcessedCount = computed(() => {
               <!-- Critical-field coverage -->
               <td class="px-4 py-4 align-top">
                 <span class="font-bold text-slate-800">{{ coverage(doc) }}</span>
-                <span class="block text-[10px] text-slate-500">critical fields</span>
+                <span class="block text-[10px] text-slate-500">key fields available</span>
               </td>
 
               <!-- Issues -->

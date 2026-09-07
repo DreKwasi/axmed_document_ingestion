@@ -56,11 +56,14 @@ function displayPrice(value: string | null | undefined) {
   return Number.isFinite(numeric) ? numeric.toLocaleString(undefined, { maximumFractionDigits: 6 }) : value;
 }
 
-const rowReliability = computed(() => {
+const rowConfidence = computed(() => {
   const values = props.document.quotation?.field_reviews
     ?.filter((field) => field.field_path.startsWith(`line_items[${props.lineIndex}]`))
-    .map((field) => field.reliability) ?? [];
-  return (["Not extracted", "Low", "Medium", "High"] as const).find((reliability) => values.includes(reliability)) ?? "—";
+    .map((field) => field.confidence_band) ?? [];
+  if (values.includes("Low")) return "Low";
+  if (values.includes("Medium")) return "Medium";
+  if (values.includes("High")) return "High";
+  return "—";
 });
 
 function handleSave() {
@@ -88,7 +91,7 @@ function handleSave() {
             Line {{ lineIndex + 1 }}
           </span>
           <span class="text-xs font-semibold text-slate-500">
-            Reliability: <strong class="text-emerald-700">{{ rowReliability }}</strong>
+            Confidence: <strong class="text-emerald-700">{{ rowConfidence }}</strong>
           </span>
         </div>
         <h2 id="product-drawer-title" class="mt-1 text-lg font-bold text-slate-900">
