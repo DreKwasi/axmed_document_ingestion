@@ -39,7 +39,7 @@ def get_session() -> Generator[Session, None, None]:
 
 
 def create_all() -> None:
-    from app import models  # noqa: F401
+    import app.infrastructure.models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
 

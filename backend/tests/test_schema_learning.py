@@ -38,6 +38,7 @@ def test_confirmed_schema_reuses_mapping_without_semantic_call(client, sanova_by
     assert warm_document["mapping_source"] == "trusted_cache"
     assert warm_document["semantic_mapping_calls"] == 0
     assert warm_document["quotation"]["line_items"][0]["pricing"]["pack_price"] == "3.33"
+    assert warm_document["quotation"]["line_items"][0]["pricing"]["quoted_price"]["uom"] == "pack"
 
 
 def test_repeat_submission_is_a_new_receipt_not_a_database_collision(client, sanova_bytes):
