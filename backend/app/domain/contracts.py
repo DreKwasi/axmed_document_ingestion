@@ -103,6 +103,7 @@ class CommercialTerms(BaseModel):
     incoterm_country: str | None = None
     payment_terms: str | None = None
     price_basis: str | None = None
+    hs_codes: list[str] = Field(default_factory=list)
 
 
 class Packaging(BaseModel):
@@ -193,6 +194,8 @@ class Pricing(BaseModel):
 
 class Supply(BaseModel):
     lead_time_days: int | None = None
+    lead_time_min_days: int | None = None
+    lead_time_max_days: int | None = None
     shelf_life_months: int | None = None
     minimum_remaining_shelf_life_percent: Decimal | None = None
     storage_conditions: str | None = None
@@ -205,8 +208,6 @@ class Regulatory(BaseModel):
     registered_markets: list[str] = Field(default_factory=list)
     registration_reference: str | None = None
     regulatory_status: str | None = None
-    hs_code: str | None = None
-    atc_code: str | None = None
 
 
 class Product(BaseModel):
@@ -214,7 +215,6 @@ class Product(BaseModel):
     inn: list[str] = Field(default_factory=list)
     strength: list[Strength] = Field(default_factory=list)
     dosage_form: str | None = None
-    route: str | None = None
     manufacturer: str | None = None
     country_of_origin: str | None = None
 

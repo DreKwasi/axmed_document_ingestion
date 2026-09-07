@@ -39,6 +39,7 @@ from app.infrastructure.models import (
     ModelInvocationRecord,
     OcrJobRecord,
     PdfExtractionRecord,
+    ProcessingEventRecord,
     QuotationFieldValueRecord,
     QuotationLineItemAdjustmentRecord,
     QuotationLineItemInnRecord,
@@ -438,7 +439,6 @@ def _sync_normalized_line_items(session: Session, quotation_id: str, canonical: 
                 source_key=line.source_key,
                 trade_name=line.product.trade_name,
                 dosage_form=line.product.dosage_form,
-                route=line.product.route,
                 manufacturer=line.product.manufacturer,
                 country_of_origin=line.product.country_of_origin,
                 packaging_description=line.packaging.description,
@@ -464,6 +464,8 @@ def _sync_normalized_line_items(session: Session, quotation_id: str, canonical: 
                 normalized_price_derived=line.pricing.normalized_price.get("derived"),
                 normalized_price_validation_status=line.pricing.normalized_price.get("validation_status"),
                 lead_time_days=line.supply.lead_time_days,
+                lead_time_min_days=line.supply.lead_time_min_days,
+                lead_time_max_days=line.supply.lead_time_max_days,
                 shelf_life_months=line.supply.shelf_life_months,
                 minimum_remaining_shelf_life_percent=line.supply.minimum_remaining_shelf_life_percent,
                 storage_conditions=line.supply.storage_conditions,
@@ -472,8 +474,6 @@ def _sync_normalized_line_items(session: Session, quotation_id: str, canonical: 
                 who_pq_reference=line.regulatory.who_pq_reference,
                 registration_reference=line.regulatory.registration_reference,
                 regulatory_status=line.regulatory.regulatory_status,
-                hs_code=line.regulatory.hs_code,
-                atc_code=line.regulatory.atc_code,
             )
         )
         session.flush()
@@ -572,7 +572,6 @@ def _normalized_line_items(session: Session, quotation_id: str) -> list[dict[str
                         for value in strengths[row.id]
                     ],
                     "dosage_form": row.dosage_form,
-                    "route": row.route,
                     "manufacturer": row.manufacturer,
                     "country_of_origin": row.country_of_origin,
                 },
@@ -626,6 +625,8 @@ def _normalized_line_items(session: Session, quotation_id: str) -> list[dict[str
                 },
                 "supply": {
                     "lead_time_days": row.lead_time_days,
+                    "lead_time_min_days": row.lead_time_min_days,
+                    "lead_time_max_days": row.lead_time_max_days,
                     "shelf_life_months": row.shelf_life_months,
                     "minimum_remaining_shelf_life_percent": row.minimum_remaining_shelf_life_percent,
                     "storage_conditions": row.storage_conditions,
@@ -637,8 +638,6 @@ def _normalized_line_items(session: Session, quotation_id: str) -> list[dict[str
                     "registered_markets": [value.market for value in markets[row.id]],
                     "registration_reference": row.registration_reference,
                     "regulatory_status": row.regulatory_status,
-                    "hs_code": row.hs_code,
-                    "atc_code": row.atc_code,
                 },
                 "evidence": [],
             }
@@ -1230,6 +1229,76 @@ def confirm_mapping(session: Session, document_id: str, settings: Settings) -> D
     _upsert_quotation(session, document, quotation)
     session.commit()
     return document
+
+
+def delete_document(session: Session, document_id: str, settings: Settings) -> None:
+    """Permanently remove one uploaded source and every record derived from it."""
+
+    document = session.get(DocumentRecord, document_id)
+    if document is None:
+        raise LookupError("Document not found.")
+
+    quotation_ids = session.scalars(
+        select(QuotationRecord.id).where(QuotationRecord.document_id == document.id)
+    ).all()
+    email_extraction_ids = session.scalars(
+        select(EmailExtractionRecord.id).where(EmailExtractionRecord.document_id == document.id)
+    ).all()
+    learning_ids = session.scalars(
+        select(ReviewLearningRecord.id).where(ReviewLearningRecord.document_id == document.id)
+    ).all()
+
+    # These records reference the extraction/review records below, so remove
+    # them first instead of relying on database-specific cascade behaviour.
+    session.execute(delete(ModelInvocationRecord).where(ModelInvocationRecord.document_id == document.id))
+    if email_extraction_ids:
+        session.execute(
+            delete(ModelInvocationRecord).where(ModelInvocationRecord.email_extraction_id.in_(email_extraction_ids))
+        )
+    if learning_ids:
+        session.execute(delete(ModelInvocationRecord).where(ModelInvocationRecord.learning_id.in_(learning_ids)))
+        session.execute(delete(ProcessingEventRecord).where(ProcessingEventRecord.learning_id.in_(learning_ids)))
+    session.execute(delete(ProcessingEventRecord).where(ProcessingEventRecord.document_id == document.id))
+    session.execute(delete(ReviewLearningRecord).where(ReviewLearningRecord.document_id == document.id))
+    session.execute(delete(ReviewRecord).where(ReviewRecord.document_id == document.id))
+    session.execute(delete(DocumentArtifactRecord).where(DocumentArtifactRecord.document_id == document.id))
+    session.execute(delete(EmailExtractionRecord).where(EmailExtractionRecord.document_id == document.id))
+    session.execute(delete(PdfExtractionRecord).where(PdfExtractionRecord.document_id == document.id))
+    session.execute(delete(OcrJobRecord).where(OcrJobRecord.document_id == document.id))
+
+    if quotation_ids:
+        line_item_ids = session.scalars(
+            select(QuotationLineItemRecord.id).where(QuotationLineItemRecord.quotation_id.in_(quotation_ids))
+        ).all()
+        session.execute(delete(FieldEvidenceRecord).where(FieldEvidenceRecord.quotation_id.in_(quotation_ids)))
+        session.execute(delete(QuotationFieldValueRecord).where(QuotationFieldValueRecord.quotation_id.in_(quotation_ids)))
+        if line_item_ids:
+            for model in (
+                QuotationLineItemInnRecord,
+                QuotationLineItemStrengthRecord,
+                QuotationLineItemPriceTierRecord,
+                QuotationLineItemAdjustmentRecord,
+                QuotationLineItemMarketRecord,
+            ):
+                session.execute(delete(model).where(model.line_item_id.in_(line_item_ids)))
+            session.execute(delete(QuotationLineItemRecord).where(QuotationLineItemRecord.id.in_(line_item_ids)))
+        session.execute(delete(QuotationRecord).where(QuotationRecord.id.in_(quotation_ids)))
+
+    stored_filename = Path(document.stored_filename).name
+    session.execute(delete(DocumentRecord).where(DocumentRecord.id == document.id))
+    session.commit()
+
+    # Upload names are generated UUID filenames. Still keep deletion confined to
+    # that exact basename so a corrupt record cannot escape the upload directory.
+    if stored_filename != document.stored_filename:
+        return
+    source_path = Path(settings.upload_dir) / stored_filename
+    try:
+        source_path.unlink(missing_ok=True)
+    except OSError:
+        # The database deletion is authoritative. A later storage sweep can
+        # remove an inaccessible orphan without restoring a deleted source.
+        pass
 
 
 def serialize_document(session: Session, document: DocumentRecord) -> dict[str, Any]:
