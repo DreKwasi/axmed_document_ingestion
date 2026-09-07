@@ -12,6 +12,7 @@ const api = vi.hoisted(() => ({
   reviewDocument: vi.fn(),
   sourceDocumentUrl: vi.fn((documentId: string) => `/api/v1/documents/${documentId}/source`),
   eventStreamUrl: vi.fn((documentId: string) => `/api/v1/documents/${documentId}/events/stream`),
+  fetchEvents: vi.fn(),
   fetchDocument: vi.fn()
 }));
 
@@ -23,6 +24,7 @@ describe("App", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.fetchDocuments.mockResolvedValue([]);
+    api.fetchEvents.mockResolvedValue([]);
   });
 
   afterEach(() => vi.unstubAllGlobals());
@@ -31,9 +33,12 @@ describe("App", () => {
     const wrapper = mount(App);
     await flushPromises();
 
-    expect(wrapper.text()).toContain("Your sources, at a glance.");
+    expect(wrapper.text()).toContain("Home");
+    expect(wrapper.text()).not.toContain("Your sources, at a glance.");
     expect(wrapper.text()).not.toContain("Evaluation Lab");
-    expect(wrapper.find("nav").exists()).toBe(false);
+    expect(wrapper.text()).not.toContain("Review desk");
+    expect(wrapper.text()).not.toContain("Supplier intelligence");
+    expect(wrapper.find("nav").exists()).toBe(true);
     expect(api.fetchDocuments).toHaveBeenCalledOnce();
   });
 
@@ -41,9 +46,13 @@ describe("App", () => {
     api.fetchDocuments.mockResolvedValue([{
       id: "document-quantity",
       filename: "andina.pdf",
+      source_name: "Farmaceutica Andina S.A.S. · FA-COT-2026-118",
       status: "needs_review",
       source_system: "pdf",
       semantic_mapping_calls: 0,
+      extraction_confidence: "96%",
+      product_counts: { extracted: 1, failed: 0 },
+      notes: ["Quantity extracted from the source table."],
       quotation: {
         quotation_reference: "FA-COT-2026-118",
         supplier: { name: "Farmaceutica Andina S.A.S." },
@@ -68,7 +77,17 @@ describe("App", () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain("Farmaceutica Andina S.A.S.");
-    expect(wrapper.text()).not.toContain("SourceConfidenceIssues");
+    expect(wrapper.text()).toContain("Source");
+    expect(wrapper.text()).not.toContain("File source");
+    expect(wrapper.text()).not.toContain("Source name");
+    expect(wrapper.text()).toContain("Download file");
+    expect(wrapper.text()).toContain("Products");
+    expect(wrapper.text()).toContain("1 extracted");
+    expect(wrapper.text()).toContain("Quantity extracted from the source table.");
+    expect(wrapper.text()).not.toContain("OCR");
+    expect(wrapper.findAll("thead")[0].text()).toContain("Source");
+    expect(wrapper.findAll("thead")[0].text()).not.toContain("File source");
+    expect(wrapper.findAll("thead")[0].text()).not.toContain("Source name");
     await wrapper.get("button.group").trigger("click");
 
     expect(wrapper.text()).toContain("Product breakdown");
@@ -120,7 +139,7 @@ describe("App", () => {
     await wrapper.findAll("button").find((button) => button.text() === "Confirm mapping")?.trigger("click");
     await flushPromises();
     expect(api.confirmMapping).toHaveBeenCalledWith("document-1");
-    expect(wrapper.text()).toContain("unreviewed · v2");
+    expect(wrapper.text()).toContain("Review");
   });
 
   it("keeps a line correction with its quoted value in the output table", async () => {
@@ -234,8 +253,9 @@ describe("App", () => {
 
     expect(api.uploadBatch).toHaveBeenCalledOnce();
     expect(wrapper.text()).toContain("Batch: 2 sources");
-    expect(wrapper.text()).toContain("first.json");
-    expect(wrapper.text()).toContain("second.json");
+    expect(wrapper.text()).toContain("First");
+    expect(wrapper.text()).toContain("Second");
+    expect(wrapper.findAll("a").filter((link) => link.text() === "Download file")).toHaveLength(2);
   });
 
   it("displays isolated failures in batch upload cleanly", async () => {
@@ -289,8 +309,8 @@ describe("App", () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain("Batch: 2 sources");
-    expect(wrapper.text()).toContain("corrupt.json");
-    expect(wrapper.text()).toContain("valid.json");
+    expect(wrapper.text()).toContain("Corrupt");
+    expect(wrapper.text()).toContain("Supplier A · REF-1");
   });
 
   it("offers every supported intake format through the single multi-file ingest control", async () => {
@@ -303,10 +323,10 @@ describe("App", () => {
   });
 
   it("refreshes a document after a persisted processing event", async () => {
-    const handlers = new Map<string, () => void>();
+    const handlers = new Map<string, (event?: MessageEvent<string>) => void>();
     class FakeEventSource {
       constructor() {}
-      addEventListener(type: string, handler: () => void) {
+      addEventListener(type: string, handler: (event?: MessageEvent<string>) => void) {
         handlers.set(type, handler);
       }
       close() {}
@@ -330,10 +350,12 @@ describe("App", () => {
     });
     await file.trigger("change");
     await flushPromises();
-    handlers.get("processing")?.();
+    handlers.get("processing")?.({ data: JSON.stringify({ id: 1, document_id: "document-events", stage: "pdf_extraction_prepared", phase: "Preparing", message: "Preparing quotation pages.", metadata: {} }) } as MessageEvent<string>);
     await flushPromises();
 
     expect(api.eventStreamUrl).toHaveBeenCalledWith("document-events");
+    expect(api.fetchEvents).toHaveBeenCalledWith("document-events");
     expect(api.fetchDocument).toHaveBeenCalledWith("document-events");
+    expect(wrapper.text()).toContain("Preparing quotation pages.");
   });
 });

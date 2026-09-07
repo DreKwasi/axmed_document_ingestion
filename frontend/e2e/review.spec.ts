@@ -11,13 +11,13 @@ test("a reviewer confirms, corrects, and approves an extracted offer", async ({ 
   await expect(page.getByText(/new source structure detected/i)).toBeVisible();
 
   await page.getByRole("button", { name: "Confirm mapping" }).click();
-  await expect(page.getByText("unreviewed · v2")).toBeVisible();
+  await expect(page.getByText("Review", { exact: true })).toBeVisible();
   await expect(page.getByText("0.035", { exact: false })).toBeVisible();
 
   await page.getByLabel("Correction value for Sanotri-TLD").fill("4.00");
   await page.getByRole("button", { name: "Save correction" }).click();
   await expect(page.getByText("0.044444", { exact: false })).toBeVisible();
 
-  await page.getByRole("button", { name: "Approve" }).click();
-  await expect(page.getByText("approved · v4")).toBeVisible();
+  await page.getByRole("button", { name: "Approve source" }).click();
+  await expect(page.getByText("Ready", { exact: true })).toBeVisible();
 });
