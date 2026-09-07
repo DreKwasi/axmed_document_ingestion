@@ -2,7 +2,7 @@ import re
 from decimal import Decimal
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 _CORE_DOSAGE_FORMS = (
     "tablet",
@@ -32,12 +32,61 @@ def _core_dosage_form(value: str) -> tuple[str, str | None]:
     return normalized, None
 
 
+def _clean_presentation_qualifier(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = re.sub(
+        r"^\d+(?:[.,/]\d+)?\s*[a-zµμ]+(?:\s*/\s*\d+(?:[.,]\d+)?\s*[a-zµμ]+)?\s+",
+        "",
+        value.strip(),
+        flags=re.IGNORECASE,
+    )
+    return cleaned.strip(" ,-") or None
+
+
+def _singularize_uom(value: str | None) -> str | None:
+    """Normalize grammatical plural UOM labels without changing their commercial category."""
+
+    if value is None:
+        return None
+    normalized = value.strip()
+    if len(normalized) > 3 and normalized.casefold().endswith("s") and not normalized.casefold().endswith("ss"):
+        return normalized[:-1]
+    return normalized
+
+
+def _pack_quantity_from_description(value: str | None) -> tuple[int, str] | None:
+    """Read an explicit ``N units per pack`` phrase without choosing a commercial UOM."""
+
+    if not value:
+        return None
+    match = re.search(
+        r"(?P<count>\d[\d,]*)\s+(?P<label>[A-Za-z][A-Za-z -]*?)\s*(?:per|/)\s*"
+        r"(?:pack|box|carton|case|kit)\b",
+        value,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    label = _singularize_uom(match.group("label").strip())
+    if not label:
+        return None
+    return int(match.group("count").replace(",", "")), label
+
+
 class Strength(BaseModel):
     ingredient: str | None = None
     value: Decimal | None = None
     unit: str | None = None
     per_value: Decimal | None = None
     per_unit: str | None = None
+
+    @field_validator("ingredient")
+    @classmethod
+    def normalize_active_moiety_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return re.sub(r"\s*\(as\s+[^)]+\)$", "", value.strip(), flags=re.IGNORECASE)
 
 
 class Supplier(BaseModel):
@@ -63,6 +112,34 @@ class Packaging(BaseModel):
     unit_label: str | None = None
     packs_per_shipper: int | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_presentation(cls, values: Any) -> Any:
+        if not isinstance(values, dict) or not isinstance(values.get("presentation"), str):
+            return values
+        normalized = dict(values)
+        normalized["presentation"] = values["presentation"].strip().lower()
+        _, qualifier = _core_dosage_form(values["presentation"])
+        if qualifier is not None:
+            normalized["presentation"] = (_clean_presentation_qualifier(qualifier) or qualifier).lower()
+        return normalized
+
+    @model_validator(mode="after")
+    def fill_explicit_pack_quantity(self) -> "Packaging":
+        parsed = _pack_quantity_from_description(self.description)
+        if parsed is not None:
+            units, label = parsed
+            if self.units_per_pack is None:
+                self.units_per_pack = units
+            if self.unit_label is None:
+                self.unit_label = label
+        if self.presentation is None:
+            _, qualifier = _core_dosage_form(self.description or "")
+            cleaned = _clean_presentation_qualifier(qualifier)
+            if cleaned is not None:
+                self.presentation = cleaned.lower()
+        return self
+
 
 class Quantity(BaseModel):
     quoted_quantity: Decimal | None = None
@@ -71,10 +148,20 @@ class Quantity(BaseModel):
     minimum_order_quantity: Decimal | None = None
     minimum_order_quantity_uom: str | None = None
 
+    @field_validator("quoted_quantity_uom", "minimum_order_quantity_uom")
+    @classmethod
+    def normalize_uom_number(cls, value: str | None) -> str | None:
+        return _singularize_uom(value)
+
 
 class QuotedPrice(BaseModel):
     amount: Decimal | None = None
     uom: str | None = None
+
+    @field_validator("uom")
+    @classmethod
+    def normalize_uom(cls, value: str | None) -> str | None:
+        return _singularize_uom(value)
 
 
 class PriceTier(BaseModel):
@@ -145,6 +232,7 @@ class Product(BaseModel):
 class Evidence(BaseModel):
     canonical_field: str
     source_path: str | None = None
+    source_location: str | None = None
     extraction_method: str
     confidence: Decimal
     supersedes_source_path: str | None = None

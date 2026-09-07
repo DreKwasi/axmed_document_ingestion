@@ -48,8 +48,13 @@ def _price_and_pack(context: RuleContext) -> list[ReviewIssue]:
     units = context.line.packaging.units_per_pack
     if pricing.pack_price is None:
         return []
-    pricing.quoted_price.amount = pricing.pack_price
-    pricing.quoted_price.uom = "pack"
+    # ``pack_price`` has already been classified by the mapping/reasoning
+    # layer. It does not license a global assumption that the source UOM is
+    # "pack": it may be a carton, kit, bottle, vial, or an unclassified
+    # supplier term. Preserve an explicit quoted-price basis and leave an
+    # unknown basis null for review.
+    if pricing.quoted_price.amount is None:
+        pricing.quoted_price.amount = pricing.pack_price
     issues = []
     if pricing.pack_price <= 0:
         issues.append(context.issue("non_positive_price", "pricing.pack_price", "Quoted pack price must be positive."))
