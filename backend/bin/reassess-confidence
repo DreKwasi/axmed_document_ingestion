@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Refresh persisted confidence bands after a confidence-policy change."""
 
-from app.application.documents import reassess_persisted_confidence
-from app.infrastructure.database import SessionLocal
+from app.database import SessionLocal
+from app.documents import reassess_persisted_confidence
 
 
 def main() -> None:

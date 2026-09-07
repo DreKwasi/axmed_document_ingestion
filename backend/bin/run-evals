@@ -16,7 +16,7 @@ fi
 
 backend_root="$(cd "$(dirname "$0")/.." && pwd)"
 workspace_root="$(cd "$backend_root/.." && pwd)"
-database_url_override="${AXMED_DATABASE_URL:-}"
+database_url_override="${DATABASE_URL:-}"
 
 if [[ -f "$backend_root/.env" ]]; then
   set -a
@@ -25,25 +25,25 @@ if [[ -f "$backend_root/.env" ]]; then
   set +a
 fi
 if [[ -n "$database_url_override" ]]; then
-  export AXMED_DATABASE_URL="$database_url_override"
+  export DATABASE_URL="$database_url_override"
 fi
 if [[ "$mode" == "recorded" || "$mode" == "ocr" ]]; then
-  unset AXMED_GEMINI_API_KEY GEMINI_API_KEY GOOGLE_API_KEY
+  unset GEMINI_API_KEY
 fi
 
 cd "$backend_root"
-env -u AXMED_GEMINI_API_KEY -u GEMINI_API_KEY -u GOOGLE_API_KEY uv run pytest tests/test_evaluations.py -q
+env -u GEMINI_API_KEY uv run pytest tests/test_evaluations.py -q
 EVAL_MODE="$mode" PYTHONPATH=. uv run python - <<'PY'
 import json
 import os
 from pathlib import Path
 
-from app.application.evaluations import run_live_email_evaluation, run_live_ocr_evaluation, run_live_pdf_evaluation, run_recorded_evaluation, seed_evaluation_cases
-from app.core.settings import Settings
-from app.domain.schema_mapping import RecordedSemanticMappingProvider
-from app.infrastructure.database import SessionLocal, run_migrations
+from app.config import Config
+from app.database import SessionLocal, run_migrations
+from app.evaluations import run_live_email_evaluation, run_live_ocr_evaluation, run_live_pdf_evaluation, run_recorded_evaluation, seed_evaluation_cases
+from app.extraction.json import RecordedJsonSemanticExtractor
 
-settings = Settings()
+settings = Config()
 workspace_root = Path.cwd().parent
 run_migrations(settings.database_url, workspace_root)
 with SessionLocal() as session:
@@ -72,7 +72,7 @@ with SessionLocal() as session:
             session,
             project_root=workspace_root,
             golden_dataset_path=workspace_root / settings.golden_dataset_path,
-            provider=RecordedSemanticMappingProvider(workspace_root / settings.recorded_mapping_dir),
+            extractor=RecordedJsonSemanticExtractor(workspace_root / settings.recorded_json_extraction_dir),
         )
     print(json.dumps({"id": run.id, "mode": run.execution_mode, "summary": json.loads(run.summary_json)}))
 PY

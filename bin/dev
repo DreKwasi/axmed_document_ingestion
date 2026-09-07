@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Start the local FastAPI, Huey worker, and Vue development servers as one supervised process.
+# Start the local FastAPI and Vue development servers as one supervised process.
 set -euo pipefail
 
 workspace_root="$(cd "$(dirname "$0")/.." && pwd)"
-api_port="${AXMED_API_PORT:-8000}"
-web_port="${AXMED_WEB_PORT:-5173}"
+api_port="${API_PORT:-8000}"
+web_port="${WEB_PORT:-5173}"
 
 cleanup() {
-  for pid in "${api_pid:-}" "${worker_pid:-}" "${web_pid:-}"; do
+  for pid in "${api_pid:-}" "${web_pid:-}"; do
     if [[ -n "$pid" ]]; then
       pkill -TERM -P "$pid" 2>/dev/null || true
       kill "$pid" 2>/dev/null || true
@@ -16,12 +16,10 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-(cd "$workspace_root" && set -a && source backend/.env && set +a && PYTHONPATH=backend uv run --project backend python -c 'from pathlib import Path; from app.core.settings import get_settings; from app.infrastructure.database import run_migrations; run_migrations(get_settings().database_url, Path.cwd())')
+(cd "$workspace_root" && set -a && source backend/.env && set +a && PYTHONPATH=backend uv run --project backend python -c 'from pathlib import Path; from app.config import get_config; from app.database import run_migrations; run_migrations(get_config().database_url, Path.cwd())')
 (cd "$workspace_root/backend" && set -a && source .env && set +a && uv run uvicorn main:app --host 127.0.0.1 --port "$api_port" --reload) &
 api_pid=$!
-(cd "$workspace_root" && set -a && source backend/.env && set +a && PYTHONPATH=backend uv run --project backend huey_consumer.py app.workers.tasks.huey) &
-worker_pid=$!
 (cd "$workspace_root" && npm --prefix frontend run dev -- --host 127.0.0.1 --port "$web_port") &
 web_pid=$!
 
-wait "$api_pid" "$worker_pid" "$web_pid"
+wait "$api_pid" "$web_pid"
