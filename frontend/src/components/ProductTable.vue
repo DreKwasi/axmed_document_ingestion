@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import type { LineItem } from "@/types";
 
-defineProps<{
+const props = defineProps<{
   lineItems: LineItem[];
   reviewIssues: Array<{ field_path: string; code: string; message: string; severity: string }>;
+  fieldReviews?: Array<{ field_path: string; reliability: "High" | "Medium" | "Low" | "Not extracted" }>;
   selectedIndex: number;
 }>();
 
@@ -23,25 +24,24 @@ function displayPrice(value: string | null | undefined) {
   return Number.isFinite(numeric) ? numeric.toLocaleString(undefined, { maximumFractionDigits: 6 }) : value;
 }
 
-function rowConfidence(item: LineItem): string {
-  if (!item.evidence || item.evidence.length === 0) return "—";
-  const scores = item.evidence
-    .map((e) => Number(e.confidence))
-    .filter((n) => !isNaN(n) && n > 0);
-  if (scores.length === 0) return "—";
-  const avg = scores.reduce((sum, val) => sum + val, 0) / scores.length;
-  return `${Math.round(avg * 100)}%`;
+function reliabilityForLine(index: number): string {
+  const values = props.fieldReviews
+    ?.filter((field) => field.field_path.startsWith(`line_items[${index}]`))
+    .map((field) => field.reliability) ?? [];
+  for (const reliability of ["Not extracted", "Low", "Medium", "High"] as const) {
+    if (values.includes(reliability)) return reliability;
+  }
+  return "—";
 }
 
-function confidenceBadgeClass(confidenceStr: string): string {
-  if (confidenceStr === "—") return "bg-slate-100 text-slate-600 border-slate-200";
-  const num = parseInt(confidenceStr, 10);
-  if (num >= 90) return "bg-emerald-50 text-emerald-700 border-emerald-200";
-  if (num >= 70) return "bg-amber-50 text-amber-700 border-amber-200";
-  return "bg-rose-50 text-rose-700 border-rose-200";
+function reliabilityBadgeClass(reliability: string): string {
+  if (reliability === "High") return "bg-emerald-50 text-emerald-700 border-emerald-200";
+  if (reliability === "Medium") return "bg-amber-50 text-amber-700 border-amber-200";
+  if (reliability === "Low" || reliability === "Not extracted") return "bg-rose-50 text-rose-700 border-rose-200";
+  return "bg-slate-100 text-slate-600 border-slate-200";
 }
 
-function issuesForLine(issues: Array<{ field_path: string; message: string }>, index: number) {
+function issuesForLine(issues: Array<{ field_path: string; code?: string; message: string }>, index: number) {
   return issues.filter((issue) => issue.field_path.startsWith(`line_items[${index}]`));
 }
 </script>
@@ -63,9 +63,9 @@ function issuesForLine(issues: Array<{ field_path: string; message: string }>, i
           <tr>
             <th class="px-6 py-3.5">Product</th>
             <th class="px-4 py-3.5">Dosage / Presentation</th>
-            <th class="px-4 py-3.5">Quoted Quantity</th>
+            <th class="px-4 py-3.5">Quoted quantity</th>
             <th class="px-4 py-3.5">Quoted Price</th>
-            <th class="px-4 py-3.5">Confidence</th>
+            <th class="px-4 py-3.5">Reliability</th>
             <th class="px-4 py-3.5">Issue</th>
             <th class="px-4 py-3.5 text-right"></th>
           </tr>
@@ -103,10 +103,7 @@ function issuesForLine(issues: Array<{ field_path: string; message: string }>, i
 
             <!-- Quoted Quantity -->
             <td class="px-4 py-4 align-top text-slate-800">
-              <span class="font-bold">
-                {{ displayValue(item.quantity.quoted_quantity) }}
-              </span>
-              <span class="ml-1 text-slate-500">{{ item.quantity.quoted_quantity_uom || "" }}</span>
+              <span class="font-bold">{{ displayValue(item.quantity.quoted_quantity) }} {{ item.quantity.quoted_quantity_uom || "" }}</span>
               <span
                 v-if="item.quantity.minimum_order_quantity"
                 class="mt-0.5 block text-[11px] text-slate-400 font-normal"
@@ -131,13 +128,13 @@ function issuesForLine(issues: Array<{ field_path: string; message: string }>, i
               </span>
             </td>
 
-            <!-- Row Extraction Confidence -->
+            <!-- Row reliability is derived from persisted field assessments. -->
             <td class="px-4 py-4 align-top">
               <span
                 class="inline-flex items-center rounded-lg border px-2.5 py-1 text-[11px] font-bold"
-                :class="confidenceBadgeClass(rowConfidence(item))"
+                :class="reliabilityBadgeClass(reliabilityForLine(index))"
               >
-                {{ rowConfidence(item) }}
+                {{ reliabilityForLine(index) }}
               </span>
             </td>
 

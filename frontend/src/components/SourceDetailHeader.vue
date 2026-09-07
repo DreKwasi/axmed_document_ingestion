@@ -16,28 +16,22 @@ const emit = defineEmits<{
 
 function statusKey(doc: DocumentResponse): "ready" | "review" | "needs_attention" | "processing" {
   if (doc.quotation?.review_status === "approved") return "ready";
+  if (doc.quotation?.review_status === "corrected") return "ready";
   if (["failed", "rejected"].includes(doc.status) || doc.quotation?.review_status === "rejected") return "needs_attention";
   if (doc.status === "approved") return "ready";
+  if (doc.status === "auto_accepted") return "ready";
   if (doc.status === "needs_review") return "review";
   return "processing";
 }
 
 const statusLabel = computed(() => {
+  if (props.document.quotation?.review_status === "corrected") return "Corrected";
+  if (props.document.status === "auto_accepted") return "Auto-accepted";
   const map = {
     ready: "Ready",
     review: "Review",
     needs_attention: "Needs attention",
     processing: "Processing",
-  };
-  return map[statusKey(props.document)];
-});
-
-const statusBadgeClass = computed(() => {
-  const map = {
-    ready: "bg-emerald-50 text-emerald-700 border-emerald-200",
-    review: "bg-teal-50 text-teal-700 border-teal-200",
-    needs_attention: "bg-rose-50 text-rose-700 border-rose-200",
-    processing: "bg-slate-100 text-slate-600 border-slate-200",
   };
   return map[statusKey(props.document)];
 });
@@ -52,12 +46,9 @@ const sourceTitle = computed(() => {
   return filename.replace(/\b\w/g, (c) => c.toUpperCase()) || "Untitled source";
 });
 
-const overallConfidence = computed(() => {
-  if (props.document.extraction_confidence) return props.document.extraction_confidence;
-  const values = props.document.quotation?.line_items.flatMap((item) =>
-    item.evidence.map((evidence) => Number(evidence.confidence))
-  ) ?? [];
-  return values.length ? `${Math.round(Math.min(...values) * 100)}%` : "—";
+const coverage = computed(() => {
+  const value = props.document.extraction_coverage;
+  return value ? `${value.extracted} of ${value.expected} key fields extracted` : "Extraction pending";
 });
 
 const formatBadge = computed(() => {
@@ -71,9 +62,29 @@ const formatBadge = computed(() => {
 
 const canReview = computed(() => {
   return (
-    props.document.status === "needs_review" &&
+    ["needs_review", "auto_accepted"].includes(props.document.status) &&
     props.document.quotation?.review_status === "unreviewed"
   );
+});
+
+const statusTextClass = computed(() => {
+  const map = {
+    ready: "text-emerald-700",
+    review: "text-teal-700",
+    needs_attention: "text-rose-600",
+    processing: "text-slate-500",
+  };
+  return map[statusKey(props.document)];
+});
+
+const statusDotClass = computed(() => {
+  const map = {
+    ready: "bg-emerald-600",
+    review: "bg-teal-500",
+    needs_attention: "bg-rose-500",
+    processing: "bg-slate-400 animate-pulse",
+  };
+  return map[statusKey(props.document)];
 });
 </script>
 
@@ -92,56 +103,63 @@ const canReview = computed(() => {
 
     <!-- Main Header Card -->
     <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-xs">
-      <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-        <div>
-          <div class="flex items-center gap-2">
-            <span class="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-bold tracking-wider text-slate-600 uppercase border border-slate-200">
-              {{ formatBadge }}
-            </span>
-            <span class="text-xs font-semibold text-slate-400">Source detail</span>
-          </div>
-          <h1 class="mt-1 text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl">
+      <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div class="space-y-2">
+          <!-- Document Title -->
+          <h1 class="text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl">
             {{ sourceTitle }}
           </h1>
-          <p class="mt-1 text-xs text-slate-500 font-mono break-all">
-            {{ document.filename }}
-          </p>
+
+          <!-- Informational Metadata Line (Clean text & status dot, NOT buttons) -->
+          <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-slate-600">
+            <!-- Format Tag -->
+            <span class="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-mono font-bold uppercase tracking-wider text-slate-600 border border-slate-200/80">
+              {{ formatBadge }}
+            </span>
+
+            <!-- Filename -->
+            <span class="font-mono text-slate-500 text-[11px]">{{ document.filename }}</span>
+
+            <span class="text-slate-300">·</span>
+
+            <!-- Critical-field coverage -->
+            <span class="font-medium text-slate-600">
+              {{ coverage }}
+            </span>
+
+            <span class="text-slate-300">·</span>
+
+            <!-- Status Indicator with dot -->
+            <span class="inline-flex items-center gap-1.5 font-semibold" :class="statusTextClass">
+              <span class="h-2 w-2 rounded-full" :class="statusDotClass"></span>
+              {{ statusLabel }}
+            </span>
+          </div>
         </div>
 
-        <div class="flex flex-wrap items-center gap-3">
-          <!-- Overall Confidence Badge -->
-          <div class="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2 text-xs font-semibold text-slate-700">
-            <span class="text-slate-400">Confidence:</span>
-            <span class="font-bold text-emerald-700">{{ overallConfidence }}</span>
-          </div>
-
-          <!-- Status Badge -->
-          <span
-            class="rounded-xl border px-3.5 py-2 text-xs font-bold tracking-wide uppercase"
-            :class="statusBadgeClass"
-          >
-            {{ statusLabel }}
-          </span>
-
-          <!-- Open Original Link -->
+        <!-- Distinct Action Buttons -->
+        <div class="flex items-center gap-3 shrink-0">
+          <!-- Secondary Action: Open Original -->
           <a
-            class="rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:text-emerald-700 transition"
+            class="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:text-slate-900 hover:border-slate-300 transition shadow-2xs"
             :href="sourceDocumentUrl(document.id)"
             target="_blank"
             rel="noreferrer"
           >
-            Open original
+            <span>Open original</span>
+            <span class="text-slate-400 text-xs font-mono">↗</span>
           </a>
 
-          <!-- Review Button (Triggers Review Dialog) -->
+          <!-- Primary CTA Action: Review Source -->
           <button
             v-if="canReview"
             type="button"
-            class="rounded-xl bg-emerald-800 px-4 py-2 text-xs font-bold tracking-wide text-white hover:bg-emerald-900 transition shadow-xs focus:outline-none"
+            class="inline-flex items-center gap-1.5 rounded-xl bg-emerald-800 px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-emerald-900 transition focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-1 disabled:opacity-50"
             :disabled="busy"
             @click="emit('openReview')"
           >
-            Review source
+            <span class="text-emerald-300">✓</span>
+            <span>Review source</span>
           </button>
         </div>
       </div>

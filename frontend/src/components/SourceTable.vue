@@ -24,20 +24,10 @@ function sourceName(doc: DocumentResponse) {
   return filename.replace(/\b\w/g, (c) => c.toUpperCase()) || "Untitled source";
 }
 
-function documentConfidence(doc: DocumentResponse) {
-  if (doc.extraction_confidence) return doc.extraction_confidence;
-  const values = doc.quotation?.line_items.flatMap((item) =>
-    item.evidence.map((evidence) => Number(evidence.confidence))
-  ) ?? [];
-  return values.length ? `${Math.round(Math.min(...values) * 100)}%` : "—";
-}
-
-function confidenceBadgeClass(confidenceStr: string) {
-  if (confidenceStr === "—") return "bg-slate-100 text-slate-600 border-slate-200";
-  const num = parseInt(confidenceStr, 10);
-  if (num >= 90) return "bg-emerald-50 text-emerald-700 border-emerald-200";
-  if (num >= 70) return "bg-amber-50 text-amber-700 border-amber-200";
-  return "bg-rose-50 text-rose-700 border-rose-200";
+function coverage(doc: DocumentResponse) {
+  const extracted = doc.extraction_coverage?.extracted;
+  const expected = doc.extraction_coverage?.expected;
+  return extracted === undefined || expected === undefined ? "—" : `${extracted} of ${expected}`;
 }
 
 function documentIssueCount(doc: DocumentResponse) {
@@ -53,15 +43,19 @@ function productCounts(doc: DocumentResponse) {
 
 function statusKey(doc: DocumentResponse): "ready" | "review" | "needs_attention" | "processing" {
   if (doc.quotation?.review_status === "approved") return "ready";
+  if (doc.quotation?.review_status === "corrected") return "ready";
   if (["failed", "rejected"].includes(doc.status) || doc.quotation?.review_status === "rejected" || (doc.quotation?.review_issues.some((issue) => issue.severity === "error") ?? false)) {
     return "needs_attention";
   }
   if (doc.status === "approved") return "ready";
+  if (doc.status === "auto_accepted") return "ready";
   if (doc.status === "needs_review") return "review";
   return "processing";
 }
 
 function statusLabel(doc: DocumentResponse) {
+  if (doc.quotation?.review_status === "corrected") return "Corrected";
+  if (doc.status === "auto_accepted") return "Auto-accepted";
   const map = {
     ready: "Ready",
     review: "Review",
@@ -128,7 +122,7 @@ const batchProcessedCount = computed(() => {
           <thead class="bg-slate-50 text-[10px] font-bold uppercase tracking-wider text-slate-500 border-b border-slate-100">
             <tr>
               <th class="px-6 py-3.5">Source</th>
-              <th class="px-4 py-3.5">Confidence</th>
+              <th class="px-4 py-3.5">Key fields</th>
               <th class="px-4 py-3.5">Issues</th>
               <th class="px-4 py-3.5">Products</th>
               <th class="px-4 py-3.5">Status</th>
@@ -168,18 +162,17 @@ const batchProcessedCount = computed(() => {
                       <span class="text-slate-300">·</span>
                       <span class="text-slate-400 font-mono text-[10px] truncate max-w-xs">{{ doc.filename }}</span>
                     </div>
+                    <p v-if="doc.notes?.[0]" class="mt-1 text-[11px] text-slate-500 line-clamp-1">
+                      {{ doc.notes[0] }}
+                    </p>
                   </div>
                 </div>
               </td>
 
-              <!-- Confidence -->
+              <!-- Critical-field coverage -->
               <td class="px-4 py-4 align-top">
-                <span
-                  class="inline-flex items-center rounded-lg border px-2.5 py-1 text-[11px] font-bold"
-                  :class="confidenceBadgeClass(documentConfidence(doc))"
-                >
-                  {{ documentConfidence(doc) }}
-                </span>
+                <span class="font-bold text-slate-800">{{ coverage(doc) }}</span>
+                <span class="block text-[10px] text-slate-500">critical fields</span>
               </td>
 
               <!-- Issues -->
