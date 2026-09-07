@@ -10,12 +10,16 @@ test("a reviewer corrects a source-grounded extracted offer", async ({ page }) =
   await page.locator('input[type="file"]').setInputFiles(sanovaFixture);
 
   await expect(page.getByText("Pending human review", { exact: true })).toBeVisible();
-  await expect(page.getByText("0.035", { exact: false }).first()).toBeVisible();
+  await expect(page.getByText("0.035", { exact: false })).toHaveCount(0);
 
   await page.getByText("Sanotri-TLD").click();
+  await expect(page.getByText("EUR 0.04 / tablet", { exact: false })).toBeVisible();
   await page.getByLabel("Correction value for Sanotri-TLD").fill("4.00");
   await page.getByRole("button", { name: "Save correction" }).click();
-  await expect(page.getByText("0.044444", { exact: false }).first()).toBeVisible();
+  await expect(
+    page.getByRole("complementary", { name: "Sanotri-TLD" }).getByText("EUR 4", { exact: true })
+  ).toBeVisible();
+  await expect(page.getByText("0.044444", { exact: false })).toHaveCount(0);
 
   await page.getByLabel("Close product details").click();
   await expect(page.getByText("Pending review after correction", { exact: true })).toBeVisible();
