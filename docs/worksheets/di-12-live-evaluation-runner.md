@@ -22,7 +22,7 @@ The live runner must count the cases it selected from the golden dataset, rather
 - Added approved OCR evidence cases and `backend/bin/run-evals --ocr`. The command runs the configured PaddleOCR service only, stores provider/model/configuration metadata and anchor recall in SQLite, and never invokes an extraction model. Live evidence: both supplied fixtures passed (2/2).
 - Added the supplied Novara `.eml` as a source-backed golden case with its reviewed expected canonical JSON. `backend/bin/run-evals --email` runs it only when a model is explicitly configured, persists the field-level result, and protects the normal regression run from provider calls.
 - Email parsing now removes greeting and signature sections before model context is made, then applies deterministic email/phone redaction. The fixture-level tests prove the contact name, address, email, and HTML source do not reach the model context while the later price correction remains.
-- Live email evidence: the later EUR `0.134` per-tablet correction is correctly extracted. The run remains deliberately failing overall: the model truncates `Novara Farmaceutici S.p.A.` and changes the quoted `box` UOM to `pack`. The reviewed expected output was not weakened to hide these regressions.
+- Live email evidence: `backend/bin/run-evals --email` passed 1/1. The final context preserves the legal entity (not the personal signature), the later EUR `0.134` per-tablet correction, and source-confirmed `box` UOM. A deterministic reconciliation only applies a stated price UOM when its item and amount agree with the structured extraction.
 
 ## Tests, app run, and validation
 

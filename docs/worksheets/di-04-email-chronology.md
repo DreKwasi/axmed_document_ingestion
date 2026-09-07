@@ -14,6 +14,7 @@
 - 2026-09-06: Added an executable Novara fixture test proving the P.S. correction text survives while the sender email and HTML do not.
 - 2026-09-06: `.eml` uploads now persist a source document, redacted parse context, durable extraction record, and `email_extraction_queued` event. Huey executes the configured semantic resolver through a structured canonical-quotation contract; completed output is commercially validated and enters human review.
 - 2026-09-06: Model invocation audit rows are linked to email extraction jobs. Without a configured resolver, the job remains visibly awaiting configuration rather than producing a made-up quotation.
+- 2026-09-06: Signature minimization now retains an explicitly identified supplier legal entity while excluding the named sender, email, phones, and address. Explicit source price UOMs reconcile model output only when the item and amount match; the live Novara golden run passes correction, legal-name, and UOM fidelity.
 
 ## Remaining
 
