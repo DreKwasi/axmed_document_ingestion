@@ -13,7 +13,7 @@ PHONE_PATTERN = re.compile(
 
 
 def redact_text(value: str) -> str:
-    """Remove contact identifiers while preserving structure useful to a resolver."""
+    """Remove contact identifiers while preserving structure useful to the model."""
 
     return PHONE_PATTERN.sub("[redacted-phone]", EMAIL_PATTERN.sub("[redacted-email]", value))
 
