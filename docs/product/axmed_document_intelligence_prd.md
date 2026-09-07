@@ -135,7 +135,7 @@ Sanova's JSON explicitly states that unit prices aren't provided. Instead, pack 
 
 Ubuntu introduces volume-dependent pricing tiers and explicitly states that VAT is excluded.
 
-Zenith includes product route, manufacturer, country of origin, regulatory qualification, cold-chain requirements, HS codes and ATC codes alongside commercial data.
+Zenith includes dosage form, manufacturer, country of origin, regulatory qualification, cold-chain requirements, and shipment HS codes alongside commercial data.
 
 The canonical model therefore needs to represent both the medicine and the commercial context around its price.
 
@@ -697,11 +697,13 @@ A product's manufacturer may differ from the quoting supplier, so these concepts
  "currency": null,
  "incoterm": null,
  "incoterm_named_place": null,
+ "incoterm_country": null,
  "payment_terms": null,
  "freight_included": null,
  "insurance_included": null,
  "tax_included": null,
- "price_basis": null
+ "price_basis": null,
+ "hs_codes": []
 }
 ```
 
@@ -728,7 +730,6 @@ Two apparently identical medicine prices aren't necessarily commercially compara
  "inn": [],
  "strength": [],
  "dosage_form": null,
- "route": null,
  "manufacturer": null,
  "country_of_origin": null
 }
@@ -984,6 +985,8 @@ other
 ```json
 {
  "lead_time_days": null,
+ "lead_time_min_days": null,
+ "lead_time_max_days": null,
  "shelf_life_months": null,
  "minimum_remaining_shelf_life_percent": null,
  "storage_conditions": null,
@@ -1003,9 +1006,7 @@ This becomes particularly relevant for temperature-sensitive products such as in
  "who_pq_reference": null,
  "registered_markets": [],
  "registration_reference": null,
- "regulatory_status": null,
- "hs_code": null,
- "atc_code": null
+ "regulatory_status": null
 }
 ```
 
@@ -1543,7 +1544,6 @@ quantity × unit price × (1 - discount) ≈ extended price
 unit price × units per pack ≈ pack price
 parser value = OCR value
 issue date <= valid-until date
-value exists at the mapped structured-source path
 ```
 
 A passing check can strengthen usable evidence to High. A failed check makes affected fields Low and routes review. Lack of an applicable validation does not prevent High when source evidence and association are independently strong.
@@ -1563,7 +1563,7 @@ plain-language evidence summaries, rather than repeating raw internal factor str
 
 ## 45.6 Missing information and commercial availability
 
-A missing value is **not** a confidence category. If a supplier never states an MOQ, route, manufacturer, shelf life, price, quantity, or regulatory status, that does not reduce the confidence of the values that were recovered. There is no universal “critical fields” list or key-field completeness gate.
+A missing value is **not** a confidence category. If a supplier never states an MOQ, dosage form, manufacturer, shelf life, price, quantity, or regulatory status, that does not reduce the confidence of the values that were recovered. There is no universal “critical fields” list or key-field completeness gate.
 
 An absent value routes review only when the extraction pipeline has positive evidence of a failure, conflict, unsafe derivation, or source ambiguity. Mere absence is preserved as `null` and is not converted into a confidence or review issue.
 

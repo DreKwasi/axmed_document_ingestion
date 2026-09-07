@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from app.domain.contracts import CanonicalQuotation, Regulatory, Supply
 from app.domain.schema_mapping import MappingProposal
 
-CANONICAL_QUOTATION_PROMPT_VERSION = "canonical-quotation-v6"
+CANONICAL_QUOTATION_PROMPT_VERSION = "canonical-quotation-v7"
 
 
 class ProposedMappingSchema(BaseModel):
@@ -73,7 +73,9 @@ class LangChainSemanticExtractor:
             "2. Pharmaceutical Entity Resolution: Separate product trade names from International Nonproprietary "
             "Names (INN / generic names). Extract active ingredient strength (value and unit), dosage form "
             "(e.g., tablet, syrup, capsule) and packaging configuration.\n"
-            "3. Commercial Terms: Extract currency, incoterms, payment terms, MOQ, lead times, and pack pricing. "
+            "3. Commercial Terms: Extract currency, incoterms, payment terms, MOQ, lead times, pack pricing, and "
+            "shipment-level HS customs codes. Store a shipping/schedule list of HS codes in commercial_terms.hs_codes. "
+            "Do not place HS codes in line-item regulatory fields or infer/store ATC codes. "
             "Preserve a supplier's full legal name, including legal suffixes such as S.p.A. or Ltd.\n"
             "When `supplier_organization` is supplied in the sanitized context, use it verbatim as supplier.name.\n"
             "Dates must be emitted as ISO `YYYY-MM-DD` values when the source provides a date.\n"
@@ -120,10 +122,13 @@ class LangChainSemanticExtractor:
             "notes, footnotes, appendices, and shipping/regulatory sections. These sections can set values for a "
             "specific item, an item range/list, an exception, or all other items. Apply their explicit scope to the "
             "affected line items. Extract every stated supply field, including shelf_life_months, "
-            "minimum_remaining_shelf_life_percent, lead_time_days, storage_conditions, and cold_chain_required; "
+            "minimum_remaining_shelf_life_percent, lead_time_days, lead_time_min_days, lead_time_max_days, "
+            "storage_conditions, and cold_chain_required; "
             "also extract stated MOQ, regulatory registration/reference/status, and registered markets. Do not leave "
-            "one of those fields null merely because it appears outside the price table. Do not treat transit time as "
-            "lead time unless the source explicitly calls it lead time. Store a source percentage in percentage points "
+            "one of those fields null merely because it appears outside the price table. Treat a stated transit or "
+            "shipping time as delivery lead time. Preserve an explicit range in lead_time_min_days and "
+            "lead_time_max_days rather than collapsing it to one number; apply a document-wide shipping term to every "
+            "applicable line item. Store a source percentage in percentage points "
             "(for example, 80 percent as 80, not 0.80). When a note supplies a registration or variation identifier, "
             "store it in registration_reference as well as its stated status.\n"
             "When packaging text says `20 tablets per pack`, `30 tablets per pack`, or `500 tablets per pack`, "
