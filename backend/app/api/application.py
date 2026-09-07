@@ -6,7 +6,7 @@ from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -17,6 +17,7 @@ from app.application.documents import (
     apply_review_action,
     confirm_mapping,
     create_batch,
+    delete_document,
     ingest_email,
     ingest_failed_document,
     ingest_image,
@@ -107,7 +108,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         CORSMiddleware,
         allow_origins=active_settings.cors_origin_list,
         allow_credentials=False,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "DELETE"],
         allow_headers=["Content-Type"],
     )
 
@@ -339,6 +340,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if document is None:
             raise HTTPException(status_code=404, detail="Document not found.")
         return serialize_document(session, document)
+
+    @app.delete("/api/v1/documents/{document_id}", status_code=204)
+    def delete_uploaded_document(document_id: str, session: SessionDep):
+        try:
+            delete_document(session, document_id, active_settings)
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return Response(status_code=204)
 
     @app.get("/api/v1/documents/{document_id}/source")
     def get_document_source(document_id: str, session: SessionDep):

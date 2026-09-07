@@ -128,6 +128,17 @@ def test_reviewer_can_open_the_stored_source_document(client, sanova_bytes):
     assert source.headers["content-type"].startswith("application/json")
 
 
+def test_reviewer_can_delete_an_uploaded_source_and_its_extraction_records(client, sanova_bytes):
+    document = confirmed_sanova(client, sanova_bytes)
+
+    deleted = client.delete(f"/api/v1/documents/{document['id']}")
+
+    assert deleted.status_code == 204
+    assert client.get(f"/api/v1/documents/{document['id']}").status_code == 404
+    assert client.get(f"/api/v1/documents/{document['id']}/source").status_code == 404
+    assert client.get("/api/v1/documents").json() == []
+
+
 def test_review_commands_are_idempotent_and_reject_stale_revisions(client, sanova_bytes):
     document = confirmed_sanova(client, sanova_bytes)
     revision = document["quotation"]["revision"]
