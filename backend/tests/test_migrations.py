@@ -46,7 +46,7 @@ def test_startup_applies_checked_in_alembic_migration(tmp_path: Path):
             row[1] for row in database.execute("PRAGMA table_info(quotation_field_values)").fetchall()
         }
         review_columns = {row[1] for row in database.execute("PRAGMA table_info(reviews)").fetchall()}
-    assert revision == ("20260907_17",)
+    assert revision == ("20260907_18",)
     assert mapping_schema is not None
     assert "UNIQUE (source_system, source_schema_version, schema_fingerprint)" in mapping_schema[0]
     assert batches_schema is not None
@@ -58,7 +58,12 @@ def test_startup_applies_checked_in_alembic_migration(tmp_path: Path):
         line_item_columns = {
             row[1] for row in database.execute("PRAGMA table_info(quotation_line_items)").fetchall()
         }
-    assert "normalized_price_validation_status" in line_item_columns
+    assert {
+        "normalized_price_validation_status",
+        "lead_time_min_days",
+        "lead_time_max_days",
+    }.issubset(line_item_columns)
+    assert {"route", "hs_code", "atc_code"}.isdisjoint(line_item_columns)
 
 
 def test_startup_upgrades_a_pre_alembic_slice_one_database(tmp_path: Path):
@@ -81,7 +86,7 @@ def test_startup_upgrades_a_pre_alembic_slice_one_database(tmp_path: Path):
         review_learning = database.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'review_learning'"
         ).fetchone()
-    assert revision == ("20260907_17",)
+    assert revision == ("20260907_18",)
     assert review_learning is not None
 
 
@@ -107,7 +112,7 @@ def test_startup_repairs_an_interrupted_review_learning_migration(tmp_path: Path
         review_learning = database.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'review_learning'"
         ).fetchone()
-    assert revision == ("20260907_17",)
+    assert revision == ("20260907_18",)
     assert review_learning is not None
 
 
@@ -120,10 +125,11 @@ def test_normalized_line_item_migration_backfills_existing_quotation(tmp_path: P
         "line_items": [
             {
                 "source_key": "01",
-                "product": {"trade_name": "Example", "inn": ["Example INN"]},
+                "product": {"trade_name": "Example", "inn": ["Example INN"], "route": "oral"},
                 "packaging": {"primary_pack": "Blister", "units_per_pack": 10, "unit_label": "tablet"},
                 "quantity": {"quoted_quantity": "6000000", "quoted_quantity_uom": "tablet"},
                 "pricing": {"quoted_price": {"amount": "0.01", "uom": "tablet"}},
+                "regulatory": {"hs_code": "3004.90", "atc_code": "N02BE01"},
             }
         ]
     }
@@ -157,6 +163,11 @@ def test_normalized_line_item_migration_backfills_existing_quotation(tmp_path: P
             "FROM quotation_field_values WHERE quotation_id = ? AND canonical_field = ?",
             (quotation_id, "line_items[0].quantity.quoted_quantity"),
         ).fetchone()
+        migrated_payload = json.loads(
+            database.execute("SELECT payload_json FROM quotations WHERE id = ?", (quotation_id,)).fetchone()[0]
+        )
     assert row == ("Example", 6000000, "tablet")
     assert inn == ("Example INN",)
     assert field_value == ("line_items[0].quantity.quoted_quantity", '"6000000"', "pending_review", 0)
+    assert "route" not in migrated_payload["line_items"][0]["product"]
+    assert migrated_payload["line_items"][0]["regulatory"] == {}

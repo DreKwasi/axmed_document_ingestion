@@ -43,4 +43,4 @@
 
 ## Final commit and tag
 
-- Pending.
+- Implemented by commits `e2ba579` and `9adcfe7`.
