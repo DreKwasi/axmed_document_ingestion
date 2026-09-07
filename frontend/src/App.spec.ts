@@ -5,6 +5,7 @@ import App from "./App.vue";
 
 const api = vi.hoisted(() => ({
   fetchDocuments: vi.fn(),
+  deleteDocument: vi.fn(),
   uploadDocument: vi.fn(),
   uploadBatch: vi.fn(),
   fetchBatch: vi.fn(),
@@ -59,7 +60,7 @@ describe("App", () => {
       quotation: {
         quotation_reference: "FA-COT-2026-118",
         supplier: { name: "Farmaceutica Andina S.A.S." },
-        commercial_terms: {},
+        commercial_terms: { hs_codes: ["3004.90", "3004.20"] },
         line_items: [{
           source_key: "01",
           product: { trade_name: "Dolostop 500", inn: ["Paracetamol"], strength: [], dosage_form: "tablet" },
@@ -106,6 +107,7 @@ describe("App", () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain("Product breakdown");
+    expect(wrapper.text()).toContain("HS codes: 3004.90 · 3004.20");
     expect(wrapper.text()).toContain("6,000,000 tablet");
     expect(wrapper.text()).toContain("Quoted quantity");
 
@@ -113,6 +115,9 @@ describe("App", () => {
     await wrapper.find("tbody tr").trigger("click");
     await flushPromises();
     expect(wrapper.text()).toContain("12 packs / shipper");
+    expect(wrapper.text()).toContain("Dosage Form");
+    expect(wrapper.text()).not.toContain("Dosage Form / Route");
+    expect(wrapper.text()).not.toContain("oral");
     expect(wrapper.text()).toContain("WHO prequalified");
     expect(wrapper.text()).toContain("markets: KE");
     expect(wrapper.text()).toContain("1 price tiers");
@@ -122,6 +127,31 @@ describe("App", () => {
     expect(wrapper.text()).toContain("The values were recovered from clear source material.");
     expect(wrapper.text()).toContain("some lack an exact row or cell reference");
     expect(wrapper.find("th").text()).not.toContain("Source");
+  });
+
+  it("confirms and deletes an uploaded source from the table", async () => {
+    api.fetchDocuments.mockResolvedValue([{
+      id: "delete-me",
+      filename: "delete-me.pdf",
+      source_name: "Supplier quotation",
+      status: "pending_review",
+      semantic_mapping_calls: 0,
+      quotation: null,
+      reviews: [],
+    }]);
+    api.deleteDocument.mockResolvedValue(undefined);
+    vi.stubGlobal("confirm", vi.fn(() => true));
+
+    const wrapper = mount(App);
+    await flushPromises();
+    await wrapper.get('button[aria-label="Delete Supplier quotation"]').trigger("click");
+    await flushPromises();
+
+    expect(window.confirm).toHaveBeenCalledWith(
+      "Delete Supplier quotation? This removes the uploaded file and all extracted data."
+    );
+    expect(api.deleteDocument).toHaveBeenCalledWith("delete-me");
+    expect(wrapper.text()).toContain("No sources yet.");
   });
 
   it("shows the human mapping checkpoint for a newly observed schema and confirms it", async () => {

@@ -12,6 +12,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (event: "select", document: DocumentResponse): void;
   (event: "ingest"): void;
+  (event: "delete", document: DocumentResponse): void;
 }>();
 
 function sourceName(doc: DocumentResponse) {
@@ -128,7 +129,7 @@ const batchProcessedCount = computed(() => {
               <th class="px-4 py-3.5">Review issues</th>
               <th class="px-4 py-3.5">Products</th>
               <th class="px-4 py-3.5">Status</th>
-              <th class="px-6 py-3.5 text-right"><span class="sr-only">Open</span></th>
+              <th class="px-6 py-3.5 text-right">Actions</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-100">
@@ -202,15 +203,26 @@ const batchProcessedCount = computed(() => {
                 </span>
               </td>
 
-              <!-- Arrow / Open Action -->
+              <!-- Open / destructive actions stay separate from the row click. -->
               <td class="px-6 py-4 align-top text-right">
-                <button
-                  type="button"
-                  class="rounded-lg p-1.5 text-slate-400 group-hover:text-emerald-700 group-hover:translate-x-0.5 transition"
-                  :aria-label="`Open ${sourceName(doc)}`"
-                >
-                  →
-                </button>
+                <div class="inline-flex items-center gap-1">
+                  <button
+                    type="button"
+                    class="rounded-lg px-2 py-1.5 text-[11px] font-semibold text-rose-600 hover:bg-rose-50 hover:text-rose-700 transition disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="busy"
+                    :aria-label="`Delete ${sourceName(doc)}`"
+                    @click.stop="emit('delete', doc)"
+                  >
+                    Delete
+                  </button>
+                  <button
+                    type="button"
+                    class="rounded-lg p-1.5 text-slate-400 group-hover:text-emerald-700 group-hover:translate-x-0.5 transition"
+                    :aria-label="`Open ${sourceName(doc)}`"
+                  >
+                    →
+                  </button>
+                </div>
               </td>
             </tr>
           </tbody>

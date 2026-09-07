@@ -14,6 +14,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const body = await response.json().catch(() => ({}));
     throw new ApiError(body.detail ?? "The request could not be completed.", response.status);
   }
+  if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
 
@@ -25,6 +26,10 @@ export function uploadDocument(file: File): Promise<DocumentResponse> {
 
 export function fetchDocuments(): Promise<DocumentResponse[]> {
   return request("/api/v1/documents");
+}
+
+export function deleteDocument(documentId: string): Promise<void> {
+  return request(`/api/v1/documents/${documentId}`, { method: "DELETE" });
 }
 
 export function uploadBatch(files: File[], name?: string): Promise<BatchResponse> {

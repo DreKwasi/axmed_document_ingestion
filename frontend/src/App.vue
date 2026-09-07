@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
 import {
   confirmMapping as apiConfirmMapping,
+  deleteDocument as apiDeleteDocument,
   eventStreamUrl,
   fetchDocument,
   fetchDocuments,
@@ -54,6 +55,29 @@ function closeDocument() {
   selectedDocumentId.value = null;
   isDrawerOpen.value = false;
   isReviewModalOpen.value = false;
+}
+
+async function removeDocument(document: DocumentResponse) {
+  const sourceName = document.source_name || document.filename;
+  if (!window.confirm(`Delete ${sourceName}? This removes the uploaded file and all extracted data.`)) return;
+
+  busy.value = true;
+  errorMessage.value = "";
+  try {
+    await apiDeleteDocument(document.id);
+    documents.value = documents.value.filter((item) => item.id !== document.id);
+    if (activeBatch.value) {
+      activeBatch.value.documents = activeBatch.value.documents.filter((item) => item.id !== document.id);
+    }
+    eventSources.get(document.id)?.close();
+    eventSources.delete(document.id);
+    delete extractionActivity.value[document.id];
+    if (selectedDocumentId.value === document.id) closeDocument();
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : "Source deletion failed.";
+  } finally {
+    busy.value = false;
+  }
 }
 
 async function loadDocuments() {
@@ -299,6 +323,7 @@ onBeforeUnmount(() => eventSources.forEach((source) => source.close()));
           :busy="busy"
           @select="openDocument"
           @ingest="openIngest"
+          @delete="removeDocument"
         />
       </div>
 
