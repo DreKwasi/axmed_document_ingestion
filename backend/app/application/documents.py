@@ -338,7 +338,11 @@ def _upsert_quotation(session: Session, document: DocumentRecord, quotation: Can
     payload_json = quoted.model_dump_json()
     if stored:
         stored.payload_json = payload_json
-        stored.system_decision = assessment.system_decision
+        stored.system_decision = "pending_review"
+        if stored.review_status in {"unreviewed", "corrected"}:
+            stored.review_status = "pending_review"
+        if document.status != "needs_mapping_confirmation":
+            document.status = "pending_review"
         stored.revision += 1
         _sync_field_evidence(session, document.id, stored, CanonicalQuotation.model_validate_json(payload_json))
         _sync_normalized_line_items(session, stored.id, CanonicalQuotation.model_validate_json(payload_json))
@@ -350,10 +354,13 @@ def _upsert_quotation(session: Session, document: DocumentRecord, quotation: Can
             assessment=assessment,
         )
         return stored
+    if document.status != "needs_mapping_confirmation":
+        document.status = "pending_review"
     stored = QuotationRecord(
         document_id=document.id,
         payload_json=payload_json,
-        system_decision=assessment.system_decision,
+        system_decision="pending_review",
+        review_status="pending_review",
     )
     session.add(stored)
     session.flush()
@@ -393,9 +400,11 @@ def reassess_persisted_confidence(session: Session) -> int:
                 parser_quality="poor" if bool(parsed_summary.get("needs_ocr_pages")) else None,
             ),
         )
-        quotation.system_decision = assessment.system_decision
-        if document.status in {"needs_review", "auto_accepted"}:
-            document.status = assessment.system_decision
+        quotation.system_decision = "pending_review"
+        if quotation.review_status in {"unreviewed", "corrected"}:
+            quotation.review_status = "pending_review"
+        if document.status in {"needs_review", "auto_accepted", "pending_review", "corrected"}:
+            document.status = "pending_review"
         _sync_field_values(session, document.id, quotation, canonical, assessment=assessment)
         refreshed += 1
     return refreshed
@@ -775,7 +784,7 @@ def _sync_field_values(
                 line_item_id=line_item_ids.get(line_item_position) if line_item_position is not None else None,
                 canonical_field=field_path,
                 value_json=json.dumps(value, default=str, sort_keys=True),
-                review_status="corrected" if field_path in corrected_fields else "unreviewed",
+                review_status="corrected" if field_path in corrected_fields else "pending_review",
                 reliability=confidence_assessment.band if confidence_assessment else "Not applicable",
                 reliability_reason=(
                     confidence_assessment.reason
@@ -900,8 +909,8 @@ def apply_review_action(session: Session, document_id: str, action: str, command
     expected_revision = command.get("expected_revision")
     if expected_revision != quotation.revision:
         raise ValueError("The quotation revision is stale; reload before deciding.")
-    if document.status != "needs_review" or quotation.review_status != "unreviewed":
-        raise ValueError("Only an unreviewed quotation that completed processing can receive a decision.")
+    if document.status != "pending_review" or quotation.review_status != "pending_review":
+        raise ValueError("Only a quotation awaiting human review can receive a decision.")
     payload = json.loads(quotation.payload_json)
     prior_revision = quotation.revision
     patches = command.get("patches", [])
@@ -921,7 +930,7 @@ def apply_review_action(session: Session, document_id: str, action: str, command
             raise ReviewValidationError(str(error)) from error
         canonical = apply_commercial_rules(canonical)
         payload_json = canonical.model_dump_json()
-        next_review_status = "corrected"
+        next_review_status = "pending_review"
     else:
         if action == "approved" and any(issue.get("severity") == "error" for issue in payload.get("review_issues", [])):
             raise ValueError("Resolve error-level review issues before approval.")
@@ -936,9 +945,14 @@ def apply_review_action(session: Session, document_id: str, action: str, command
         .where(
             QuotationRecord.id == quotation.id,
             QuotationRecord.revision == prior_revision,
-            QuotationRecord.review_status == "unreviewed",
+            QuotationRecord.review_status == "pending_review",
         )
-        .values(payload_json=payload_json, review_status=next_review_status, revision=next_revision)
+        .values(
+            payload_json=payload_json,
+            review_status=next_review_status,
+            has_corrections=True if action == "corrected" else quotation.has_corrections,
+            revision=next_revision,
+        )
     )
     if transition.rowcount != 1:  # type: ignore[attr-defined]
         session.rollback()
@@ -1115,7 +1129,7 @@ def ingest_json(
             document.mapping_source = "mapping_application_failed"
             session.commit()
             return document
-        document.status = "needs_review"
+        document.status = "pending_review"
         document.mapping_source = "trusted_cache"
         _upsert_quotation(session, document, quotation)
         session.commit()
@@ -1214,7 +1228,7 @@ def confirm_mapping(session: Session, document_id: str, settings: Settings) -> D
         source_document=document.original_filename,
         method="deterministic_mapping",
     )
-    document.status = "needs_review"
+    document.status = "pending_review"
     document.mapping_source = "confirmed_mapping"
     _upsert_quotation(session, document, quotation)
     session.commit()
@@ -1247,6 +1261,7 @@ def serialize_document(session: Session, document: DocumentRecord) -> dict[str, 
         quotation_payload["revision"] = quotation.revision
         quotation_payload["system_decision"] = quotation.system_decision
         quotation_payload["review_status"] = quotation.review_status
+        quotation_payload["has_corrections"] = quotation.has_corrections
         field_values = list(session.scalars(
             select(QuotationFieldValueRecord)
             .where(QuotationFieldValueRecord.quotation_id == quotation.id)
@@ -1281,11 +1296,7 @@ def serialize_document(session: Session, document: DocumentRecord) -> dict[str, 
         "batch_id": document.batch_id,
         "filename": document.original_filename,
         "source_name": _source_name(document, quotation_payload),
-        "status": (
-            quotation.system_decision
-            if quotation is not None and document.status == "needs_review"
-            else document.status
-        ),
+        "status": document.status,
         "failure_reason": document.failure_reason,
         "source_system": document.source_system,
         "schema_version": document.schema_version,
@@ -1475,7 +1486,7 @@ def serialize_batch(session: Session, batch: BatchRecord) -> dict[str, Any]:
         status_counts[doc.status] = status_counts.get(doc.status, 0) + 1
 
     terminal_statuses = {
-        "needs_review",
+        "pending_review",
         "approved",
         "rejected",
         "failed",

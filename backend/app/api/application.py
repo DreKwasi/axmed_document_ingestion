@@ -291,14 +291,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/v1/review-queue")
     def list_review_queue(session: SessionDep):
-        """Return only unresolved exceptions; accepted records remain in the source list."""
+        """Return every completed extraction awaiting mandatory human review."""
 
         documents = session.scalars(
             select(DocumentRecord)
             .join(QuotationRecord, QuotationRecord.document_id == DocumentRecord.id)
             .where(
-                QuotationRecord.system_decision == "needs_review",
-                QuotationRecord.review_status == "unreviewed",
+                QuotationRecord.review_status == "pending_review",
             )
             .order_by(DocumentRecord.created_at.desc())
         ).all()

@@ -80,7 +80,7 @@ def consume_ocr(session: Session, job_id: str, settings: Settings) -> None:
                 source_type="ocr",
             )
             quotation = apply_commercial_rules(quotation)
-            document.status = "needs_review"
+            document.status = "pending_review"
             _upsert_quotation(session, document, quotation)
             invocation = ModelInvocationRecord(
                 learning_id=None,

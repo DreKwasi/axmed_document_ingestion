@@ -128,7 +128,7 @@ def consume_email_extraction(session: Session, extraction_id: str, settings: Set
         extraction.status = "completed"
         extraction.error_message = None
         extraction.result_json = quotation.model_dump_json()
-        document.status = "needs_review"
+        document.status = "pending_review"
         _upsert_quotation(session, document, quotation)
         _upsert_invocation(
             session,
@@ -208,7 +208,7 @@ def consume_email_extraction(session: Session, extraction_id: str, settings: Set
     extraction.status = "completed"
     extraction.error_message = None
     extraction.result_json = quotation.model_dump_json()
-    document.status = "needs_review"
+    document.status = "pending_review"
     _upsert_quotation(session, document, quotation)
     _upsert_invocation(
         session,
