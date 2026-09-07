@@ -43,12 +43,15 @@ export type Quotation = {
     field_path: string;
     value: unknown;
     review_status: string;
+    reliability: "High" | "Medium" | "Low" | "Not extracted";
+    reliability_reason?: string | null;
     confidence: string;
     extraction_method: string;
     source_path?: string | null;
     source_location?: string | null;
   }>;
   revision: number;
+  system_decision: "auto_accepted" | "needs_review";
   review_status: string;
   review_issues: Array<{ field_path: string; code: string; message: string; severity: string }>;
 };
@@ -66,7 +69,10 @@ export type DocumentResponse = {
   semantic_mapping_calls: number;
   mapping_source?: string | null;
   parsed_summary?: { subject?: string; message_id?: string | null; page_count?: number; needs_ocr_pages?: number[] } | null;
-  extraction_confidence?: string | null;
+  system_decision?: "auto_accepted" | "needs_review" | null;
+  extraction_coverage?: { extracted: number; expected: number } | null;
+  reliability_summary?: Record<"High" | "Medium" | "Low" | "Not extracted", number>;
+  review_reasons?: string[];
   product_counts?: { extracted: number; failed: number };
   notes?: string[];
   mapping?: {
@@ -82,6 +88,7 @@ export type DocumentResponse = {
     prior_revision: number;
     resulting_revision: number;
     note?: string | null;
+    rejection_reason?: string | null;
     patches: Array<{ path: string; before?: string | null; after?: string | null }>;
   }>;
   learning?: Array<{ id: string; review_id: string; status: string }>;
