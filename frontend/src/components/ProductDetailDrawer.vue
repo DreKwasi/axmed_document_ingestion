@@ -429,33 +429,6 @@ function handleSave() {
           </div>
         </div>
       </div>
-
-      <!-- Section 6: Evidence & Provenance -->
-      <div v-if="lineItem.evidence?.length" class="rounded-2xl border border-slate-200 bg-white p-4 shadow-xs">
-        <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 border-b border-slate-100 pb-2 mb-3">
-          Field Evidence & Provenance
-        </h3>
-        <div class="space-y-2">
-          <div
-            v-for="(ev, idx) in lineItem.evidence"
-            :key="idx"
-            class="flex items-center justify-between rounded-xl bg-slate-50 p-2.5 text-[11px] border border-slate-100"
-          >
-            <div>
-              <span class="font-semibold text-slate-800">{{ ev.canonical_field }}</span>
-              <span v-if="ev.source_path" class="text-slate-400 block font-mono text-[10px]">
-                Source: {{ ev.source_path }}
-              </span>
-            </div>
-            <div class="text-right">
-              <span class="font-bold text-emerald-700">
-                {{ Math.round(Number(ev.confidence) * 100) }}%
-              </span>
-              <span class="text-slate-400 block text-[10px]">{{ ev.extraction_method }}</span>
-            </div>
-          </div>
-        </div>
-      </div>
     </div>
   </aside>
 </template>

@@ -12,8 +12,10 @@ def test_missing_required_source_value_stays_null_and_creates_a_review_issue():
     mapping = json.loads((fixture_root / "recorded_mappings/sanova_erp_2_4_1.json").read_text())["mapping"]
     payload["offer"]["products"][0]["commercials"].pop("price_per_pack")
 
-    quotation = apply_mapping(payload, mapping, source_document="missing-price.json", method="deterministic_mapping")
+    quotation = apply_mapping(payload, mapping, source_document="missing-price.json")
 
     assert quotation.line_items[0].pricing.pack_price is None
     assert quotation.review_issues[0].field_path == "line_items[0].pricing.pack_price"
     assert quotation.review_issues[0].code == "missing_required_source_value"
+    assert quotation.evidence == []
+    assert quotation.line_items[0].evidence == []

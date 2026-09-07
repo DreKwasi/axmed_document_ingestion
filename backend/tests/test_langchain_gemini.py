@@ -157,6 +157,7 @@ def test_langchain_email_extraction_resolves_corrections_and_supersession():
     assert "notes, footnotes, appendices, and shipping/regulatory sections" in system_prompt
     assert "shelf_life_months" in system_prompt
     assert "80 percent as 80, not 0.80" in system_prompt
+    assert "extraction_method `llm_extraction`, never `manual`" in system_prompt
 
 
 def test_langchain_schema_mapping_proposal():
