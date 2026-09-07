@@ -12,6 +12,7 @@ from app.application.documents import ingest_email, ingest_json
 from app.core.settings import Settings
 from app.domain.contracts import (
     CanonicalQuotation,
+    CommercialTerms,
     LineItem,
     Pricing,
     Product,
@@ -103,6 +104,13 @@ def test_langchain_email_extraction_resolves_corrections_and_supersession():
     assert telemetry["provider"] == "google-gemini"
     assert telemetry["model"] == "gemini-3.1-flash-lite"
     assert telemetry["source_type"] == "email"
+    system_prompt = mock_llm_chain.invoke.call_args.args[0][0].content
+    assert "quotation_reference" in system_prompt
+    assert "rfq_reference" in system_prompt
+    assert "supplier.country" in system_prompt
+    assert "product.country_of_origin" in system_prompt
+    assert "all items or products are manufactured" in system_prompt
+    assert "incoterm_country" in system_prompt
 
 
 def test_langchain_schema_mapping_proposal():
@@ -181,7 +189,7 @@ def test_email_worker_executes_langchain_when_gemini_configured(tmp_path):
 
     with session_factory() as session:
         doc = session.get(DocumentRecord, doc.id)
-        assert doc.status == "needs_review"
+        assert doc.status == "pending_review"
         assert doc.quotation is not None
 
         invocation = session.scalar(
@@ -240,7 +248,7 @@ def test_schema_memory_bypasses_langchain_for_known_schema(tmp_path):
             provider=provider,
         )
 
-        assert doc.status == "needs_review"
+        assert doc.status == "pending_review"
         assert doc.mapping_source == "trusted_cache"
         # Zero LLM calls!
         mock_extractor.propose_schema_mapping.assert_not_called()
@@ -281,10 +289,17 @@ def test_pdf_worker_executes_langchain_when_gemini_configured(tmp_path):
     mock_quotation = CanonicalQuotation(
         document_type="proforma",
         quotation_reference="FA-COT-2026-118",
-        supplier=Supplier(name="Farmaceutica Andina"),
+        rfq_reference="AXMED-RFQ-2026-0233",
+        supplier=Supplier(name="Farmaceutica Andina", country="Colombia"),
+        commercial_terms=CommercialTerms(
+            currency="USD",
+            incoterm="FOB",
+            incoterm_named_place="Cartagena (COCTG)",
+            incoterm_country="Colombia",
+        ),
         line_items=[
             LineItem(
-                product=Product(trade_name="Amoxicilina 500mg"),
+                product=Product(trade_name="Amoxicilina 500mg", country_of_origin="Colombia"),
                 quantity=Quantity(quoted_quantity=Decimal("1200"), quoted_quantity_uom="capsule"),
                 pricing=Pricing(currency="USD", quoted_price=QuotedPrice(amount=Decimal("0.045"), uom="capsule")),
             )
@@ -298,7 +313,7 @@ def test_pdf_worker_executes_langchain_when_gemini_configured(tmp_path):
 
     with session_factory() as session:
         doc = session.get(DocumentRecord, doc.id)
-        assert doc.status == "needs_review"
+        assert doc.status == "pending_review"
         assert doc.quotation is not None
         quotation = session.scalar(select(QuotationRecord).where(QuotationRecord.document_id == doc.id))
         line_item = session.scalar(
@@ -307,6 +322,10 @@ def test_pdf_worker_executes_langchain_when_gemini_configured(tmp_path):
         assert line_item is not None
         assert line_item.quoted_quantity == Decimal("1200")
         assert line_item.quoted_quantity_uom == "capsule"
+        assert quotation is not None and json.loads(quotation.payload_json)["rfq_reference"] == "AXMED-RFQ-2026-0233"
+        assert json.loads(quotation.payload_json)["supplier"]["country"] == "Colombia"
+        assert json.loads(quotation.payload_json)["commercial_terms"]["incoterm_country"] == "Colombia"
+        assert line_item.country_of_origin == "Colombia"
         invocation = session.scalar(
             select(ModelInvocationRecord).where(
                 ModelInvocationRecord.document_id == doc.id,
@@ -402,7 +421,7 @@ def test_ocr_worker_executes_langchain_when_gemini_configured(tmp_path):
 
     with session_factory() as session:
         doc = session.get(DocumentRecord, doc_id)
-        assert doc.status == "needs_review"
+        assert doc.status == "pending_review"
         assert doc.quotation is not None
         invocation = session.scalar(
             select(ModelInvocationRecord).where(
