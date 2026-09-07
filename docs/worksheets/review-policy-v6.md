@@ -55,4 +55,4 @@ None.
 
 ## Final commit and tag
 
-`af28694`, `9769bba`, `471b6ad`, `e851beb`; tag pending.
+`af28694`, `9769bba`, `471b6ad`, `e851beb`, `ebb806b`, `ac25507`, `412dc92`, `b4094db`; worksheet tag `worksheet/review-policy-v6`.
