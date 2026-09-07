@@ -25,6 +25,7 @@ def test_email_parser_uses_one_redacted_plain_text_body_without_rendering_html()
     assert "Via dell'Industria" not in parsed.body_text
     assert "Dear Mattia" not in parsed.body_text
     assert "<html>" not in parsed.body_text
+    assert parsed.supplier_organization == "Novara Farmaceutici S.p.A."
 
 
 def test_email_upload_persists_a_redacted_summary_without_inventing_a_quotation(client):
@@ -103,6 +104,7 @@ def test_email_worker_uses_redacted_context_and_persists_reviewable_quotation(cl
     assert submitted[0]["operation"] == "email_quotation_extraction"
     assert "giulia.ferraro@novarafarma.it" not in json.dumps(submitted)
     assert "Giulia Ferraro" not in json.dumps(submitted)
+    assert submitted[0]["context"]["supplier_organization"] == "Novara Farmaceutici S.p.A."
     with factory() as session:
         extraction = session.get(EmailExtractionRecord, document["email_extraction"]["id"])
         invocation = session.scalar(
