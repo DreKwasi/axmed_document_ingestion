@@ -13,6 +13,7 @@ from app.application.documents import _upsert_quotation
 from app.application.processing_events import record_event
 from app.core.settings import Settings
 from app.domain.commercial_rules import apply_commercial_rules
+from app.domain.email_reconciliation import reconcile_email_price_uoms
 from app.infrastructure.database import create_sqlite_engine
 from app.infrastructure.models import DocumentRecord, EmailExtractionRecord, ModelInvocationRecord
 from app.security.redaction import redact_for_model
@@ -28,6 +29,9 @@ def _upsert_invocation(
     status: str,
     duration_ms: int | None,
     metadata: dict[str, Any],
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    estimated_cost_usd: str | None = None,
 ) -> None:
     invocation = session.scalar(
         select(ModelInvocationRecord).where(ModelInvocationRecord.email_extraction_id == extraction.id)
@@ -42,6 +46,9 @@ def _upsert_invocation(
             prompt_version="email-extraction-v1",
             status=status,
             duration_ms=duration_ms,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            estimated_cost_usd=estimated_cost_usd,
             safe_metadata_json=json.dumps(metadata, sort_keys=True),
         )
         session.add(invocation)
@@ -50,6 +57,9 @@ def _upsert_invocation(
     invocation.model = model
     invocation.status = status
     invocation.duration_ms = duration_ms
+    invocation.input_tokens = input_tokens
+    invocation.output_tokens = output_tokens
+    invocation.estimated_cost_usd = estimated_cost_usd
     invocation.safe_metadata_json = json.dumps(metadata, sort_keys=True)
 
 
@@ -114,7 +124,7 @@ def consume_email_extraction(session: Session, extraction_id: str, settings: Set
             raise
         record_event(session, document_id=document.id, stage="email_quotation_normalizing")
         session.commit()
-        quotation = apply_commercial_rules(quotation)
+        quotation = apply_commercial_rules(reconcile_email_price_uoms(quotation, safe_context.get("body_text", "")))
         extraction.status = "completed"
         extraction.error_message = None
         extraction.result_json = quotation.model_dump_json()
@@ -128,6 +138,9 @@ def consume_email_extraction(session: Session, extraction_id: str, settings: Set
             status="completed",
             duration_ms=telemetry.get("duration_ms", int((time.perf_counter() - started) * 1000)),
             metadata={"source_type": "email", "line_item_count": len(quotation.line_items)},
+            input_tokens=telemetry.get("input_tokens"),
+            output_tokens=telemetry.get("output_tokens"),
+            estimated_cost_usd=_cost_text(telemetry.get("estimated_cost_usd")),
         )
         record_event(
             session,
@@ -137,7 +150,6 @@ def consume_email_extraction(session: Session, extraction_id: str, settings: Set
         )
         session.commit()
         return
-
     if not settings.semantic_resolver_url:
         extraction.status = "awaiting_model_configuration"
         document.status = "needs_semantic_extraction"
@@ -192,7 +204,7 @@ def consume_email_extraction(session: Session, extraction_id: str, settings: Set
         raise
     record_event(session, document_id=document.id, stage="email_quotation_normalizing")
     session.commit()
-    quotation = apply_commercial_rules(quotation)
+    quotation = apply_commercial_rules(reconcile_email_price_uoms(quotation, safe_context.get("body_text", "")))
     extraction.status = "completed"
     extraction.error_message = None
     extraction.result_json = quotation.model_dump_json()
@@ -234,3 +246,7 @@ def run_email_extraction_job(
     engine = create_sqlite_engine(settings.database_url)
     with sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)() as session:
         consume_email_extraction(session, extraction_id, settings)
+
+
+def _cost_text(value: Any) -> str | None:
+    return None if value is None else str(value)

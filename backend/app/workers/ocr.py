@@ -92,6 +92,11 @@ def consume_ocr(session: Session, job_id: str, settings: Settings) -> None:
                 prompt_version="ocr-extraction-v1",
                 status="completed",
                 duration_ms=telemetry.get("duration_ms"),
+                input_tokens=telemetry.get("input_tokens"),
+                output_tokens=telemetry.get("output_tokens"),
+                estimated_cost_usd=None
+                if telemetry.get("estimated_cost_usd") is None
+                else str(telemetry["estimated_cost_usd"]),
                 safe_metadata_json=json.dumps({"source_type": "ocr", "line_item_count": len(quotation.line_items)}),
             )
             session.add(invocation)

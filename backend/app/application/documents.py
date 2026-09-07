@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.application.processing_events import record_event
 from app.core.settings import Settings
-from app.domain.commercial_rules import apply_commercial_rules, decimal_patch
+from app.domain.commercial_rules import apply_commercial_rules
 from app.domain.confidence import ConfidenceSignals, score_field_confidence
 from app.domain.contracts import CanonicalQuotation
 from app.domain.email_parser import parse_email
@@ -57,24 +57,7 @@ class ReviewValidationError(ValueError):
     pass
 
 
-@dataclass(frozen=True)
-class CorrectableLineField:
-    canonical_field: str
-    parse: Callable[[object], Any]
 
-
-def _integer_patch(value: object) -> int:
-    decimal_value = decimal_patch(value)
-    if decimal_value != decimal_value.to_integral_value():
-        raise ValueError("This correction must be a whole number.")
-    return int(decimal_value)
-
-
-CORRECTABLE_LINE_FIELDS = {
-    "pricing.pack_price": CorrectableLineField("pricing.pack_price", decimal_patch),
-    "quantity.minimum_order_quantity": CorrectableLineField("quantity.minimum_order_quantity", decimal_patch),
-    "packaging.units_per_pack": CorrectableLineField("packaging.units_per_pack", _integer_patch),
-}
 
 
 def validate_json_upload(filename: str, content_type: str | None, data: bytes, settings: Settings) -> None:
@@ -740,18 +723,106 @@ def _set_field_review_status(session: Session, quotation_id: str, status: str) -
     )
 
 
+_READ_ONLY_FIELDS = {"normalized_price", "evidence", "review_issues"}
+
+
+def _apply_field_patch(
+    payload: dict[str, Any],
+    raw_path: str,
+    new_value: Any,
+    request_id: str,
+) -> tuple[Any, Any, str]:
+    """Apply a patch to any arbitrary path in the quotation payload and record its human evidence."""
+    if new_value is None or (isinstance(new_value, str) and not new_value.strip()):
+        raise ReviewValidationError("Correction value cannot be empty.")
+
+    segments = [int(p) if p.isdigit() else p for p in re.split(r"\.|\[|\]", raw_path) if p]
+    if not segments:
+        raise ReviewValidationError("Correction path cannot be empty.")
+
+    if any(s in _READ_ONLY_FIELDS for s in segments):
+        raise ReviewValidationError("Correction field is not supported.")
+
+    current: Any = payload
+    for segment in segments[:-1]:
+        if isinstance(segment, int):
+            if not isinstance(current, list) or segment >= len(current):
+                raise ReviewValidationError(f"Correction path does not exist: {raw_path}")
+            current = current[segment]
+        else:
+            if not isinstance(current, dict) or segment not in current:
+                raise ReviewValidationError(f"Correction path does not exist: {raw_path}")
+            current = current[segment]
+
+    last = segments[-1]
+    if isinstance(last, int):
+        if not isinstance(current, list) or last >= len(current):
+            raise ReviewValidationError(f"Correction path does not exist: {raw_path}")
+        before = current[last]
+        current[last] = new_value
+    else:
+        if not isinstance(current, dict) or last not in current:
+            raise ReviewValidationError(f"Correction path does not exist: {raw_path}")
+        before = current[last]
+        current[last] = new_value
+
+    if segments[0] == "line_items" and len(segments) > 1 and isinstance(segments[1], int):
+        line_index = segments[1]
+        field_name = ".".join(str(s) for s in segments[2:])
+        canonical_path = f"line_items[{line_index}].{field_name}"
+        line_evidence = payload["line_items"][line_index].setdefault("evidence", [])
+        prior_evidence: dict[str, Any] = next(
+            (e for e in line_evidence if isinstance(e, dict) and e.get("canonical_field") == field_name),
+            {},
+        )
+        line_evidence.append(
+            {
+                "canonical_field": field_name,
+                "source_path": f"review:{request_id}",
+                "source_location": "human review",
+                "extraction_method": "human_corrected",
+                "confidence": "1.00",
+                "supersedes_source_path": prior_evidence.get("source_path"),
+            }
+        )
+    else:
+        field_name = ".".join(str(s) for s in segments)
+        canonical_path = field_name
+        top_evidence = payload.setdefault("evidence", [])
+        top_prior: dict[str, Any] = next(
+            (e for e in top_evidence if isinstance(e, dict) and e.get("canonical_field") == field_name),
+            {},
+        )
+        top_evidence.append(
+            {
+                "canonical_field": field_name,
+                "source_path": f"review:{request_id}",
+                "source_location": "human review",
+                "extraction_method": "human_corrected",
+                "confidence": "1.00",
+                "supersedes_source_path": top_prior.get("source_path"),
+            }
+        )
+
+    return before, new_value, canonical_path
+
+
 def apply_review_action(session: Session, document_id: str, action: str, command: dict[str, Any]) -> DocumentRecord:
     document = session.get(DocumentRecord, document_id)
     quotation = session.scalar(select(QuotationRecord).where(QuotationRecord.document_id == document_id))
     if document is None or quotation is None:
-        raise LookupError("Document quotation not found.")
-    request_id = str(command["request_id"])
+        raise ValueError("The requested document or quotation does not exist.")
+    if action not in {"approved", "rejected", "corrected"}:
+        raise ValueError(f"Unknown review action: {action}")
+    request_id = str(command.get("request_id") or "")
+    if not request_id:
+        raise ValueError("A review request_id is required.")
     existing = session.scalar(
         select(ReviewRecord).where(ReviewRecord.document_id == document_id, ReviewRecord.request_id == request_id)
     )
     if existing:
         return document
-    expected_revision = int(command["expected_revision"])
+    expected_revision = command.get("expected_revision")
     if expected_revision != quotation.revision:
         raise ValueError("The quotation revision is stale; reload before deciding.")
     if document.status != "needs_review" or quotation.review_status != "unreviewed":
@@ -763,43 +834,17 @@ def apply_review_action(session: Session, document_id: str, action: str, command
     corrected_field_paths: set[str] = set()
     if action == "corrected":
         for patch in patches:
-            segments = patch["path"].split(".")
-            if len(segments) != 4 or segments[0] != "line_items":
-                raise ReviewValidationError("Correction path is not supported.")
-            field = CORRECTABLE_LINE_FIELDS.get(".".join(segments[2:]))
-            if field is None:
-                raise ReviewValidationError("Correction field is not supported.")
-            try:
-                line_index = int(segments[1])
-                current: Any = payload
-                for segment in segments[:-1]:
-                    current = current[int(segment)] if isinstance(current, list) else current[segment]
-                before = current[segments[-1]]
-            except (IndexError, KeyError, TypeError, ValueError) as error:
-                raise ReviewValidationError("Correction path does not exist in this quotation.") from error
-            try:
-                value = field.parse(patch.get("value"))
-            except ValueError as error:
-                raise ReviewValidationError(str(error)) from error
-            current[segments[-1]] = value
-            corrected_field_paths.add(f"line_items[{line_index}].{field.canonical_field}")
-            line_evidence = payload["line_items"][line_index]["evidence"]
-            prior_evidence: dict[str, Any] = next(
-                (evidence for evidence in line_evidence if evidence["canonical_field"] == field.canonical_field),
-                {},
+            raw_path = patch.get("path", "")
+            before, after, canonical_field_path = _apply_field_patch(
+                payload, raw_path, patch.get("value"), request_id
             )
-            line_evidence.append(
-                {
-                    "canonical_field": field.canonical_field,
-                    "source_path": f"review:{request_id}",
-                    "source_location": "human review",
-                    "extraction_method": "human_corrected",
-                    "confidence": "1.00",
-                    "supersedes_source_path": prior_evidence.get("source_path"),
-                }
-            )
-            audit_patches.append({"path": patch["path"], "before": before, "after": value})
-        canonical = apply_commercial_rules(CanonicalQuotation.model_validate(payload))
+            corrected_field_paths.add(canonical_field_path)
+            audit_patches.append({"path": raw_path, "before": before, "after": after})
+        try:
+            canonical = CanonicalQuotation.model_validate(payload)
+        except (ValidationError, ValueError) as error:
+            raise ReviewValidationError(str(error)) from error
+        canonical = apply_commercial_rules(canonical)
         payload_json = canonical.model_dump_json()
         next_review_status = "unreviewed"
     else:
@@ -1095,6 +1140,7 @@ def confirm_mapping(session: Session, document_id: str, settings: Settings) -> D
 def serialize_document(session: Session, document: DocumentRecord) -> dict[str, Any]:
     quotation = session.scalar(select(QuotationRecord).where(QuotationRecord.document_id == document.id))
     quotation_payload = None if quotation is None else json.loads(quotation.payload_json)
+    field_values: list[QuotationFieldValueRecord] = []
     if quotation_payload is not None and quotation is not None:
         normalized_items = _normalized_line_items(session, quotation.id)
         if normalized_items is not None:

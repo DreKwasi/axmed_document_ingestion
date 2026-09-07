@@ -11,13 +11,9 @@ from sqlalchemy.orm import Session
 from app.core.settings import Settings
 from app.domain.commercial_rules import apply_commercial_rules
 from app.domain.email_parser import parse_email
+from app.domain.email_reconciliation import reconcile_email_price_uoms
 from app.domain.pdf_parser import parse_native_pdf
-from app.domain.schema_mapping import (
-    RecordedSemanticMappingProvider,
-    apply_mapping,
-    extract_source_metadata,
-    fingerprint,
-)
+from app.domain.schema_mapping import SemanticMappingProvider, apply_mapping, extract_source_metadata, fingerprint
 from app.infrastructure.models import EvaluationCaseRecord, EvaluationResultRecord, EvaluationRunRecord
 from app.security.redaction import redact_for_model
 from app.workers.ocr_client import request_ocr
@@ -66,7 +62,7 @@ def run_recorded_evaluation(
     *,
     project_root: Path,
     golden_dataset_path: Path,
-    provider: RecordedSemanticMappingProvider,
+    provider: SemanticMappingProvider,
 ) -> EvaluationRunRecord:
     dataset = json.loads(golden_dataset_path.read_text())
     run = EvaluationRunRecord(
@@ -79,17 +75,17 @@ def run_recorded_evaluation(
     results = []
     for case in dataset["cases"]:
         if case.get("execution"):
-            scores = {"canonical_fidelity": 0.0, "mapping_efficiency": 0.0, "safety_and_uncertainty": 0.0}
+            skipped_scores = {"canonical_fidelity": 0.0, "mapping_efficiency": 0.0, "safety_and_uncertainty": 0.0}
             session.add(
                 EvaluationResultRecord(
                     run_id=run.id,
                     case_id=case["id"],
                     status="not_run",
-                    scores_json=json.dumps(scores),
+                    scores_json=json.dumps(skipped_scores),
                     error_analysis_json=json.dumps([f"This case requires {case['execution']} evaluation mode."]),
                 )
             )
-            results.append(scores)
+            results.append(skipped_scores)
             continue
         fixture_path = _dataset_fixture_path(golden_dataset_path, case["input_fixture"])
         payload = json.loads(fixture_path.read_text())
@@ -113,9 +109,11 @@ def run_recorded_evaluation(
             # The recorded proposal represents a reviewer-confirmed mapping. Once trusted,
             # the warm path calls only the deterministic mapper; it has no provider handle.
             cold_calls = 1
-            input_tokens = cold_proposal.input_tokens
-            output_tokens = cold_proposal.output_tokens
-            estimated_cost_usd = str(cold_proposal.estimated_cost_usd)
+            input_tokens = cold_proposal.input_tokens or 0
+            output_tokens = cold_proposal.output_tokens or 0
+            estimated_cost_usd = (
+                "0" if cold_proposal.estimated_cost_usd is None else str(cold_proposal.estimated_cost_usd)
+            )
             quotation = apply_mapping(
                 payload,
                 cold_proposal.mapping,
@@ -144,14 +142,16 @@ def run_recorded_evaluation(
                 errors.append("Source system did not match golden data.")
             cold_payload = quotation.model_dump(mode="json")
             warm_payload = warm_quotation.model_dump(mode="json")
-            _set_path(
-                warm_payload, warm_mutation["canonical_path"], _get_path(cold_payload, warm_mutation["canonical_path"])
-            )
+            canonical_paths = warm_mutation.get("canonical_paths")
+            if canonical_paths is None:
+                canonical_paths = [warm_mutation["canonical_path"]]
+            for canonical_path in canonical_paths:
+                _set_path(warm_payload, canonical_path, _get_path(cold_payload, canonical_path))
             _remove_operational_evidence(cold_payload)
             _remove_operational_evidence(warm_payload)
             if warm_payload != cold_payload:
                 errors.append("Warm deterministic result diverged outside the changed source value.")
-        scores = {
+        scores: dict[str, Any] = {
             "canonical_fidelity": 1.0 if not errors else 0.0,
             "mapping_efficiency": 1.0 if cold_calls == 1 and warm_calls == 0 else 0.0,
             "safety_and_uncertainty": 1.0,
@@ -216,7 +216,14 @@ def run_live_pdf_evaluation(
         context = redact_for_model(
             {
                 "source_document": fixture_path.name,
-                "pages": [{"page_number": page.page_number, "text": page.text} for page in parsed.pages],
+                "pages": [
+                    {
+                        "page_number": page.page_number,
+                        "liteparse": page.raw_representation,
+                        "text": page.text,
+                    }
+                    for page in parsed.pages
+                ],
             }
         )
         started = perf_counter()
@@ -341,11 +348,17 @@ def run_live_email_evaluation(
         expected = json.loads(_dataset_fixture_path(golden_dataset_path, case["expected_output_fixture"]).read_text())
         parsed = parse_email(fixture_path.read_bytes())
         context = redact_for_model(
-            {"subject": parsed.subject, "message_id": parsed.message_id, "body_text": parsed.body_text}
+            {
+                "subject": parsed.subject,
+                "message_id": parsed.message_id,
+                "body_text": parsed.body_text,
+                "supplier_organization": parsed.supplier_organization,
+            }
         )
         started = perf_counter()
         actual, telemetry = extractor.extract_canonical_quotation(context, source_type="email")
-        errors = _subset_mismatches(expected, apply_commercial_rules(actual).model_dump(mode="json"))
+        reconciled = reconcile_email_price_uoms(actual, parsed.body_text)
+        errors = _subset_mismatches(expected, apply_commercial_rules(reconciled).model_dump(mode="json"))
         status = "passed" if not errors else "failed"
         passed += status == "passed"
         session.add(
