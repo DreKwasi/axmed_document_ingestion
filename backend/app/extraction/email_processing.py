@@ -1,23 +1,22 @@
-"""Durable semantic extraction for redacted email content."""
+"""In-process semantic extraction for redacted email content."""
 
 import json
+import logging
 import time
-from pathlib import Path
 from typing import Any
-from urllib.error import HTTPError, URLError
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
-from app.application.documents import _upsert_quotation
-from app.application.processing_events import record_event
-from app.core.settings import Settings
-from app.domain.commercial_rules import apply_commercial_rules
-from app.domain.email_reconciliation import reconcile_email_price_uoms
-from app.infrastructure.database import create_sqlite_engine
-from app.infrastructure.models import DocumentRecord, EmailExtractionRecord, ModelInvocationRecord
+from app.config import Config
+from app.documents import _upsert_quotation
+from app.events import record_event
+from app.extraction.commercial import apply_commercial_rules
+from app.extraction.email_reconciliation import reconcile_email_price_uoms
+from app.models import DocumentRecord, EmailExtractionRecord, ModelInvocationRecord
 from app.security.redaction import redact_for_model
-from app.workers.resolver import provider_name, request_canonical_quotation
+
+logger = logging.getLogger("app.extraction.email")
 
 
 def _upsert_invocation(
@@ -38,7 +37,6 @@ def _upsert_invocation(
     )
     if invocation is None:
         invocation = ModelInvocationRecord(
-            learning_id=None,
             email_extraction_id=extraction.id,
             operation="email_quotation_extraction",
             provider=provider,
@@ -63,7 +61,7 @@ def _upsert_invocation(
     invocation.safe_metadata_json = json.dumps(metadata, sort_keys=True)
 
 
-def consume_email_extraction(session: Session, extraction_id: str, settings: Settings) -> None:
+def consume_email_extraction(session: Session, extraction_id: str, settings: Config) -> None:
     extraction = session.get(EmailExtractionRecord, extraction_id)
     if extraction is None or extraction.status in {"completed", "awaiting_model_configuration"}:
         return
@@ -77,19 +75,20 @@ def consume_email_extraction(session: Session, extraction_id: str, settings: Set
     safe_context = redact_for_model(json.loads(extraction.safe_context_json))
     extraction.status = "running"
     document.status = "semantic_extraction_running"
+    logger.info("[Email %s] Processing email '%s'", document.id[:8], document.original_filename)
     record_event(session, document_id=document.id, stage="email_extraction_started")
-    if settings.resolved_gemini_api_key:
+    if settings.gemini_api_key:
         _upsert_invocation(
             session,
             extraction,
             provider="google-gemini",
-            model=settings.resolved_gemini_model,
+            model=settings.gemini_model,
             status="running",
             duration_ms=None,
             metadata={"source_type": "email"},
         )
         session.commit()
-        from app.domain.langchain_extractor import LangChainSemanticExtractor
+        from app.extraction.llm import LangChainSemanticExtractor
 
         record_event(
             session,
@@ -102,10 +101,22 @@ def consume_email_extraction(session: Session, extraction_id: str, settings: Set
 
         try:
             extractor = LangChainSemanticExtractor(
-                api_key=settings.resolved_gemini_api_key,
-                model=settings.resolved_gemini_model,
+                api_key=settings.gemini_api_key,
+                model=settings.gemini_model,
+                request_timeout_seconds=settings.gemini_request_timeout_seconds,
+            )
+            logger.info(
+                "[Email %s] Calling Gemini (%s) for email quotation extraction...",
+                document.id[:8],
+                settings.gemini_model,
             )
             quotation, telemetry = extractor.extract_canonical_quotation(safe_context, source_type="email")
+            logger.info(
+                "[Email %s] Extracted quotation in %d ms (%d line items)",
+                document.id[:8],
+                telemetry.get("duration_ms", 0),
+                len(quotation.line_items),
+            )
         except Exception as error:
             extraction.status = "failed"
             extraction.error_message = f"langchain_extraction_failed: {error}"
@@ -114,13 +125,14 @@ def consume_email_extraction(session: Session, extraction_id: str, settings: Set
                 session,
                 extraction,
                 provider="google-gemini",
-                model=settings.resolved_gemini_model,
+                model=settings.gemini_model,
                 status="failed",
                 duration_ms=int((time.perf_counter() - started) * 1000),
                 metadata={"source_type": "email", "error": str(error)},
             )
             record_event(session, document_id=document.id, stage="email_extraction_failed")
             session.commit()
+            logger.exception("[Email %s] LangChain Gemini extraction failed: %s", document.id[:8], error)
             raise
         record_event(session, document_id=document.id, stage="email_quotation_normalizing")
         session.commit()
@@ -134,7 +146,7 @@ def consume_email_extraction(session: Session, extraction_id: str, settings: Set
             session,
             extraction,
             provider="google-gemini",
-            model=settings.resolved_gemini_model,
+            model=settings.gemini_model,
             status="completed",
             duration_ms=telemetry.get("duration_ms", int((time.perf_counter() - started) * 1000)),
             metadata={"source_type": "email", "line_item_count": len(quotation.line_items)},
@@ -146,106 +158,29 @@ def consume_email_extraction(session: Session, extraction_id: str, settings: Set
             session,
             document_id=document.id,
             stage="email_extraction_completed",
-            metadata={"line_item_count": len(quotation.line_items), "model": settings.resolved_gemini_model},
+            metadata={"line_item_count": len(quotation.line_items), "model": settings.gemini_model},
         )
         session.commit()
-        return
-    if not settings.semantic_resolver_url:
-        extraction.status = "awaiting_model_configuration"
-        document.status = "needs_semantic_extraction"
-        _upsert_invocation(
-            session,
-            extraction,
-            provider="unconfigured",
-            model=settings.semantic_resolver_model,
-            status="awaiting_configuration",
-            duration_ms=int((time.perf_counter() - started) * 1000),
-            metadata={"source_type": "email"},
+        logger.info(
+            "[Email %s] Extraction COMPLETED -> %d line items, status=pending_review",
+            document.id[:8],
+            len(quotation.line_items),
         )
-        record_event(session, document_id=document.id, stage="email_extraction_awaiting_model_configuration")
-        session.commit()
         return
+    logger.warning("[Email %s] Gemini API key is not configured", document.id[:8])
+    extraction.status = "awaiting_model_configuration"
+    document.status = "needs_semantic_extraction"
     _upsert_invocation(
         session,
         extraction,
-        provider=provider_name(settings.semantic_resolver_url),
-        model=settings.semantic_resolver_model,
-        status="running",
-        duration_ms=None,
+        provider="unconfigured",
+        model=settings.gemini_model,
+        status="awaiting_configuration",
+        duration_ms=int((time.perf_counter() - started) * 1000),
         metadata={"source_type": "email"},
     )
+    record_event(session, document_id=document.id, stage="email_extraction_awaiting_model_configuration")
     session.commit()
-    record_event(session, document_id=document.id, stage="email_extraction_prepared")
-    record_event(session, document_id=document.id, stage="email_semantic_extraction_started")
-    session.commit()
-    try:
-        quotation = request_canonical_quotation(
-            settings.semantic_resolver_url,
-            operation="email_quotation_extraction",
-            prompt_version="email-extraction-v1",
-            context=safe_context,
-            token=settings.semantic_resolver_token,
-        )
-    except (HTTPError, URLError, TimeoutError, ValueError, json.JSONDecodeError):
-        extraction.status = "failed"
-        extraction.error_message = "resolver_request_failed"
-        document.status = "needs_semantic_extraction"
-        _upsert_invocation(
-            session,
-            extraction,
-            provider=provider_name(settings.semantic_resolver_url),
-            model=settings.semantic_resolver_model,
-            status="failed",
-            duration_ms=int((time.perf_counter() - started) * 1000),
-            metadata={"source_type": "email"},
-        )
-        record_event(session, document_id=document.id, stage="email_extraction_failed")
-        session.commit()
-        raise
-    record_event(session, document_id=document.id, stage="email_quotation_normalizing")
-    session.commit()
-    quotation = apply_commercial_rules(reconcile_email_price_uoms(quotation, safe_context.get("body_text", "")))
-    extraction.status = "completed"
-    extraction.error_message = None
-    extraction.result_json = quotation.model_dump_json()
-    document.status = "pending_review"
-    _upsert_quotation(session, document, quotation)
-    _upsert_invocation(
-        session,
-        extraction,
-        provider=provider_name(settings.semantic_resolver_url),
-        model=settings.semantic_resolver_model,
-        status="completed",
-        duration_ms=int((time.perf_counter() - started) * 1000),
-        metadata={"source_type": "email", "line_item_count": len(quotation.line_items)},
-    )
-    record_event(
-        session,
-        document_id=document.id,
-        stage="email_extraction_completed",
-        metadata={"line_item_count": len(quotation.line_items)},
-    )
-    session.commit()
-
-
-def run_email_extraction_job(
-    extraction_id: str,
-    database_url: str,
-    task_database_path: str,
-    resolver_url: str | None = None,
-    resolver_token: str | None = None,
-    resolver_model: str | None = None,
-) -> None:
-    settings = Settings(
-        database_url=database_url,
-        task_database_path=Path(task_database_path),
-        semantic_resolver_url=resolver_url,
-        semantic_resolver_token=resolver_token,
-        semantic_resolver_model=resolver_model,
-    )
-    engine = create_sqlite_engine(settings.database_url)
-    with sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)() as session:
-        consume_email_extraction(session, extraction_id, settings)
 
 
 def _cost_text(value: Any) -> str | None:
