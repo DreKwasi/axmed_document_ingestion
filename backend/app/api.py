@@ -9,14 +9,15 @@ from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Requ
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.application.documents import (
+from app.config import Config, get_config
+from app.database import create_sqlite_engine, run_migrations
+from app.documents import (
     ReviewValidationError,
     UploadValidationError,
     apply_review_action,
-    create_batch,
     delete_document,
     ingest_email,
     ingest_failed_document,
@@ -24,41 +25,24 @@ from app.application.documents import (
     ingest_json,
     ingest_pdf,
     reextract_json_document,
-    serialize_batch,
     serialize_document,
 )
-from app.application.evaluations import (
-    list_runs,
-    run_live_pdf_evaluation,
-    run_recorded_evaluation,
-    seed_evaluation_cases,
-)
-from app.application.processing_events import list_events_after, record_event, serialize_event
-from app.core.config import Config, get_config
-from app.core.logging import get_api_logger
-from app.domain.json_extraction import (
+from app.events import list_events_after, record_event, serialize_event
+from app.extraction.email_processing import consume_email_extraction
+from app.extraction.image_processing import consume_ocr
+from app.extraction.json import (
     ChainedJsonSemanticExtractor,
     JsonSemanticExtractor,
     LangChainJsonSemanticExtractor,
     RecordedJsonSemanticExtractor,
 )
-from app.infrastructure.database import create_sqlite_engine, run_migrations
-from app.infrastructure.models import (
-    BatchRecord,
-    DocumentRecord,
-    EvaluationCaseRecord,
-    EvaluationResultRecord,
-    ModelInvocationRecord,
-    ProcessingEventRecord,
-    QuotationRecord,
-)
-from app.workers.email_extraction import consume_email_extraction
-from app.workers.ocr import consume_ocr
-from app.workers.pdf_extraction import consume_pdf_extraction
+from app.extraction.pdf_processing import consume_pdf_extraction
+from app.logging import get_api_logger
+from app.models import DocumentRecord
 
 logger = get_api_logger()
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class ReviewPatch(BaseModel):
@@ -113,9 +97,6 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
         logger = get_api_logger()
         active_settings.upload_dir.mkdir(parents=True, exist_ok=True)
         run_migrations(active_settings.database_url, PROJECT_ROOT)
-        with session_factory() as session:
-            seed_evaluation_cases(session, active_settings.golden_dataset_path)
-
         logger.info("Axmed Document Intelligence API started")
         yield
 
@@ -240,7 +221,6 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
         session: Session,
         file: UploadFile,
         background_tasks: BackgroundTasks,
-        batch_id: str | None = None,
         isolate_failures: bool = False,
     ) -> dict[str, Any]:
         data = b""
@@ -255,7 +235,6 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
                     content_type=file.content_type,
                     data=data,
                     settings=active_settings,
-                    batch_id=batch_id,
                 )
             elif lower.endswith(".pdf"):
                 document = ingest_pdf(
@@ -264,7 +243,6 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
                     content_type=file.content_type,
                     data=data,
                     settings=active_settings,
-                    batch_id=batch_id,
                 )
             elif lower.endswith((".png", ".jpg", ".jpeg")):
                 document = ingest_image(
@@ -273,7 +251,6 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
                     content_type=file.content_type,
                     data=data,
                     settings=active_settings,
-                    batch_id=batch_id,
                 )
             elif lower.endswith(".json"):
                 document = ingest_json(
@@ -283,7 +260,6 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
                     data=data,
                     settings=active_settings,
                     extractor=extractor,
-                    batch_id=batch_id,
                 )
             else:
                 raise UploadValidationError(f"Unsupported file format: {filename}")
@@ -300,7 +276,6 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
                     content_type=file.content_type,
                     error_message=str(error),
                     settings=active_settings,
-                    batch_id=batch_id,
                 )
                 return serialize_document(session, failed_doc)
             raise HTTPException(status_code=422, detail=str(error)) from error
@@ -313,73 +288,35 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
                     content_type=file.content_type,
                     error_message=f"Processing failed: {error}",
                     settings=active_settings,
-                    batch_id=batch_id,
                 )
                 return serialize_document(session, failed_doc)
             raise
 
     @app.post("/api/v1/documents", status_code=201)
-    async def upload_document(
+    async def upload_documents(
         background_tasks: BackgroundTasks,
         session: SessionDep,
-        file: UploadFile = File(...),  # noqa: B008
-        batch_id: str | None = None,
+        files: list[UploadFile] = File(...),  # noqa: B008
     ):
-        return await _process_upload_file(session, file, background_tasks, batch_id=batch_id, isolate_failures=False)
+        if not files:
+            raise HTTPException(status_code=400, detail="At least one file is required.")
+        isolate_failures = len(files) > 1
+        logger.info("Document upload received: %d file(s)", len(files))
+        documents = [
+            await _process_upload_file(
+                session=session,
+                file=file,
+                background_tasks=background_tasks,
+                isolate_failures=isolate_failures,
+            )
+            for file in files
+        ]
+        return documents
 
     @app.get("/api/v1/documents")
     def list_documents(session: SessionDep):
         documents = session.scalars(select(DocumentRecord).order_by(DocumentRecord.created_at.desc())).all()
         return [serialize_document(session, document) for document in documents]
-
-    @app.get("/api/v1/review-queue")
-    def list_review_queue(session: SessionDep):
-        """Return every completed extraction awaiting mandatory human review."""
-
-        documents = session.scalars(
-            select(DocumentRecord)
-            .join(QuotationRecord, QuotationRecord.document_id == DocumentRecord.id)
-            .where(
-                QuotationRecord.review_status == "pending_review",
-            )
-            .order_by(DocumentRecord.created_at.desc())
-        ).all()
-        return [serialize_document(session, document) for document in documents]
-
-    @app.post("/api/v1/batches", status_code=201)
-    async def upload_batch(
-        background_tasks: BackgroundTasks,
-        session: SessionDep,
-        files: list[UploadFile] = File(...),  # noqa: B008
-        name: str | None = None,
-    ):
-        if not files:
-            raise HTTPException(status_code=400, detail="At least one file is required.")
-        filenames = [f.filename or "unknown" for f in files]
-        logger.info("Batch upload received: %d files %s (batch_name=%s)", len(files), filenames, name)
-        batch = create_batch(session, name=name)
-        for file in files:
-            await _process_upload_file(
-                session=session,
-                file=file,
-                background_tasks=background_tasks,
-                batch_id=batch.id,
-                isolate_failures=True,
-            )
-        logger.info("Batch upload complete: batch_id=%s, files_count=%d", batch.id[:8], len(files))
-        return serialize_batch(session, batch)
-
-    @app.get("/api/v1/batches")
-    def list_all_batches(session: SessionDep):
-        batches = session.scalars(select(BatchRecord).order_by(BatchRecord.created_at.desc())).all()
-        return [serialize_batch(session, b) for b in batches]
-
-    @app.get("/api/v1/batches/{batch_id}")
-    def get_single_batch(batch_id: str, session: SessionDep):
-        batch = session.get(BatchRecord, batch_id)
-        if batch is None:
-            raise HTTPException(status_code=404, detail="Batch not found.")
-        return serialize_batch(session, batch)
 
     @app.get("/api/v1/documents/{document_id}")
     def get_document(document_id: str, session: SessionDep):
@@ -461,7 +398,6 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
         document_id: str,
         action: str,
         command: ReviewCommand,
-        background_tasks: BackgroundTasks,
         session: SessionDep,
     ):
         if action not in {"correct", "approve", "reject"}:
@@ -482,85 +418,6 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
             raise HTTPException(status_code=422, detail=str(error)) from error
         except ValueError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
-
-    @app.get("/api/v1/evaluations")
-    def get_evaluations(session: SessionDep):
-        cases = list(session.scalars(select(EvaluationCaseRecord).where(EvaluationCaseRecord.active.is_(True))))
-        runs = list_runs(session)
-        return {
-            "cases": [{"id": case.id, "title": case.title, "rubric": json.loads(case.rubric_json)} for case in cases],
-            "runs": [
-                {
-                    "id": run.id,
-                    "status": run.status,
-                    "created_at": run.created_at,
-                    "execution_mode": run.execution_mode,
-                    "summary": json.loads(run.summary_json),
-                    "results": [
-                        {
-                            "case_id": result.case_id,
-                            "status": result.status,
-                            "scores": json.loads(result.scores_json),
-                            "errors": json.loads(result.error_analysis_json),
-                        }
-                        for result in session.scalars(
-                            select(EvaluationResultRecord).where(EvaluationResultRecord.run_id == run.id)
-                        )
-                    ],
-                }
-                for run in runs
-            ],
-        }
-
-    @app.get("/api/v1/diagnostics")
-    def get_diagnostics(session: SessionDep):
-        """Return local operational facts only; document content never belongs here."""
-
-        stage_counts = {
-            stage: count
-            for stage, count in session.execute(
-                select(ProcessingEventRecord.stage, func.count()).group_by(ProcessingEventRecord.stage)
-            )
-        }
-        invocations = list(
-            session.scalars(select(ModelInvocationRecord).order_by(ModelInvocationRecord.created_at.desc()).limit(50))
-        )
-        return {
-            "stage_counts": stage_counts,
-            "invocations": [
-                {
-                    "operation": invocation.operation,
-                    "provider": invocation.provider,
-                    "model": invocation.model,
-                    "status": invocation.status,
-                    "duration_ms": invocation.duration_ms,
-                    "input_tokens": invocation.input_tokens,
-                    "output_tokens": invocation.output_tokens,
-                    "estimated_cost_usd": invocation.estimated_cost_usd,
-                    "metadata": json.loads(invocation.safe_metadata_json),
-                    "created_at": invocation.created_at,
-                }
-                for invocation in invocations
-            ],
-        }
-
-    @app.post("/api/v1/evaluations/runs", status_code=201)
-    def run_evaluation(session: SessionDep):
-        if active_settings.gemini_api_key:
-            run = run_live_pdf_evaluation(
-                session,
-                project_root=PROJECT_ROOT,
-                golden_dataset_path=active_settings.golden_dataset_path,
-                settings=active_settings,
-            )
-        else:
-            run = run_recorded_evaluation(
-                session,
-                project_root=PROJECT_ROOT,
-                golden_dataset_path=active_settings.golden_dataset_path,
-                extractor=extractor,
-            )
-        return {"id": run.id, "status": run.status, "summary": json.loads(run.summary_json)}
 
     return app
 
