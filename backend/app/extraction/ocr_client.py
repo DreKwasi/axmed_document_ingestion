@@ -4,7 +4,7 @@ import base64
 import json
 from urllib.request import Request, urlopen
 
-from app.domain.ocr_contract import OcrResult
+from app.extraction.ocr_contract import OcrResult
 
 
 def request_ocr(
