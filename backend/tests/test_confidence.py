@@ -39,22 +39,21 @@ def test_complete_direct_extraction_is_auto_accepted_without_a_numeric_score():
     )
 
     assert result.system_decision == "auto_accepted"
-    assert (result.coverage_extracted, result.coverage_expected) == (7, 7)
     assert {field.band for field in result.fields.values()} == {"High"}
 
 
-def test_missing_required_quantity_routes_to_review_without_creating_low_confidence():
-    line_item = complete_line_item("ocr")
+def test_absent_quantity_is_not_a_confidence_issue_or_review_gate():
+    line_item = complete_line_item("direct_json")
     line_item.quantity.quoted_quantity = None
 
     result = assess_review_readiness(
-        CanonicalQuotation(line_items=[line_item]), ConfidenceSignals(source_type="image", ocr_used=True)
+        CanonicalQuotation(line_items=[line_item]), ConfidenceSignals(source_type="json")
     )
 
-    assert result.system_decision == "needs_review"
+    assert result.system_decision == "auto_accepted"
     assert "line_items[0].quantity.quoted_quantity" not in result.fields
-    assert any("Required commercial value is unavailable" in reason for reason in result.review_reasons)
-    assert result.fields["line_items[0].product.inn"].band == "Low"
+    assert not result.review_reasons
+    assert result.fields["line_items[0].product.inn[0]"].band == "High"
 
 
 def test_conflicting_critical_value_cannot_be_averaged_away():

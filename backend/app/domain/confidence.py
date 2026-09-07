@@ -12,15 +12,6 @@ from decimal import Decimal
 from app.domain.contracts import CanonicalQuotation, Evidence, LineItem
 
 STRONG_SOURCE_METHODS = {"human_corrected", "deterministic_mapping", "direct_json"}
-REQUIRED_COMMERCIAL_FIELD_SUFFIXES = (
-    "product.inn",
-    "product.strength",
-    "product.dosage_form",
-    "pricing.currency",
-    "pricing.quoted_price.amount",
-    "pricing.quoted_price.uom",
-    "quantity.quoted_quantity",
-)
 
 
 @dataclass(frozen=True)
@@ -41,8 +32,6 @@ class FieldConfidence:
 @dataclass(frozen=True)
 class ReviewAssessment:
     system_decision: str
-    coverage_extracted: int
-    coverage_expected: int
     fields: dict[str, FieldConfidence]
     review_reasons: tuple[str, ...]
 
@@ -53,7 +42,7 @@ def assess_review_readiness(quotation: CanonicalQuotation, signals: ConfidenceSi
     fields: dict[str, FieldConfidence] = {}
     review_reasons: list[str] = []
     if not quotation.line_items:
-        return ReviewAssessment("needs_review", 0, 0, fields, ("no_line_items",))
+        return ReviewAssessment("needs_review", fields, ("no_line_items",))
 
     issues = tuple(quotation.review_issues)
     quotation_evidence = {item.canonical_field: item for item in quotation.evidence}
@@ -81,23 +70,6 @@ def assess_review_readiness(quotation: CanonicalQuotation, signals: ConfidenceSi
             fields[field_path] = confidence
             if confidence.band == "Low":
                 review_reasons.append(f"{field_path}: {confidence.reason}")
-        for suffix in REQUIRED_COMMERCIAL_FIELD_SUFFIXES:
-            field_path = f"line_items[{index}].{suffix}"
-            value = _field_value(line_item, suffix)
-            if _is_missing(value):
-                review_reasons.append(f"{field_path}: Required commercial value is unavailable")
-                continue
-            confidence = _classify_extracted_field(
-                field_path,
-                _matching_evidence(suffix, line_evidence),
-                issues,
-                signals,
-                validation.get(suffix, "unavailable"),
-            )
-            fields[field_path] = confidence
-            if confidence.band == "Low":
-                review_reasons.append(f"{field_path}: {confidence.reason}")
-
     for issue in issues:
         if _is_meaningful_issue(issue.severity, issue.code):
             review_reasons.append(f"{issue.field_path}: {issue.code}")
@@ -107,12 +79,6 @@ def assess_review_readiness(quotation: CanonicalQuotation, signals: ConfidenceSi
     deduplicated_reasons = tuple(dict.fromkeys(review_reasons))
     return ReviewAssessment(
         system_decision="auto_accepted" if not deduplicated_reasons else "needs_review",
-        coverage_extracted=sum(
-            not _is_missing(_field_value(line_item, suffix))
-            for line_item in quotation.line_items
-            for suffix in REQUIRED_COMMERCIAL_FIELD_SUFFIXES
-        ),
-        coverage_expected=len(quotation.line_items) * len(REQUIRED_COMMERCIAL_FIELD_SUFFIXES),
         fields=fields,
         review_reasons=deduplicated_reasons,
     )
@@ -164,13 +130,6 @@ def _matching_evidence(field_path: str, evidence: dict[str, Evidence]) -> Eviden
         if field_path == path or field_path.startswith(f"{path}.") or field_path.startswith(f"{path}[")
     )
     return max(candidates, key=lambda candidate: len(candidate[0]), default=("", None))[1]
-
-
-def _field_value(line_item: LineItem, suffix: str):
-    current = line_item
-    for segment in suffix.split("."):
-        current = getattr(current, segment)
-    return current
 
 
 def _classify_extracted_field(
@@ -285,10 +244,6 @@ def _confidence(band: str, source: str, association: str, validation: str) -> Fi
         band,
         f"source evidence: {source}; association: {association}; independent validation: {validation}",
     )
-
-
-def _is_missing(value: object) -> bool:
-    return value is None or value == [] or value == ""
 
 
 def _evidence_score(evidence: Evidence) -> float:
