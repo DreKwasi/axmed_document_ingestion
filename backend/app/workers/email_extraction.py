@@ -81,6 +81,15 @@ def consume_email_extraction(session: Session, extraction_id: str, settings: Set
         session.commit()
         from app.domain.langchain_extractor import LangChainSemanticExtractor
 
+        record_event(
+            session,
+            document_id=document.id,
+            stage="email_extraction_prepared",
+            metadata={"context_characters": len(safe_context.get("body_text", ""))},
+        )
+        record_event(session, document_id=document.id, stage="email_semantic_extraction_started")
+        session.commit()
+
         try:
             extractor = LangChainSemanticExtractor(
                 api_key=settings.resolved_gemini_api_key,
@@ -103,6 +112,8 @@ def consume_email_extraction(session: Session, extraction_id: str, settings: Set
             record_event(session, document_id=document.id, stage="email_extraction_failed")
             session.commit()
             raise
+        record_event(session, document_id=document.id, stage="email_quotation_normalizing")
+        session.commit()
         quotation = apply_commercial_rules(quotation)
         extraction.status = "completed"
         extraction.error_message = None
@@ -152,6 +163,9 @@ def consume_email_extraction(session: Session, extraction_id: str, settings: Set
         metadata={"source_type": "email"},
     )
     session.commit()
+    record_event(session, document_id=document.id, stage="email_extraction_prepared")
+    record_event(session, document_id=document.id, stage="email_semantic_extraction_started")
+    session.commit()
     try:
         quotation = request_canonical_quotation(
             settings.semantic_resolver_url,
@@ -176,6 +190,8 @@ def consume_email_extraction(session: Session, extraction_id: str, settings: Set
         record_event(session, document_id=document.id, stage="email_extraction_failed")
         session.commit()
         raise
+    record_event(session, document_id=document.id, stage="email_quotation_normalizing")
+    session.commit()
     quotation = apply_commercial_rules(quotation)
     extraction.status = "completed"
     extraction.error_message = None
