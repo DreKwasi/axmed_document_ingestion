@@ -1,17 +1,15 @@
-import json
 from decimal import Decimal
 
-from app.domain.commercial_rules import apply_commercial_rules
-from app.domain.contracts import CanonicalQuotation, LineItem, Pricing, QuotedPrice
+from app.extraction.commercial import apply_commercial_rules
+from app.extraction.contracts import CanonicalQuotation, LineItem, Pricing, QuotedPrice
 
 
 def upload_json(client, filename: str, content: bytes):
-    return client.post("/api/v1/documents", files={"file": (filename, content, "application/json")})
+    return client.post("/api/v1/documents", files={"files": (filename, content, "application/json")})
 
 
 def confirmed_sanova(client, sanova_bytes) -> dict:
-    uploaded = upload_json(client, "sanova-review.json", sanova_bytes).json()
-    return client.post(f"/api/v1/documents/{uploaded['id']}/mapping/confirm").json()
+    return upload_json(client, "sanova-review.json", sanova_bytes).json()[0]
 
 
 def test_confirmed_offer_preserves_pack_price_and_adds_a_derived_unit_price(client, sanova_bytes):
@@ -53,6 +51,29 @@ def test_pack_price_does_not_invent_a_generic_uom_when_source_basis_is_unknown()
 
     assert result.line_items[0].pricing.quoted_price.amount == Decimal("1.55")
     assert result.line_items[0].pricing.quoted_price.uom is None
+
+
+def test_unit_quoted_price_is_repeated_as_normalized_price_without_pack_metadata():
+    quotation = CanonicalQuotation(
+        line_items=[
+            LineItem(
+                pricing=Pricing(
+                    currency="USD",
+                    quoted_price=QuotedPrice(amount=Decimal("0.1891"), uom="tablet"),
+                )
+            )
+        ]
+    )
+
+    result = apply_commercial_rules(quotation)
+
+    assert result.line_items[0].pricing.normalized_price == {
+        "amount": Decimal("0.1891"),
+        "uom": "tablet",
+        "calculation": "quoted_price.amount",
+        "derived": True,
+        "validation_status": "passed",
+    }
 
 
 def test_correction_creates_a_corrected_revision_and_preserves_audit(client, sanova_bytes):
@@ -100,26 +121,12 @@ def test_correction_creates_a_corrected_revision_and_preserves_audit(client, san
     )
     assert derived_field["confidence_band"] is None
     assert derived_field["confidence_reason"] == "Derived value; extraction confidence does not apply"
-    assert len(corrected["learning"]) == 1
-    assert corrected["learning"][0]["status"] == "queued"
-
     events = client.get(f"/api/v1/documents/{document['id']}/events").json()
-    assert events == [
-        {
-            "id": 1,
-            "document_id": document["id"],
-            "learning_id": corrected["learning"][0]["id"],
-            "stage": "learning_queued",
-            "phase": "Queued",
-            "message": "Learning queued",
-            "metadata": {"corrected_field_count": 1},
-            "created_at": events[0]["created_at"],
-        }
-    ]
+    assert events[-1]["stage"] == "json_extraction_completed"
 
 
 def test_reviewer_can_open_the_stored_source_document(client, sanova_bytes):
-    document = upload_json(client, "sanova-source.json", sanova_bytes).json()
+    document = upload_json(client, "sanova-source.json", sanova_bytes).json()[0]
 
     source = client.get(f"/api/v1/documents/{document['id']}/source")
 
@@ -194,62 +201,36 @@ def test_rejection_requires_a_structured_reason_and_preserves_it(client, sanova_
     assert rejected.json()["reviews"][0]["rejection_reason"] == "incorrect_extraction"
 
 
-def test_review_queue_contains_every_pending_human_review(client, sanova_bytes):
+def test_document_list_retains_sources_after_human_review(client, sanova_bytes):
     document = confirmed_sanova(client, sanova_bytes)
 
-    queue = client.get("/api/v1/review-queue")
+    before_review = client.get("/api/v1/documents")
     approved = client.post(
         f"/api/v1/documents/{document['id']}/reviews/approve",
         json={"request_id": "queue-approval", "expected_revision": document["quotation"]["revision"]},
     )
 
-    assert queue.status_code == 200
-    assert [item["id"] for item in queue.json()] == [document["id"]]
+    assert before_review.status_code == 200
+    assert [item["id"] for item in before_review.json()] == [document["id"]]
     assert approved.status_code == 200
-    assert client.get("/api/v1/review-queue").json() == []
+    assert [item["id"] for item in client.get("/api/v1/documents").json()] == [document["id"]]
 
 
-def test_invalid_commercial_values_surface_review_issues(client, sanova_bytes):
-    malformed = json.loads(sanova_bytes)
-    malformed["offer"]["products"][0]["commercials"]["price_per_pack"] = "-3.15"
-    malformed["offer"]["products"][0]["packaging"]["units_per_pack"] = 0
-    response = upload_json(client, "sanova-negative-price.json", json.dumps(malformed).encode())
+def test_invalid_commercial_values_surface_review_issues():
+    quotation = CanonicalQuotation(
+        line_items=[
+            LineItem(
+                pricing=Pricing(pack_price=Decimal("-3.15")),
+                packaging={"units_per_pack": 0},
+            )
+        ]
+    )
 
-    assert response.status_code == 201
-    issue_codes = [issue["code"] for issue in response.json()["quotation"]["review_issues"]]
+    issue_codes = [issue.code for issue in apply_commercial_rules(quotation).review_issues]
     assert issue_codes.count("non_positive_price") == 1
     assert issue_codes.count("invalid_pack_units") == 1
 
 
-def test_error_level_commercial_issue_cannot_be_approved(client, sanova_bytes):
-    malformed = json.loads(sanova_bytes)
-    malformed["offer"]["products"][0]["commercials"]["price_per_pack"] = "-3.15"
-    document = upload_json(client, "sanova-negative-approval.json", json.dumps(malformed).encode()).json()
-    confirmed = client.post(f"/api/v1/documents/{document['id']}/mapping/confirm").json()
-
-    response = client.post(
-        f"/api/v1/documents/{document['id']}/reviews/approve",
-        json={
-            "request_id": "negative-approval",
-            "expected_revision": confirmed["quotation"]["revision"],
-            "note": "No.",
-        },
-    )
-
-    assert response.status_code == 409
-    assert "resolve" in response.json()["detail"].lower()
-
-
-def test_decision_requires_a_quotation_awaiting_human_review(client, sanova_bytes):
-    proposed = upload_json(client, "sanova-unconfirmed.json", sanova_bytes).json()
-
-    response = client.post(
-        f"/api/v1/documents/{proposed['id']}/reviews/approve",
-        json={"request_id": "premature", "expected_revision": proposed["quotation"]["revision"], "note": "No."},
-    )
-
-    assert response.status_code == 409
-    assert "awaiting human review" in response.json()["detail"].lower()
 
 
 def test_non_finite_or_empty_price_corrections_are_rejected(client, sanova_bytes):

@@ -3,20 +3,20 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.application import create_app
-from app.core.settings import Settings
+from app.api import create_app
+from app.config import Config
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture
 def client(tmp_path: Path):
-    settings = Settings(
+    settings = Config(
         database_url=f"sqlite:///{tmp_path / 'app.db'}",
         upload_dir=tmp_path / "uploads",
-        recorded_mapping_dir=PROJECT_ROOT / "backend/evals/recorded_mappings",
+        recorded_json_extraction_dir=PROJECT_ROOT / "backend/evals/recorded_json_extractions",
         golden_dataset_path=PROJECT_ROOT / "backend/evals/golden_dataset.json",
-        background_job_dispatch_enabled=False,
+        background_processing_enabled=False,
     )
     with TestClient(create_app(settings)) as test_client:
         yield test_client
@@ -24,13 +24,12 @@ def client(tmp_path: Path):
 
 @pytest.fixture
 def client_settings(tmp_path: Path):
-    settings = Settings(
+    settings = Config(
         database_url=f"sqlite:///{tmp_path / 'app.db'}",
-        task_database_path=tmp_path / "tasks.db",
         upload_dir=tmp_path / "uploads",
-        recorded_mapping_dir=PROJECT_ROOT / "backend/evals/recorded_mappings",
+        recorded_json_extraction_dir=PROJECT_ROOT / "backend/evals/recorded_json_extractions",
         golden_dataset_path=PROJECT_ROOT / "backend/evals/golden_dataset.json",
-        background_job_dispatch_enabled=False,
+        background_processing_enabled=False,
     )
     with TestClient(create_app(settings)) as test_client:
         yield test_client, settings
