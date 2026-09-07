@@ -113,14 +113,14 @@ def test_correction_creates_a_corrected_revision_and_preserves_audit(client, san
     )
     assert corrected_field["value"] == "4.00"
     assert corrected_field["review_status"] == "corrected"
-    assert float(corrected_field["confidence"]) == 1.0
+    assert float(corrected_field["source_evidence_score"]) == 1.0
     derived_field = next(
         field
         for field in corrected["quotation"]["field_reviews"]
         if field["field_path"] == "line_items[0].pricing.normalized_price.amount"
     )
-    assert derived_field["confidence_band"] is None
-    assert derived_field["confidence_reason"] == "Derived value; extraction confidence does not apply"
+    assert derived_field["mapping_confidence_band"] is None
+    assert derived_field["mapping_confidence_reason"] == "Derived value; mapping confidence does not apply"
     events = client.get(f"/api/v1/documents/{document['id']}/events").json()
     assert events[-1]["stage"] == "json_extraction_completed"
 
@@ -276,6 +276,21 @@ def test_correction_registry_rejects_unknown_canonical_fields(client, sanova_byt
             "request_id": "unsupported-field",
             "expected_revision": document["quotation"]["revision"],
             "patches": [{"path": "line_items.0.pricing.normalized_price", "value": "1"}],
+        },
+    )
+
+    assert response.status_code == 422
+    assert "not supported" in response.json()["detail"]
+
+
+def test_correction_registry_rejects_unknown_line_item_fields(client, sanova_bytes):
+    document = confirmed_sanova(client, sanova_bytes)
+    response = client.post(
+        f"/api/v1/documents/{document['id']}/reviews/correct",
+        json={
+            "request_id": "unsupported-line-item-field",
+            "expected_revision": document["quotation"]["revision"],
+            "patches": [{"path": "line_items.0.product.not_a_real_field", "value": "x"}],
         },
     )
 

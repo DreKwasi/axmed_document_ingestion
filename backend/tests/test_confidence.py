@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from app.extraction.confidence import ConfidenceSignals, assess_review_readiness, field_confidence_for_path
+from app.extraction.confidence import ConfidenceSignals, assess_extraction_confidence, assess_mapping_confidence
 from app.extraction.contracts import (
     CanonicalQuotation,
     Evidence,
@@ -10,194 +10,122 @@ from app.extraction.contracts import (
     Quantity,
     QuotedPrice,
     ReviewIssue,
-    Strength,
 )
 
 
-def complete_line_item(method: str = "direct_json") -> LineItem:
+def line_item(method: str = "direct_json") -> LineItem:
     return LineItem(
-        product=Product(
-            inn=["amoxicillin"],
-            strength=[Strength(value=Decimal("500"), unit="mg")],
-            dosage_form="tablet",
-        ),
+        product=Product(inn=["amoxicillin"], dosage_form="tablet"),
         quantity=Quantity(quoted_quantity=Decimal("100")),
         pricing=Pricing(currency="USD", quoted_price=QuotedPrice(amount=Decimal("1.25"), uom="tablet")),
         evidence=[
-            Evidence(canonical_field=field, extraction_method=method, confidence=Decimal("0.01"))
-            for field in (
-                "product.inn", "product.strength", "product.dosage_form", "pricing.currency",
-                "quantity.quoted_quantity", "pricing.quoted_price.amount", "pricing.quoted_price.uom",
-            )
+            Evidence(
+                canonical_field="product.inn",
+                extraction_method=method,
+                source_path="$.items[0].inn",
+                confidence=Decimal("0.98"),
+            ),
+            Evidence(
+                canonical_field="quantity.quoted_quantity",
+                extraction_method=method,
+                source_path="$.items[0].quantity",
+                confidence=Decimal("0.98"),
+            ),
+            Evidence(
+                canonical_field="pricing.quoted_price.amount",
+                extraction_method=method,
+                source_path="$.items[0].price",
+                confidence=Decimal("0.98"),
+            ),
         ],
     )
 
 
-def test_complete_direct_extraction_still_enters_pending_human_review():
-    result = assess_review_readiness(
-        CanonicalQuotation(line_items=[complete_line_item()]), ConfidenceSignals(source_type="json")
+def test_clean_machine_readable_json_has_high_extraction_confidence():
+    result = assess_extraction_confidence(
+        ConfidenceSignals(source_type="json", parser_quality="good", evidence_scores=(0.98, 1.0))
     )
 
-    assert result.system_decision == "pending_review"
-    assert {field.band for field in result.fields.values()} == {"High"}
+    assert result.score == 100
+    assert result.band == "High"
+    assert [factor.weight for factor in result.factors] == [20, 30, 25, 15, 10]
 
 
-def test_absent_quantity_is_not_a_confidence_issue_or_review_gate():
-    line_item = complete_line_item("direct_json")
-    line_item.quantity.quoted_quantity = None
-
-    result = assess_review_readiness(
-        CanonicalQuotation(line_items=[line_item]), ConfidenceSignals(source_type="json")
+def test_clean_native_pdf_has_no_format_penalty():
+    result = assess_extraction_confidence(
+        ConfidenceSignals(source_type="pdf", parser_quality="good", evidence_scores=(1.0,))
     )
 
-    assert result.system_decision == "pending_review"
-    assert "line_items[0].quantity.quoted_quantity" not in result.fields
-    assert not result.review_reasons
-    assert result.fields["line_items[0].product.inn[0]"].band == "High"
+    assert result.score == 100
+    assert result.factors[0].reason == "The source format was accepted for extraction."
+    assert result.factors[1].reason == "The PDF supplied usable native text."
 
 
-def test_conflicting_critical_value_cannot_be_averaged_away():
+def test_no_extraction_result_has_no_confidence_to_report():
+    result = assess_extraction_confidence(
+        ConfidenceSignals(source_type="image", ocr_used=True, has_extracted_result=False)
+    )
+
+    assert result is None
+
+
+def test_ocr_and_poor_parser_reduce_extraction_confidence_without_changing_mapping():
+    extraction = assess_extraction_confidence(
+        ConfidenceSignals(
+            source_type="image", ocr_used=True, parser_quality="poor", evidence_scores=(0.55,), ocr_scores=(0.45,)
+        )
+    )
+    mapping = assess_mapping_confidence(CanonicalQuotation(line_items=[line_item()]))
+
+    assert extraction.band == "Low"
+    assert mapping.band in {"High", "Medium"}
+    assert not mapping.issues
+
+
+def test_conflicting_price_is_one_actionable_mapping_issue():
     quotation = CanonicalQuotation(
-        line_items=[complete_line_item()],
+        line_items=[line_item()],
         review_issues=[
             ReviewIssue(
                 field_path="line_items[0].pricing.quoted_price.amount",
                 code="conflicting_price",
-                message="Two values",
+                message="Quoted price conflicts with the source total.",
                 severity="warning",
             )
         ],
     )
 
-    result = assess_review_readiness(quotation, ConfidenceSignals(source_type="pdf"))
+    result = assess_mapping_confidence(quotation)
 
-    assert result.system_decision == "pending_review"
     assert result.fields["line_items[0].pricing.quoted_price.amount"].band == "Low"
+    assert [(issue.field_path, issue.code) for issue in result.issues] == [
+        ("line_items[0].pricing.quoted_price.amount", "conflicting_price")
+    ]
+    assert result.issues[0].section == "pricing"
 
 
-def test_missing_optional_schema_fields_do_not_route_a_complete_offer_to_review():
-    result = assess_review_readiness(
-        CanonicalQuotation(line_items=[complete_line_item()]), ConfidenceSignals(source_type="json")
-    )
+def test_direct_json_mapping_is_exact_when_source_key_matches_canonical_field():
+    result = assess_mapping_confidence(CanonicalQuotation(line_items=[line_item("direct_json")]))
 
-    assert result.system_decision == "pending_review"
-    assert all("minimum_order_quantity" not in reason for reason in result.review_reasons)
-
-
-def test_clean_native_pdf_without_leaf_provenance_is_medium_not_a_review_failure():
-    line_item = complete_line_item()
-    line_item.evidence = []
-
-    result = assess_review_readiness(
-        CanonicalQuotation(line_items=[line_item]), ConfidenceSignals(source_type="pdf")
-    )
-
-    assert result.system_decision == "pending_review"
-    assert {field.band for field in result.fields.values()} == {"Medium"}
-    assert not result.review_reasons
+    assert result.fields["line_items[0].product.inn[0]"].score == 100
+    assert "explicitly identifies" in result.fields["line_items[0].product.inn[0]"].reason
+    assert result.score == 100
+    assert result.band == "High"
 
 
-def test_clean_native_email_without_leaf_provenance_is_medium_not_a_review_failure():
-    line_item = complete_line_item()
-    line_item.evidence = []
-
-    result = assess_review_readiness(
-        CanonicalQuotation(line_items=[line_item]), ConfidenceSignals(source_type="email")
-    )
-
-    assert result.system_decision == "pending_review"
-    assert {field.band for field in result.fields.values()} == {"Medium"}
-    assert not result.review_reasons
-
-
-def test_clear_ocr_with_strong_row_association_is_high_confidence():
-    line_item = complete_line_item("ocr")
-    for evidence in line_item.evidence:
-        evidence.confidence = Decimal("0.95")
-        evidence.source_location = "page 1, table 1, row 2, matching column"
-
-    result = assess_review_readiness(
-        CanonicalQuotation(line_items=[line_item]), ConfidenceSignals(source_type="image", ocr_used=True)
-    )
-
-    assert {field.band for field in result.fields.values()} == {"High"}
-    assert result.system_decision == "pending_review"
-
-
-def test_imperfect_ocr_with_clear_association_is_medium_without_corroboration():
-    line_item = complete_line_item("ocr")
-    for evidence in line_item.evidence:
-        evidence.confidence = Decimal("0.80")
-        evidence.source_location = "page 1, table 1, row 2, matching column"
-
-    result = assess_review_readiness(
-        CanonicalQuotation(line_items=[line_item]), ConfidenceSignals(source_type="image", ocr_used=True)
-    )
-
-    assert result.fields["line_items[0].pricing.quoted_price.amount"].band == "Medium"
-    assert "independent validation: unavailable" in result.fields[
-        "line_items[0].pricing.quoted_price.amount"
-    ].reason
-
-
-def test_exact_commercial_arithmetic_strengthens_imperfect_ocr_to_high():
-    line_item = complete_line_item("ocr")
-    line_item.pricing.discount = Decimal("0")
-    line_item.pricing.extended_price = Decimal("125")
-    for evidence in line_item.evidence:
-        evidence.confidence = Decimal("0.80")
-        evidence.source_location = "page 1, table 1, row 2, matching column"
-
-    result = assess_review_readiness(
-        CanonicalQuotation(line_items=[line_item]), ConfidenceSignals(source_type="image", ocr_used=True)
-    )
-
-    price = result.fields["line_items[0].pricing.quoted_price.amount"]
-    assert price.band == "High"
-    assert "independent validation: passed" in price.reason
-
-
-def test_derived_value_has_no_extraction_confidence():
-    result = assess_review_readiness(
-        CanonicalQuotation(line_items=[complete_line_item()]), ConfidenceSignals(source_type="json")
-    )
-
-    assert field_confidence_for_path("line_items[0].pricing.normalized_price.amount", result) is None
-
-
-def test_commercial_arithmetic_conflict_forces_low_confidence():
-    line_item = complete_line_item("direct_json")
-    line_item.pricing.discount = Decimal("0")
-    line_item.pricing.extended_price = Decimal("999")
-
-    result = assess_review_readiness(
-        CanonicalQuotation(line_items=[line_item]), ConfidenceSignals(source_type="json")
-    )
-
-    price = result.fields["line_items[0].pricing.quoted_price.amount"]
-    assert price.band == "Low"
-    assert "independent validation: conflicting" in price.reason
-    assert result.system_decision == "pending_review"
-
-
-def test_every_extracted_source_field_receives_factorized_confidence():
-    line_item = complete_line_item("direct_json")
-    line_item.product.trade_name = "Amoxil"
-    line_item.evidence.append(
+def test_source_key_for_quantity_cannot_score_as_a_price_mapping():
+    item = line_item()
+    item.evidence = [
         Evidence(
-            canonical_field="product.trade_name",
+            canonical_field="pricing.quoted_price.amount",
             extraction_method="direct_json",
-            source_location="items[0].trade_name",
+            source_path="$.items[0].quantity",
             confidence=Decimal("1"),
         )
-    )
+    ]
 
-    result = assess_review_readiness(
-        CanonicalQuotation(line_items=[line_item]), ConfidenceSignals(source_type="json")
-    )
+    result = assess_mapping_confidence(CanonicalQuotation(line_items=[item]))
 
-    confidence = result.fields["line_items[0].product.trade_name"]
-    assert confidence.band == "High"
-    assert confidence.reason == (
-        "source evidence: strong; association: strong; independent validation: unavailable"
-    )
+    field = result.fields["line_items[0].pricing.quoted_price.amount"]
+    assert field.band == "Low"
+    assert result.issues[0].code == "uncertain_mapping"

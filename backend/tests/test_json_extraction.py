@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.api import create_app
 from app.config import Config
+from app.extraction.contracts import CanonicalQuotation, LineItem, Product
 from app.extraction.json import JsonExtractionProposal, JsonSemanticExtraction, JsonSourceFact
 
 
@@ -40,17 +41,20 @@ def test_nested_flat_and_mixed_sources_are_extracted_without_cross_document_memo
     mixed = {"offer": {"items": [{"product_name": "Mixed product", "commercial": {"price": 1.2}}]}}
     extractor = ScriptedExtractor(
         JsonSemanticExtraction(
+            quotation=CanonicalQuotation(line_items=[LineItem(product=Product(trade_name="Nested product"))]),
             source_facts=[
                 JsonSourceFact(label="Name", value="Nested product", source_path="$.quotation.products[0].name")
-            ]
+            ],
         ),
         JsonSemanticExtraction(
-            source_facts=[JsonSourceFact(label="Name", value="Flat product", source_path="$.item_name")]
+            quotation=CanonicalQuotation(line_items=[LineItem(product=Product(trade_name="Flat product"))]),
+            source_facts=[JsonSourceFact(label="Name", value="Flat product", source_path="$.item_name")],
         ),
         JsonSemanticExtraction(
+            quotation=CanonicalQuotation(line_items=[LineItem(product=Product(trade_name="Mixed product"))]),
             source_facts=[
                 JsonSourceFact(label="Name", value="Mixed product", source_path="$.offer.items[0].product_name")
-            ]
+            ],
         ),
     )
     settings = Config(database_url=f"sqlite:///{tmp_path / 'app.db'}", upload_dir=tmp_path / "uploads")
@@ -62,7 +66,7 @@ def test_nested_flat_and_mixed_sources_are_extracted_without_cross_document_memo
     assert extractor.calls == [None, None, None]
 
 
-def test_unmapped_fact_is_preserved_at_high_confidence_without_a_review_issue(tmp_path):
+def test_unmapped_fact_is_preserved_but_a_source_without_products_fails_gracefully(tmp_path):
     payload = {"order_info": {"minimum": "5,000 boxes"}}
     extraction = JsonSemanticExtraction(
         source_facts=[
@@ -80,9 +84,9 @@ def test_unmapped_fact_is_preserved_at_high_confidence_without_a_review_issue(tm
 
     assert response.status_code == 201
     document = response.json()[0]
-    assert document["status"] == "pending_review"
-    assert document["quotation"]["line_items"] == []
-    assert document["quotation"]["review_issues"] == []
+    assert document["status"] == "failed"
+    assert document["failure_reason"] == "No products could be extracted from this source."
+    assert document["quotation"] is None
     assert document["extracted_source_facts"] == [
         {
             "label": "Minimum order",
@@ -93,7 +97,7 @@ def test_unmapped_fact_is_preserved_at_high_confidence_without_a_review_issue(tm
             "confidence_reason": "Direct value verified against the JSON source.",
             "normalization_status": "unmapped",
             "canonical_field": None,
-            "review_status": "pending_review",
+            "review_status": "not_reviewable",
         }
     ]
 
@@ -114,8 +118,12 @@ def test_invalid_claim_is_retried_without_losing_another_valid_fact(tmp_path):
     with TestClient(create_app(settings, json_extractor=extractor)) as client:
         document = upload_json(client, payload).json()[0]
 
-    assert document["status"] == "pending_review"
+    assert document["status"] == "failed"
+    assert document["quotation"] is None
+    assert document["extraction_confidence"] is None
+    assert document["mapping_confidence"] is None
     assert {fact["label"] for fact in document["extracted_source_facts"]} == {"Reference", "Minimum order"}
+    assert {fact["review_status"] for fact in document["extracted_source_facts"]} == {"not_reviewable"}
     assert extractor.calls == [None, ["$.offer.missing"]]
 
 
@@ -138,7 +146,9 @@ def test_unpopulated_canonical_destination_is_preserved_as_unmapped(tmp_path):
     fact = document["extracted_source_facts"][0]
     assert fact["normalization_status"] == "unmapped"
     assert fact["canonical_field"] is None
-    assert document["quotation"]["review_issues"] == []
+    assert fact["review_status"] == "not_reviewable"
+    assert document["status"] == "failed"
+    assert document["quotation"] is None
 
 
 def test_source_fails_only_when_no_grounded_quotation_fact_can_be_recovered(tmp_path):

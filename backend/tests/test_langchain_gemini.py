@@ -1,5 +1,6 @@
 """Tests for LangChain + Gemini 3.1 Flash Lite semantic reasoning across all extraction sources."""
 
+import base64
 import json
 from decimal import Decimal
 from pathlib import Path
@@ -10,7 +11,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.config import Config
 from app.database import create_sqlite_engine, run_migrations
-from app.documents import ingest_email
+from app.documents import begin_image_extraction_review, ingest_email
 from app.extraction.contracts import (
     CanonicalQuotation,
     CommercialTerms,
@@ -34,6 +35,7 @@ from app.extraction.llm import (
 from app.models import (
     DocumentRecord,
     EmailExtractionRecord,
+    ImageExtractionAttemptRecord,
     ModelInvocationRecord,
     QuotationLineItemRecord,
     QuotationRecord,
@@ -43,18 +45,22 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 EMAIL_FIXTURE = PROJECT_ROOT / "backend/evals/fixtures/documents/RE_RFQ-2026-0244_Novara_quotation.eml"
 
 
-def test_product_dosage_form_uses_the_core_pharmaceutical_form():
+def test_product_dosage_form_preserves_the_complete_source_phrase():
     film_coated = LineItem(product={"dosage_form": "Film-coated tablet"})
-    assert film_coated.product.dosage_form == "tablet"
-    assert film_coated.packaging.presentation == "film-coated"
+    assert film_coated.product.dosage_form == "film-coated tablet"
+    assert film_coated.packaging.presentation is None
 
     chewable = LineItem(product={"dosage_form": "chewable tablet"})
-    assert chewable.product.dosage_form == "tablet"
-    assert chewable.packaging.presentation == "chewable"
+    assert chewable.product.dosage_form == "chewable tablet"
+    assert chewable.packaging.presentation is None
 
     oral_suspension = LineItem(product={"dosage_form": "Powder for oral suspension"})
-    assert oral_suspension.product.dosage_form == "suspension"
-    assert oral_suspension.packaging.presentation == "powder for oral"
+    assert oral_suspension.product.dosage_form == "powder for oral suspension"
+    assert oral_suspension.packaging.presentation is None
+
+    oxytocin = LineItem(product={"dosage_form": "Solution for injection"})
+    assert oxytocin.product.dosage_form == "solution for injection"
+    assert oxytocin.packaging.presentation is None
 
     assert Product(dosage_form="Syrup").dosage_form == "syrup"
 
@@ -63,9 +69,6 @@ def test_packaging_reads_explicit_quantity_without_relabeling_the_source_basis()
     line = LineItem(packaging={"description": "PVC/Alu blister, 1,000 tablets/pack"})
     assert line.packaging.units_per_pack == 1000
     assert line.packaging.unit_label == "tablet"
-
-    suspension = LineItem(packaging={"description": "250 mg/5 mL powder for oral suspension"})
-    assert suspension.packaging.presentation == "powder for oral"
 
     unchanged = LineItem(packaging={"description": "supplier box", "unit_label": "box"})
     assert unchanged.packaging.unit_label == "box"
@@ -156,6 +159,34 @@ def test_langchain_email_extraction_resolves_corrections_and_supersession():
     assert "shelf_life_months" in system_prompt
     assert "80 percent as 80, not 0.80" in system_prompt
     assert "extraction_method `llm_extraction`, never `manual`" in system_prompt
+
+
+def test_langchain_ocr_extraction_sends_original_image_with_transcription_aid():
+    extractor = LangChainSemanticExtractor(api_key="test-fake-key", model="gemini-3.1-flash-lite")
+    mock_quotation = CanonicalQuotation(
+        line_items=[LineItem(product=Product(trade_name="Visual product"))]
+    )
+    mock_llm_chain = MagicMock()
+    mock_llm_chain.invoke.return_value = mock_quotation
+    extractor._llm = MagicMock()
+    extractor._llm.with_structured_output.return_value = mock_llm_chain
+
+    extractor.extract_canonical_quotation(
+        {"pages": [{"page_number": 1, "text": "Product Price\nOxytocin USD 0.128"}]},
+        source_type="ocr",
+        source_media=b"original-image",
+        source_media_type="image/png",
+    )
+
+    messages = mock_llm_chain.invoke.call_args.args[0]
+    assert "transcription aid" in messages[0].content
+    assert "bounding box" not in messages[0].content.lower()
+    assert messages[1].content[0]["type"] == "text"
+    assert messages[1].content[1] == {
+        "type": "image",
+        "base64": base64.b64encode(b"original-image").decode("ascii"),
+        "mime_type": "image/png",
+    }
 
 
 def test_langchain_json_extraction_returns_source_grounded_facts():
@@ -410,32 +441,94 @@ def test_ocr_worker_executes_langchain_when_gemini_configured(tmp_path):
         ],
     )
 
-    mock_quotation = CanonicalQuotation(
+    ocr_quotation = CanonicalQuotation(
         document_type="scan_quotation",
         quotation_reference="Q-123",
         supplier=Supplier(name="Scanned Supplier"),
-        line_items=[],
+        line_items=[LineItem(product=Product(trade_name="OCR recovered product"))],
+    )
+    vision_quotation = CanonicalQuotation(
+        document_type="scan_quotation",
+        quotation_reference="Q-123",
+        supplier=Supplier(name="Scanned Supplier"),
+        line_items=[LineItem(product=Product(trade_name="Vision recovered product"))],
     )
 
     with patch("app.extraction.image_processing.request_ocr", return_value=mock_ocr_result):
         with patch("app.extraction.llm.LangChainSemanticExtractor.extract_canonical_quotation") as mock_ex:
-            mock_ex.return_value = (mock_quotation, {"duration_ms": 110, "model": "gemini-3.1-flash-lite"})
+            mock_ex.side_effect = [
+                (ocr_quotation, {"duration_ms": 110, "model": "gemini-3.1-flash-lite"}),
+                (vision_quotation, {"duration_ms": 120, "model": "gemini-3.1-flash-lite"}),
+            ]
             with session_factory() as session:
                 consume_ocr(session, job_id, settings)
 
+    ocr_context = mock_ex.call_args_list[0].args[0]
+    assert ocr_context == {
+        "pages": [{"page_number": 1, "text": "Quotation 123 Price 5.00 USD"}]
+    }
+    assert "bounds" not in json.dumps(ocr_context)
+    assert "confidence" not in json.dumps(ocr_context)
+    assert mock_ex.call_args_list[0].kwargs["source_type"] == "ocr"
+    assert mock_ex.call_args_list[0].kwargs["source_media"] is None
+    assert mock_ex.call_args_list[1].args[0] == {
+        "source": {"kind": "original_image", "media_type": "image/png"}
+    }
+    assert mock_ex.call_args_list[1].kwargs["source_type"] == "image_vision"
+    assert mock_ex.call_args_list[1].kwargs["source_media"] == b"fake-image-bytes"
+    assert mock_ex.call_args_list[1].kwargs["source_media_type"] == "image/png"
+
     with session_factory() as session:
         doc = session.get(DocumentRecord, doc_id)
+        stored_job = session.get(OcrJobRecord, job_id)
         assert doc.status == "pending_review"
-        assert doc.quotation is not None
-        invocation = session.scalar(
-            select(ModelInvocationRecord).where(
-                ModelInvocationRecord.document_id == doc.id,
-                ModelInvocationRecord.operation == "ocr_quotation_extraction",
+        assert doc.quotation is None
+        assert json.loads(stored_job.safe_result_json)["pages"][0]["lines"][0]["bounds"] == [
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [1.0, 1.0],
+            [0.0, 1.0],
+        ]
+        attempts = list(
+            session.scalars(
+                select(ImageExtractionAttemptRecord)
+                .where(ImageExtractionAttemptRecord.document_id == doc.id)
+                .order_by(ImageExtractionAttemptRecord.approach)
             )
         )
-        assert invocation is not None
-        assert invocation.provider == "google-gemini"
-        assert invocation.model == "gemini-3.1-flash-lite"
+        assert [attempt.approach for attempt in attempts] == [
+            "ocr_assisted",
+            "vision_direct",
+        ]
+        assert [json.loads(attempt.result_json)["line_items"][0]["product"]["trade_name"] for attempt in attempts] == [
+            "OCR recovered product",
+            "Vision recovered product",
+        ]
+        assert [
+            invocation.operation
+            for invocation in session.scalars(
+                select(ModelInvocationRecord)
+                .where(ModelInvocationRecord.document_id == doc.id)
+                .order_by(ModelInvocationRecord.operation)
+            )
+        ] == ["ocr_assisted_extraction", "vision_direct_extraction"]
+
+    with session_factory() as session:
+        reviewed = begin_image_extraction_review(session, doc_id, "ocr_assisted")
+        assert reviewed.status == "pending_review"
+        assert reviewed.quotation is not None
+        review_payload = json.loads(reviewed.quotation.payload_json)
+        assert review_payload["line_items"][0]["product"]["trade_name"] == "OCR recovered product"
+        attempts = list(
+            session.scalars(
+                select(ImageExtractionAttemptRecord)
+                .where(ImageExtractionAttemptRecord.document_id == doc_id)
+                .order_by(ImageExtractionAttemptRecord.approach)
+            )
+        )
+        assert len(attempts) == 2
+        vision_payload = json.loads(attempts[1].result_json)
+        assert vision_payload["line_items"][0]["product"]["trade_name"] == "Vision recovered product"
 
 
 def test_langchain_offline_fallback_when_unconfigured(tmp_path):
