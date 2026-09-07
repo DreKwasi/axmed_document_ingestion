@@ -60,6 +60,8 @@
         "unit_label": "packaging.unit_label",
         "packs_per_shipper": "packaging.packs_per_shipper",
         "pack_description": "packaging.pack_note",
+        "quoted_price_amount": "commercials.price_per_pack",
+        "quoted_price_uom": {"constant": "pack"},
         "pack_price": "commercials.price_per_pack",
         "minimum_order_quantity": "commercials.minimum_order_quantity_packs",
         "minimum_order_quantity_uom": {"constant": "pack"},
