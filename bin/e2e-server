@@ -16,7 +16,7 @@ web_pid=""
 trap cleanup EXIT INT TERM
 
 cd "$workspace_root"
-env PYTHONPATH=backend AXMED_DATABASE_URL="sqlite:///$runtime_dir/app.db" AXMED_TASK_DATABASE_PATH="$runtime_dir/tasks.db" AXMED_UPLOAD_DIR="$runtime_dir/uploads" AXMED_CORS_ORIGINS="http://127.0.0.1:15173" uv run --project backend uvicorn app.api.application:app --host 127.0.0.1 --port 18000 &
+(cd "$workspace_root/backend" && env AXMED_DATABASE_URL="sqlite:///$runtime_dir/app.db" AXMED_TASK_DATABASE_PATH="$runtime_dir/tasks.db" AXMED_UPLOAD_DIR="$runtime_dir/uploads" AXMED_CORS_ORIGINS="http://127.0.0.1:15173" uv run uvicorn main:app --host 127.0.0.1 --port 18000) &
 api_pid=$!
 for attempt in {1..60}; do
   curl -fsS http://127.0.0.1:18000/health >/dev/null && break
