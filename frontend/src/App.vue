@@ -2,17 +2,16 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
 import {
-  confirmMapping as apiConfirmMapping,
   deleteDocument as apiDeleteDocument,
   eventStreamUrl,
   fetchDocument,
   fetchDocuments,
   fetchEvents,
   reviewDocument,
-  uploadBatch,
-  uploadDocument,
+  reextractDocument,
+  uploadDocuments,
 } from "@/api";
-import type { BatchResponse, DocumentResponse, ProcessingEvent } from "@/types";
+import type { DocumentResponse, ProcessingEvent } from "@/types";
 
 import ProductDetailDrawer from "./components/ProductDetailDrawer.vue";
 import ProductTable from "./components/ProductTable.vue";
@@ -21,7 +20,6 @@ import SourceDetailHeader from "./components/SourceDetailHeader.vue";
 import SourceTable from "./components/SourceTable.vue";
 
 const documents = ref<DocumentResponse[]>([]);
-const activeBatch = ref<BatchResponse | null>(null);
 const selectedDocumentId = ref<string | null>(null);
 const selectedLineIndex = ref(0);
 const isDrawerOpen = ref(false);
@@ -66,9 +64,6 @@ async function removeDocument(document: DocumentResponse) {
   try {
     await apiDeleteDocument(document.id);
     documents.value = documents.value.filter((item) => item.id !== document.id);
-    if (activeBatch.value) {
-      activeBatch.value.documents = activeBatch.value.documents.filter((item) => item.id !== document.id);
-    }
     eventSources.get(document.id)?.close();
     eventSources.delete(document.id);
     delete extractionActivity.value[document.id];
@@ -106,11 +101,6 @@ function addActivity(documentId: string, event: ProcessingEvent) {
 
 function replaceDocument(nextDocument: DocumentResponse) {
   documents.value = documents.value.map((doc) => (doc.id === nextDocument.id ? nextDocument : doc));
-  if (activeBatch.value) {
-    activeBatch.value.documents = activeBatch.value.documents.map((doc) =>
-      doc.id === nextDocument.id ? nextDocument : doc
-    );
-  }
 }
 
 function watchDocument(documentId: string) {
@@ -138,17 +128,11 @@ async function chooseFile(event: Event) {
   busy.value = true;
   errorMessage.value = "";
   try {
-    if (files.length > 1) {
-      const batch = await uploadBatch(files);
-      activeBatch.value = batch;
-      documents.value = [...batch.documents, ...documents.value];
-      batch.documents.forEach((doc) => watchDocument(doc.id));
-    } else {
-      const doc = await uploadDocument(files[0]);
-      documents.value = [doc, ...documents.value.filter((d) => d.id !== doc.id)];
-      watchDocument(doc.id);
-      openDocument(doc);
-    }
+    const uploaded = await uploadDocuments(files);
+    const uploadedIds = new Set(uploaded.map((document) => document.id));
+    documents.value = [...uploaded, ...documents.value.filter((document) => !uploadedIds.has(document.id))];
+    uploaded.forEach((document) => watchDocument(document.id));
+    if (uploaded.length === 1) openDocument(uploaded[0]);
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : "Upload failed.";
   } finally {
@@ -157,15 +141,15 @@ async function chooseFile(event: Event) {
   }
 }
 
-async function confirm(document: DocumentResponse) {
+async function reextract(document: DocumentResponse) {
   busy.value = true;
   errorMessage.value = "";
   try {
-    const updated = await apiConfirmMapping(document.id);
+    const updated = await reextractDocument(document.id);
     replaceDocument(updated);
     isDrawerOpen.value = false;
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : "Confirmation failed.";
+    errorMessage.value = error instanceof Error ? error.message : "Re-extraction failed.";
   } finally {
     busy.value = false;
   }
@@ -319,7 +303,6 @@ onBeforeUnmount(() => eventSources.forEach((source) => source.close()));
         <!-- Uploaded Sources Table -->
         <SourceTable
           :documents="documents"
-          :active-batch="activeBatch"
           :busy="busy"
           @select="openDocument"
           @ingest="openIngest"
@@ -335,7 +318,7 @@ onBeforeUnmount(() => eventSources.forEach((source) => source.close()));
           :busy="busy"
           @back="closeDocument"
           @open-review="isReviewModalOpen = true"
-          @confirm-mapping="confirm(selectedDocument)"
+          @reextract="reextract(selectedDocument)"
         />
 
         <!-- Active Extraction Status (only shown while extraction is actively ongoing) -->

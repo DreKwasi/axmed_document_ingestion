@@ -60,29 +60,29 @@ export type Quotation = {
 
 export type DocumentResponse = {
   id: string;
-  batch_id?: string | null;
   filename: string;
   source_name?: string | null;
-  status: "needs_mapping_confirmation" | "needs_mapping_resolution" | "pending_review" | "approved" | "rejected" | "failed" | string;
+  status: "pending_extraction" | "pending_review" | "approved" | "rejected" | "failed" | string;
   failure_reason?: string | null;
   source_system?: string | null;
   schema_version?: string | null;
-  schema_fingerprint?: string | null;
-  semantic_mapping_calls: number;
-  mapping_source?: string | null;
   parsed_summary?: { subject?: string; message_id?: string | null; page_count?: number; needs_ocr_pages?: number[] } | null;
   system_decision?: "pending_review" | null;
   confidence_summary?: Record<"High" | "Medium" | "Low", number>;
   review_reasons?: string[];
   product_counts?: { extracted: number; failed: number };
   notes?: string[];
-  mapping?: {
-    id: string;
-    trust_state: string;
-    times_seen: number;
-    times_confirmed: number;
-    human_verified: boolean;
-  } | null;
+  extracted_source_facts?: Array<{
+    label: string;
+    value: unknown;
+    source_path: string;
+    extraction_method: string;
+    confidence: string;
+    confidence_reason?: string | null;
+    normalization_status: "mapped" | "unmapped" | string;
+    canonical_field?: string | null;
+    review_status: string;
+  }>;
   quotation?: Quotation | null;
   reviews: Array<{
     action: string;
@@ -92,50 +92,15 @@ export type DocumentResponse = {
     rejection_reason?: string | null;
     patches: Array<{ path: string; before?: string | null; after?: string | null }>;
   }>;
-  learning?: Array<{ id: string; review_id: string; status: string }>;
   ocr?: { id: string; status: string; selected_pages: number[] } | null;
 };
 
 export type ProcessingEvent = {
   id: number;
   document_id: string;
-  learning_id?: string | null;
   stage: string;
   phase: string;
   message: string;
   metadata: Record<string, unknown>;
   created_at?: string | null;
 };
-
-export type BatchResponse = {
-  id: string;
-  name: string;
-  created_at: string | null;
-  updated_at: string | null;
-  total_documents: number;
-  status_counts: Record<string, number>;
-  is_completed: boolean;
-  documents: DocumentResponse[];
-};
-
-export type EvaluationCase = {
-  id: string;
-  title: string;
-  rubric: Array<{ id: string; label: string; success_criterion: string }>;
-};
-
-export type EvaluationRun = {
-  id: string;
-  status: string;
-  execution_mode: string;
-  created_at: string;
-  summary: { case_count: number; passed: number; rubrics: EvaluationCase["rubric"] };
-  results: Array<{
-    case_id: string;
-    status: string;
-    scores: Record<string, number | string>;
-    errors: string[];
-  }>;
-};
-
-export type EvaluationsResponse = { cases: EvaluationCase[]; runs: EvaluationRun[] };

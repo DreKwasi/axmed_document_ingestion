@@ -1,4 +1,4 @@
-import type { BatchResponse, DocumentResponse, EvaluationsResponse, ProcessingEvent } from "@/types";
+import type { DocumentResponse, ProcessingEvent } from "@/types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
 
@@ -18,9 +18,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export function uploadDocument(file: File): Promise<DocumentResponse> {
+export function uploadDocuments(files: File[]): Promise<DocumentResponse[]> {
   const formData = new FormData();
-  formData.append("file", file);
+  files.forEach((file) => formData.append("files", file));
   return request("/api/v1/documents", { method: "POST", body: formData });
 }
 
@@ -32,21 +32,8 @@ export function deleteDocument(documentId: string): Promise<void> {
   return request(`/api/v1/documents/${documentId}`, { method: "DELETE" });
 }
 
-export function uploadBatch(files: File[], name?: string): Promise<BatchResponse> {
-  const formData = new FormData();
-  files.forEach((file) => formData.append("files", file));
-  if (name) {
-    formData.append("name", name);
-  }
-  return request("/api/v1/batches", { method: "POST", body: formData });
-}
-
-export function fetchBatch(batchId: string): Promise<BatchResponse> {
-  return request(`/api/v1/batches/${batchId}`);
-}
-
-export function confirmMapping(documentId: string): Promise<DocumentResponse> {
-  return request(`/api/v1/documents/${documentId}/mapping/confirm`, { method: "POST" });
+export function reextractDocument(documentId: string): Promise<DocumentResponse> {
+  return request(`/api/v1/documents/${documentId}/reextract`, { method: "POST" });
 }
 
 export function sourceDocumentUrl(documentId: string): string {
@@ -81,12 +68,4 @@ export function reviewDocument(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(command)
   });
-}
-
-export function fetchEvaluations(): Promise<EvaluationsResponse> {
-  return request("/api/v1/evaluations");
-}
-
-export function runEvaluation(): Promise<{ id: string; status: string }> {
-  return request("/api/v1/evaluations/runs", { method: "POST" });
 }

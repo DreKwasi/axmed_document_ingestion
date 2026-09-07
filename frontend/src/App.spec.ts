@@ -2,14 +2,13 @@ import { flushPromises, mount } from "@vue/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App.vue";
+import SourceDetailHeader from "./components/SourceDetailHeader.vue";
 
 const api = vi.hoisted(() => ({
   fetchDocuments: vi.fn(),
   deleteDocument: vi.fn(),
-  uploadDocument: vi.fn(),
-  uploadBatch: vi.fn(),
-  fetchBatch: vi.fn(),
-  confirmMapping: vi.fn(),
+  uploadDocuments: vi.fn(),
+  reextractDocument: vi.fn(),
   reviewDocument: vi.fn(),
   sourceDocumentUrl: vi.fn((documentId: string) => `/api/v1/documents/${documentId}/source`),
   eventStreamUrl: vi.fn((documentId: string) => `/api/v1/documents/${documentId}/events/stream`),
@@ -47,6 +46,26 @@ describe("App", () => {
     expect(api.fetchDocuments).toHaveBeenCalledOnce();
   });
 
+  it("explains a failed extraction instead of showing an unexplained needs-attention state", () => {
+    const wrapper = mount(SourceDetailHeader, {
+      props: {
+        busy: false,
+        document: {
+          id: "failed-mapping",
+          filename: "zenith.json",
+          status: "failed",
+          failure_reason: "No source-grounded quotation facts could be extracted from this JSON source.",
+          quotation: null,
+          reviews: [],
+        },
+      },
+    });
+
+    expect(wrapper.text()).toContain("Extraction failed");
+    expect(wrapper.text()).toContain("No source-grounded quotation facts could be extracted from this JSON source.");
+    expect(wrapper.text()).not.toContain("Needs attention");
+  });
+
   it("lists sources at a high level and opens a product breakdown with quoted quantity", async () => {
     api.fetchDocuments.mockResolvedValue([{
       id: "document-quantity",
@@ -54,7 +73,6 @@ describe("App", () => {
       source_name: "Farmaceutica Andina S.A.S. · FA-COT-2026-118",
       status: "pending_review",
       source_system: "pdf",
-      semantic_mapping_calls: 0,
       product_counts: { extracted: 1, failed: 0 },
       notes: ["Quantity extracted from the source table."],
       quotation: {
@@ -135,7 +153,6 @@ describe("App", () => {
       filename: "delete-me.pdf",
       source_name: "Supplier quotation",
       status: "pending_review",
-      semantic_mapping_calls: 0,
       quotation: null,
       reviews: [],
     }]);
@@ -154,45 +171,24 @@ describe("App", () => {
     expect(wrapper.text()).toContain("No sources yet.");
   });
 
-  it("shows the human mapping checkpoint for a newly observed schema and confirms it", async () => {
-    api.uploadDocument.mockResolvedValue({
-      id: "document-1",
-      filename: "sanova.json",
-      status: "needs_mapping_confirmation",
-      source_system: "SanovaERP",
-      schema_version: "2.4.1",
-      semantic_mapping_calls: 1,
-      mapping: { id: "mapping-1", trust_state: "proposed", times_seen: 1, times_confirmed: 0, human_verified: false },
-      quotation: { line_items: [], supplier: {}, commercial_terms: {}, revision: 1, system_decision: "pending_review", review_status: "pending_review", review_issues: [] },
-      reviews: []
+  it("offers explicit JSON re-extraction after a failed extraction", async () => {
+    const wrapper = mount(SourceDetailHeader, {
+      props: {
+        busy: false,
+        document: {
+          id: "document-1",
+          filename: "sanova.json",
+          status: "failed",
+          failure_reason: "No source-grounded quotation facts could be extracted from this JSON source.",
+          quotation: null,
+          reviews: []
+        }
+      }
     });
-    api.confirmMapping.mockResolvedValue({
-      id: "document-1",
-      filename: "sanova.json",
-      status: "pending_review",
-      source_system: "SanovaERP",
-      schema_version: "2.4.1",
-      semantic_mapping_calls: 1,
-      mapping: { id: "mapping-1", trust_state: "trusted", times_seen: 1, times_confirmed: 1, human_verified: true },
-      quotation: { line_items: [], supplier: {}, commercial_terms: {}, revision: 2, system_decision: "pending_review", review_status: "pending_review", review_issues: [] },
-      reviews: []
-    });
-    const wrapper = mount(App);
-    await flushPromises();
 
-    const input = wrapper.get('input[type="file"]');
-    Object.defineProperty(input.element, "files", {
-      value: [new File(["{}"], "sanova.json", { type: "application/json" })]
-    });
-    await input.trigger("change");
-    await flushPromises();
-
-    expect(wrapper.text()).toContain("New source structure detected");
-    expect(wrapper.text()).toContain("Confidence pending");
-    await wrapper.findAll("button").find((button) => button.text() === "Confirm mapping")?.trigger("click");
-    await flushPromises();
-    expect(api.confirmMapping).toHaveBeenCalledWith("document-1");
-    expect(wrapper.text()).toContain("Review");
+    await wrapper.get("button").trigger("click");
+    expect(wrapper.emitted("reextract")).toHaveLength(1);
+    expect(wrapper.text()).not.toContain("Confirm mapping");
   });
 
   it("keeps a line correction with its quoted value in the output table", async () => {
@@ -202,7 +198,6 @@ describe("App", () => {
       status: "pending_review",
       source_system: "SupplierERP",
       schema_version: "1",
-      semantic_mapping_calls: 0,
       quotation: {
         line_items: [
           {
@@ -234,7 +229,7 @@ describe("App", () => {
       },
       reviews: []
     };
-    api.uploadDocument.mockResolvedValue(document);
+    api.uploadDocuments.mockResolvedValue([document]);
     api.reviewDocument.mockResolvedValue(document);
     const wrapper = mount(App);
     await flushPromises();
@@ -278,34 +273,23 @@ describe("App", () => {
     );
   });
 
-  it("retains every selected file when multiple files are chosen together as a batch", async () => {
-    api.uploadBatch.mockResolvedValue({
-      id: "batch-1",
-      name: "Batch 1",
-      created_at: "2026-09-06T15:00:00Z",
-      updated_at: "2026-09-06T15:00:00Z",
-      total_documents: 2,
-      status_counts: { needs_mapping_confirmation: 2 },
-      is_completed: false,
-      documents: [
-        {
-          id: "first",
-          filename: "first.json",
-          status: "needs_mapping_confirmation",
-          semantic_mapping_calls: 1,
-          quotation: null,
-          reviews: []
-        },
-        {
-          id: "second",
-          filename: "second.json",
-          status: "needs_mapping_confirmation",
-          semantic_mapping_calls: 1,
-          quotation: null,
-          reviews: []
-        }
-      ]
-    });
+  it("retains every selected file when multiple files are uploaded together", async () => {
+    api.uploadDocuments.mockResolvedValue([
+      {
+        id: "first",
+        filename: "first.json",
+        status: "pending_extraction",
+        quotation: null,
+        reviews: []
+      },
+      {
+        id: "second",
+        filename: "second.json",
+        status: "pending_extraction",
+        quotation: null,
+        reviews: []
+      }
+    ]);
     const wrapper = mount(App);
     await flushPromises();
 
@@ -319,50 +303,38 @@ describe("App", () => {
     await file.trigger("change");
     await flushPromises();
 
-    expect(api.uploadBatch).toHaveBeenCalledOnce();
-    expect(wrapper.text()).toContain("Batch: 2 sources");
+    expect(api.uploadDocuments).toHaveBeenCalledOnce();
     expect(wrapper.text()).toContain("First");
     expect(wrapper.text()).toContain("Second");
     expect(wrapper.findAll("a").filter((link) => link.text() === "Download file")).toHaveLength(2);
   });
 
-  it("displays isolated failures in batch upload cleanly", async () => {
-    api.uploadBatch.mockResolvedValue({
-      id: "batch-err",
-      name: "Batch Err",
-      created_at: "2026-09-06T15:00:00Z",
-      updated_at: "2026-09-06T15:00:00Z",
-      total_documents: 2,
-      status_counts: { pending_review: 1, failed: 1 },
-      is_completed: true,
-      documents: [
-        {
-          id: "valid-doc",
-          filename: "valid.json",
-          status: "pending_review",
-          semantic_mapping_calls: 0,
-          quotation: {
-            quotation_reference: "REF-1",
-            supplier: { name: "Supplier A" },
-            commercial_terms: {},
-            line_items: [],
-            revision: 1,
-            review_status: "pending_review",
-            review_issues: []
-          },
-          reviews: []
+  it("displays isolated failures from a multi-file upload cleanly", async () => {
+    api.uploadDocuments.mockResolvedValue([
+      {
+        id: "valid-doc",
+        filename: "valid.json",
+        status: "pending_review",
+        quotation: {
+          quotation_reference: "REF-1",
+          supplier: { name: "Supplier A" },
+          commercial_terms: {},
+          line_items: [],
+          revision: 1,
+          review_status: "pending_review",
+          review_issues: []
         },
-        {
-          id: "bad-doc",
-          filename: "corrupt.json",
-          status: "failed",
-          failure_reason: "The uploaded JSON is invalid.",
-          semantic_mapping_calls: 0,
-          quotation: null,
-          reviews: []
-        }
-      ]
-    });
+        reviews: []
+      },
+      {
+        id: "bad-doc",
+        filename: "corrupt.json",
+        status: "failed",
+        failure_reason: "The uploaded JSON is invalid.",
+        quotation: null,
+        reviews: []
+      }
+    ]);
     const wrapper = mount(App);
     await flushPromises();
 
@@ -376,7 +348,6 @@ describe("App", () => {
     await file.trigger("change");
     await flushPromises();
 
-    expect(wrapper.text()).toContain("Batch: 2 sources");
     expect(wrapper.text()).toContain("Corrupt");
     expect(wrapper.text()).toContain("Supplier A · REF-1");
   });
@@ -403,12 +374,11 @@ describe("App", () => {
     const uploaded = {
       id: "document-events",
       filename: "events.json",
-      status: "needs_mapping_confirmation",
-      semantic_mapping_calls: 1,
+      status: "pending_extraction",
       quotation: null,
       reviews: []
     };
-    api.uploadDocument.mockResolvedValue(uploaded);
+    api.uploadDocuments.mockResolvedValue([uploaded]);
     api.fetchDocument.mockResolvedValue({ ...uploaded, status: "pending_review" });
     const wrapper = mount(App);
     await flushPromises();
@@ -560,7 +530,14 @@ describe("App", () => {
         revision: 1,
         system_decision: "pending_review",
         review_status: "pending_review",
-        review_issues: [],
+        review_issues: [
+          {
+            field_path: "line_items[1].product.inn",
+            code: "unverified_source",
+            message: "Active ingredient requires confirmation",
+            severity: "warning"
+          }
+        ],
         field_reviews: [
           {
             field_path: "line_items[1].product.inn",
@@ -570,7 +547,7 @@ describe("App", () => {
         ]
       },
       confidence_summary: { High: 6, Medium: 4, Low: 2 },
-      review_reasons: ["line_items[1].product.inn: source evidence: weak; association: limited; independent validation: unavailable"],
+      review_reasons: ["line_items[1].product.inn: Active ingredient requires confirmation"],
       reviews: []
     };
     api.fetchDocuments.mockResolvedValue([document]);
@@ -588,7 +565,7 @@ describe("App", () => {
     expect(wrapper.text()).toContain("LowerConfidenceItem");
     expect(wrapper.text()).toContain("Confidence");
     expect(wrapper.text()).toContain("Review issues");
-    expect(wrapper.text()).toContain("Product / INN: source evidence: weak");
+    expect(wrapper.text()).toContain("Active ingredient requires confirmation");
     expect(wrapper.text()).toContain("Low");
 
     // Click first product row to open drawer
