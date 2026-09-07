@@ -381,6 +381,37 @@ describe("App", () => {
     expect(api.fetchEvents).toHaveBeenCalledWith("document-events");
     expect(api.fetchDocument).toHaveBeenCalledWith("document-events");
     expect(wrapper.text()).toContain("Preparing quotation pages.");
+    // Does not render a multi-event list card
+    expect(wrapper.text()).not.toContain("Extraction activity");
+
+    // Second ongoing event: dynamically updates to single active state
+    handlers.get("processing")?.({
+      data: JSON.stringify({
+        id: 2,
+        document_id: "document-events",
+        stage: "pdf_semantic_extraction_started",
+        phase: "In progress",
+        message: "Identifying supplier, products, quantities, and prices.",
+        metadata: {}
+      })
+    } as MessageEvent<string>);
+    await flushPromises();
+    expect(wrapper.text()).toContain("Identifying supplier, products, quantities, and prices.");
+
+    // Final event: completion dismisses the extraction status indicator completely
+    handlers.get("processing")?.({
+      data: JSON.stringify({
+        id: 3,
+        document_id: "document-events",
+        stage: "pdf_extraction_completed",
+        phase: "Complete",
+        message: "Supplier PDF extraction completed.",
+        metadata: {}
+      })
+    } as MessageEvent<string>);
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("Identifying supplier, products, quantities, and prices.");
+    expect(wrapper.text()).not.toContain("Extraction activity");
   });
 
   it("opens the review dialog and records an approval with an optional reviewer note", async () => {
@@ -452,7 +483,7 @@ describe("App", () => {
     );
   });
 
-  it("displays per-row reliability and opens the product details drawer when a product row is clicked", async () => {
+  it("displays confidence and identifies missing critical fields as review issues", async () => {
     const document = {
       id: "document-multi-line",
       filename: "quotation.pdf",
@@ -485,15 +516,25 @@ describe("App", () => {
         revision: 1,
         system_decision: "needs_review",
         review_status: "unreviewed",
-        review_issues: []
+        review_issues: [],
+        field_reviews: [
+          {
+            field_path: "line_items[1].product.inn",
+            confidence_band: "Low",
+            confidence_reason: "Low-confidence OCR evidence"
+          }
+        ]
       },
       extraction_coverage: { extracted: 12, expected: 12 },
-      reliability_summary: { High: 6, Medium: 4, Low: 2, "Not extracted": 0 },
+      confidence_summary: { High: 6, Medium: 4, Low: 2 },
+      review_reasons: ["line_items[1].product.strength: Required commercial value is unavailable"],
       reviews: []
     };
     api.fetchDocuments.mockResolvedValue([document]);
     const wrapper = mount(App);
     await flushPromises();
+
+    expect(wrapper.text()).toContain("key fields available");
 
     // Open the source
     await wrapper.get("button.group").trigger("click");
@@ -502,16 +543,22 @@ describe("App", () => {
     // Check product breakdown contains both products
     expect(wrapper.text()).toContain("HighConfidenceItem");
     expect(wrapper.text()).toContain("LowerConfidenceItem");
+    expect(wrapper.text()).toContain("Confidence");
+    expect(wrapper.text()).toContain("Review issues");
+    expect(wrapper.text()).toContain("Strength: Required commercial value is unavailable");
+    expect(wrapper.text()).toContain("Low");
 
-    // A row uses persisted reliability, never an averaged confidence percentage.
-    expect(wrapper.text()).toContain("Reliability");
+    // Click first product row to open drawer
+    const rows = wrapper.findAll("tbody tr");
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+    await rows[0].trigger("click");
+    await flushPromises();
 
-    // Verify first line is selected in drawer
+    // Drawer is now open with Field Evidence & Provenance and first line details
+    expect(wrapper.text()).toContain("Field Evidence & Provenance");
     expect(wrapper.text()).toContain("Substance A");
 
     // Click second product row
-    const rows = wrapper.findAll("tbody tr");
-    expect(rows.length).toBeGreaterThanOrEqual(2);
     await rows[1].trigger("click");
     await flushPromises();
 

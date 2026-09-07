@@ -210,8 +210,26 @@ async function handleReject(payload: { reason: string; note?: string }) {
   }
 }
 
-function activityFor(documentId: string) {
-  return extractionActivity.value[documentId] ?? [];
+
+function currentExtractionEvent(doc: DocumentResponse | null): ProcessingEvent | null {
+  if (!doc) return null;
+  const events = extractionActivity.value[doc.id] ?? [];
+  return events.length ? events[events.length - 1] : null;
+}
+
+function isExtractionOngoing(doc: DocumentResponse | null): boolean {
+  if (!doc) return false;
+  const latest = currentExtractionEvent(doc);
+  if (latest) {
+    const phaseLower = (latest.phase || "").toLowerCase();
+    const stageLower = (latest.stage || "").toLowerCase();
+    if (phaseLower === "complete" || stageLower.endsWith("_completed")) return false;
+    if (phaseLower === "needs attention" || stageLower.endsWith("_failed")) return false;
+    return true;
+  }
+  if (["failed", "rejected"].includes(doc.status)) return false;
+  if (["processing", "queued", "needs_semantic_extraction"].includes(doc.status)) return true;
+  return false;
 }
 
 onMounted(() => loadDocuments().catch(() => undefined));
@@ -295,31 +313,31 @@ onBeforeUnmount(() => eventSources.forEach((source) => source.close()));
           @confirm-mapping="confirm(selectedDocument)"
         />
 
-        <!-- Extraction Activity / Timeline (shown if events exist) -->
+        <!-- Active Extraction Status (only shown while extraction is actively ongoing) -->
         <div
-          v-if="activityFor(selectedDocument.id).length"
-          class="rounded-2xl border border-slate-200 bg-white p-4 shadow-xs"
+          v-if="isExtractionOngoing(selectedDocument)"
+          class="flex items-center justify-between gap-3 rounded-xl border border-teal-200/80 bg-teal-50/70 px-4 py-3 text-xs shadow-2xs"
         >
-          <div class="flex items-center justify-between border-b border-slate-100 pb-2">
-            <span class="text-xs font-bold uppercase tracking-wider text-slate-400">Extraction activity</span>
-            <span class="text-xs text-slate-500 font-medium">
-              {{ activityFor(selectedDocument.id).at(-1)?.phase }}
+          <div class="flex items-center gap-2.5 min-w-0">
+            <span class="relative flex h-2.5 w-2.5 shrink-0">
+              <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-teal-400 opacity-75"></span>
+              <span class="relative inline-flex h-2.5 w-2.5 rounded-full bg-teal-600"></span>
             </span>
-          </div>
-          <div class="mt-3 space-y-2">
-            <div
-              v-for="(event, idx) in activityFor(selectedDocument.id).slice(-3)"
-              :key="event.id"
-              class="flex items-start gap-2.5 text-xs"
-            >
-              <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-[10px] font-bold text-emerald-800">
-                {{ idx + 1 }}
+            <div class="truncate">
+              <span class="font-bold text-teal-950">
+                {{ currentExtractionEvent(selectedDocument)?.phase || "Extracting" }}:
               </span>
-              <div>
-                <span class="font-semibold text-slate-700">{{ event.phase }}:</span>
-                <span class="ml-1 text-slate-600">{{ event.message }}</span>
-              </div>
+              <span class="ml-1.5 text-teal-800">
+                {{ currentExtractionEvent(selectedDocument)?.message || "Extracting quotation and line items…" }}
+              </span>
             </div>
+          </div>
+          <div class="flex items-center gap-1.5 text-[11px] font-semibold text-teal-700 shrink-0">
+            <svg class="h-3.5 w-3.5 animate-spin text-teal-600" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+            </svg>
+            <span>In progress</span>
           </div>
         </div>
 
@@ -328,6 +346,7 @@ onBeforeUnmount(() => eventSources.forEach((source) => source.close()));
           <ProductTable
             :line-items="selectedDocument.quotation.line_items"
             :review-issues="selectedDocument.quotation.review_issues"
+            :review-reasons="selectedDocument.review_reasons"
             :field-reviews="selectedDocument.quotation.field_reviews"
             :selected-index="selectedLineIndex"
             @select-line="(idx) => { selectedLineIndex = idx; isDrawerOpen = true; }"
