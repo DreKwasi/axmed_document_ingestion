@@ -36,6 +36,7 @@ fi
 if [[ -f backend/pyproject.toml ]]; then
   if command -v uv >/dev/null; then
     run env PYTHONPATH=backend uv run --project backend ruff check backend
+    run bash -c 'cd backend && uv run mypy app'
     run env PYTHONPATH=backend uv run --project backend pytest backend/tests -q
     if [[ "$mode" == full && -x backend/bin/run-evals ]]; then
       run backend/bin/run-evals

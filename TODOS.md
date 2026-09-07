@@ -9,11 +9,11 @@
 
 ## Blocked
 
-- [ ] **DI-07: Corpus evaluation and performance evidence** — performance and schema-reuse evidence are complete; field-level accuracy, null correctness, and correction-precedence scoring await commercially approved ground truth for the supplied corpus. Acceptance: `docs/worksheets/di-07-evaluation-audit.md`.
+*None currently blocked.*
 
 ## Ready
 
-*None currently queued. Slices 1–5, 8, and 9 are completed.*
+- [x] **DI-07: Native-PDF semantic fidelity** — v4 makes LiteParse's native parsed representation the source evidence and explicitly rejects a hand-built universal table/Markdown conversion layer. Generic LiteParse context, semantic guidance, and contract normalization now pass both PDF golden cases without supplier-specific rules or invented UOM conversions. Evidence: live run `b23c89eb-dc6a-4dbc-aceb-8e40724f5f43`; failures remain field-level and SQLite-persisted throughout.
 
 ## Operational follow-ups
 
