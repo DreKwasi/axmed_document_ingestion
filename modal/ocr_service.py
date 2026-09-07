@@ -40,7 +40,7 @@ _ocr_engine: Any | None = None
 
 
 def _authenticate(authorization: str | None) -> None:
-    expected = os.environ.get("AXMED_OCR_SERVICE_TOKEN")
+    expected = os.environ.get("OCR_SERVICE_TOKEN")
     supplied = authorization.removeprefix("Bearer ") if authorization else ""
     if not expected or not hmac.compare_digest(supplied, expected):
         raise PermissionError("unauthorized")

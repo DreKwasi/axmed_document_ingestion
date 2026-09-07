@@ -1,11 +1,9 @@
 <script setup lang="ts">
-import { computed } from "vue";
-import type { BatchResponse, DocumentResponse } from "@/types";
+import type { DocumentResponse } from "@/types";
 import { sourceDocumentUrl } from "@/api";
 
-const props = defineProps<{
+defineProps<{
   documents: DocumentResponse[];
-  activeBatch: BatchResponse | null;
   busy: boolean;
 }>();
 
@@ -58,6 +56,8 @@ function statusKey(doc: DocumentResponse): "ready" | "review" | "needs_attention
 }
 
 function statusLabel(doc: DocumentResponse) {
+  if (doc.status === "failed") return "Extraction failed";
+  if (doc.status === "rejected" || doc.quotation?.review_status === "rejected") return "Rejected";
   if (doc.status === "pending_review" && doc.quotation?.has_corrections) return "Review corrected";
   const map = {
     ready: "Ready",
@@ -87,28 +87,10 @@ function formatBadge(filename: string, sourceSystem?: string | null) {
   return sourceSystem?.toUpperCase() || "DOC";
 }
 
-const batchProcessedCount = computed(() => {
-  if (!props.activeBatch) return 0;
-  return props.activeBatch.documents.filter((d) =>
-    ["pending_review", "approved", "rejected", "failed"].includes(d.status)
-  ).length;
-});
 </script>
 
 <template>
   <div class="space-y-4">
-    <!-- Batch notification bar if multiple files uploaded -->
-    <div
-      v-if="activeBatch"
-      class="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-3.5 text-xs font-semibold text-emerald-800"
-    >
-      <div class="flex items-center gap-2">
-        <span class="flex h-2 w-2 rounded-full bg-emerald-600 animate-pulse"></span>
-        <span>Batch: {{ activeBatch.total_documents }} sources</span>
-      </div>
-      <span>{{ batchProcessedCount }} / {{ activeBatch.total_documents }} processed</span>
-    </div>
-
     <!-- Uploaded Sources Table Card -->
     <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
       <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-6 py-4.5">
