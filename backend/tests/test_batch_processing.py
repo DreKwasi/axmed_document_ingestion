@@ -60,7 +60,7 @@ def test_batch_failure_isolation_corrupt_file_does_not_block_siblings(client: Te
     assert "unsupported.xyz" in docs_by_name
 
     # Valid file was processed successfully and not blocked
-    assert docs_by_name["sanova.json"]["status"] in {"needs_mapping_confirmation", "needs_review"}
+    assert docs_by_name["sanova.json"]["status"] in {"needs_mapping_confirmation", "pending_review"}
     assert docs_by_name["sanova.json"]["failure_reason"] is None
 
     # Corrupt file is isolated as failed with specific error message
