@@ -3,7 +3,7 @@
 import re
 from decimal import Decimal, InvalidOperation
 
-from app.domain.contracts import CanonicalQuotation
+from app.extraction.contracts import CanonicalQuotation
 
 ITEM_BLOCK_PATTERN = re.compile(
     r"(?ms)^\s*\d+[.)]\s*(?P<item>.*?)(?=^\s*\d+[.)]\s|\Z)"
