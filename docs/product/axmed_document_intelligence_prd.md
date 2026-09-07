@@ -1028,7 +1028,7 @@ At minimum:
 }
 ```
 
-Internally, provenance should be richer, but a mapping path is lineage—not source evidence—and must not be stored as proof that a field is correct. A field-evidence record is reserved for a source excerpt/location returned by semantic extraction, a deterministic validation result, or an auditable human review action.
+Internally, provenance should be richer, but a mapping path is lineage—not source evidence—and must not be stored as proof that a field is correct. A field-evidence record is reserved for a source excerpt/location returned by semantic extraction or an auditable human review action. Deterministic validation is stored as a validation result, not presented as source proof.
 
 For a field:
 
