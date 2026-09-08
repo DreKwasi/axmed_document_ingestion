@@ -18,6 +18,7 @@ coverage/
 playwright-report/
 test-results/
 
-# OS/editor artifacts
+# OS/editor artifacts & scratch directories
 .DS_Store
 tmp/
+scripts/
