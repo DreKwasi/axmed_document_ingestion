@@ -8,6 +8,7 @@ import sys
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -44,6 +45,8 @@ class Config(BaseSettings):
     ocr_service_url: str | None = "https://andrewsboateng137--axmed-paddle-ocr.modal.run/ocr"
     ocr_service_token: str | None = None
     ocr_request_timeout_seconds: int = 60
+    ocr_line_confidence_floor: float = Field(default=0.80, ge=0, le=1)
+    ocr_min_usable_line_ratio: float = Field(default=0.60, ge=0, le=1)
 
     # Google Gemini
     gemini_api_key: str | None = None

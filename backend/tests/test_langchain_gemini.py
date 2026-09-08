@@ -396,7 +396,8 @@ def test_ocr_worker_executes_langchain_when_gemini_configured(tmp_path):
 
     (tmp_path / "uploads").mkdir(parents=True, exist_ok=True)
     doc_id = "doc-ocr-1"
-    (tmp_path / "uploads" / f"{doc_id}.png").write_bytes(b"fake-image-bytes")
+    source_bytes = (PROJECT_ROOT / "backend/evals/fixtures/ocr/scan_02_lowres_fax_andina_p1.png").read_bytes()
+    (tmp_path / "uploads" / f"{doc_id}.png").write_bytes(source_bytes)
 
     with session_factory() as session:
         doc = DocumentRecord(
@@ -472,10 +473,11 @@ def test_ocr_worker_executes_langchain_when_gemini_configured(tmp_path):
     assert mock_ex.call_args_list[0].kwargs["source_type"] == "ocr"
     assert mock_ex.call_args_list[0].kwargs["source_media"] is None
     assert mock_ex.call_args_list[1].args[0] == {
-        "source": {"kind": "original_image", "media_type": "image/png"}
+        "source": {"kind": "ocr_trusted_image_regions", "media_type": "image/png"}
     }
     assert mock_ex.call_args_list[1].kwargs["source_type"] == "image_vision"
-    assert mock_ex.call_args_list[1].kwargs["source_media"] == b"fake-image-bytes"
+    assert mock_ex.call_args_list[1].kwargs["source_media"] != source_bytes
+    assert mock_ex.call_args_list[1].kwargs["source_media"].startswith(b"\x89PNG")
     assert mock_ex.call_args_list[1].kwargs["source_media_type"] == "image/png"
 
     with session_factory() as session:
@@ -529,6 +531,35 @@ def test_ocr_worker_executes_langchain_when_gemini_configured(tmp_path):
         assert len(attempts) == 2
         vision_payload = json.loads(attempts[1].result_json)
         assert vision_payload["line_items"][0]["product"]["trade_name"] == "Vision recovered product"
+
+    low_doc_id = "doc-ocr-below-gate"
+    (tmp_path / "uploads" / f"{low_doc_id}.png").write_bytes(source_bytes)
+    with session_factory() as session:
+        session.add(DocumentRecord(
+            id=low_doc_id, original_filename="garbled.png", stored_filename=f"{low_doc_id}.png",
+            media_type="image/png", content_sha256="def", source_system="scan", status="ocr_running",
+        ))
+        low_job = OcrJobRecord(document_id=low_doc_id, selected_pages_json="[1]", status="queued")
+        session.add(low_job)
+        session.commit()
+        low_job_id = low_job.id
+
+    low_result = mock_ocr_result.model_copy(deep=True)
+    low_result.pages[0].lines[0].confidence = 0.35
+    with patch("app.extraction.image_processing.request_ocr", return_value=low_result):
+        with patch("app.extraction.llm.LangChainSemanticExtractor.extract_canonical_quotation") as blocked_extractor:
+            with session_factory() as session:
+                consume_ocr(session, low_job_id, settings)
+    blocked_extractor.assert_not_called()
+    with session_factory() as session:
+        rejected = session.get(DocumentRecord, low_doc_id)
+        rejected_attempts = list(session.scalars(select(ImageExtractionAttemptRecord).where(
+            ImageExtractionAttemptRecord.document_id == low_doc_id
+        )))
+        assert rejected.status == "failed"
+        assert "too unclear" in rejected.failure_reason
+        assert len(rejected_attempts) == 2
+        assert all(attempt.status == "failed" for attempt in rejected_attempts)
 
 
 def test_langchain_offline_fallback_when_unconfigured(tmp_path):

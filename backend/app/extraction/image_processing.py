@@ -2,10 +2,12 @@
 
 import json
 import time
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 
+from PIL import Image
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -20,18 +22,49 @@ from app.models import DocumentRecord, ImageExtractionAttemptRecord, ModelInvoca
 from app.security.redaction import redact_for_model
 
 
-def _semantic_ocr_context(result: OcrResult) -> dict[str, object]:
+def _semantic_ocr_context(result: OcrResult, confidence_floor: float = 0.0) -> dict[str, object]:
     """Return OCR transcription text without layout metadata or inferred row structure."""
 
     return {
         "pages": [
             {
                 "page_number": page.original_page_number,
-                "text": "\n".join(line.text for line in page.lines),
+                "text": "\n".join(line.text for line in page.lines if line.confidence >= confidence_floor),
             }
             for page in result.pages
         ]
     }
+
+
+def _ocr_quality_gate(result: OcrResult, *, confidence_floor: float, minimum_ratio: float) -> bool:
+    lines = [line for page in result.pages for line in page.lines]
+    return bool(lines) and sum(line.confidence >= confidence_floor for line in lines) / len(lines) >= minimum_ratio
+
+
+def _trusted_image_regions(source_media: bytes, result: OcrResult, confidence_floor: float) -> bytes:
+    """Mask OCR-rejected pixels so vision receives only trusted text regions."""
+
+    with Image.open(BytesIO(source_media)) as opened:
+        source = opened.convert("RGB")
+        trusted = Image.new("RGB", source.size, "white")
+        page = result.pages[0]
+        scale_x, scale_y = source.width / page.width, source.height / page.height
+        margin = max(4, round(min(source.size) * 0.005))
+        for line in page.lines:
+            if line.confidence < confidence_floor:
+                continue
+            xs = [point[0] * scale_x for point in line.bounds]
+            ys = [point[1] * scale_y for point in line.bounds]
+            box = (
+                max(0, int(min(xs)) - margin),
+                max(0, int(min(ys)) - margin),
+                min(source.width, int(max(xs)) + margin),
+                min(source.height, int(max(ys)) + margin),
+            )
+            trusted.paste(source.crop(box), box)
+        output = BytesIO()
+        trusted.save(output, format="PNG")
+        return output.getvalue()
 
 
 def _run_image_attempt(
@@ -166,6 +199,35 @@ def consume_ocr(session: Session, job_id: str, settings: Config) -> None:
     if settings.gemini_api_key:
         from app.documents import _upsert_quotation
 
+        gate_reason = (
+            "The source was too unclear to extract reliably. "
+            "No trustworthy text regions passed the OCR quality gate."
+        )
+        if not _ocr_quality_gate(
+            result,
+            confidence_floor=settings.ocr_line_confidence_floor,
+            minimum_ratio=settings.ocr_min_usable_line_ratio,
+        ):
+            approaches = (
+                ("ocr_assisted", "vision_direct")
+                if document.media_type.startswith("image/")
+                else ("ocr_assisted",)
+            )
+            for approach in approaches:
+                _persist_image_attempt(
+                    session,
+                    document_id=document.id,
+                    approach=approach,
+                    quotation=None,
+                    telemetry={},
+                    failure_reason=gate_reason,
+                )
+            document.status = "failed"
+            document.failure_reason = gate_reason
+            record_event(session, document_id=document.id, stage="ocr_quality_gate_failed")
+            session.commit()
+            return
+
         extractor = LangChainSemanticExtractor(
             api_key=settings.gemini_api_key,
             model=settings.gemini_model,
@@ -173,7 +235,7 @@ def consume_ocr(session: Session, job_id: str, settings: Config) -> None:
         )
         ocr_quotation, ocr_telemetry, ocr_failure = _run_image_attempt(
             extractor,
-            context=redact_for_model(_semantic_ocr_context(result)),
+            context=redact_for_model(_semantic_ocr_context(result, settings.ocr_line_confidence_floor)),
             source_type="ocr",
         )
         _persist_image_attempt(
@@ -196,10 +258,10 @@ def consume_ocr(session: Session, job_id: str, settings: Config) -> None:
             record_event(session, document_id=document.id, stage="image_vision_extraction_started")
             vision_quotation, vision_telemetry, vision_failure = _run_image_attempt(
                 extractor,
-                context={"source": {"kind": "original_image", "media_type": document.media_type}},
+                context={"source": {"kind": "ocr_trusted_image_regions", "media_type": "image/png"}},
                 source_type="image_vision",
-                source_media=source_media,
-                source_media_type=document.media_type,
+                source_media=_trusted_image_regions(source_media, result, settings.ocr_line_confidence_floor),
+                source_media_type="image/png",
             )
             _persist_image_attempt(
                 session,

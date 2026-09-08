@@ -46,6 +46,7 @@ _EVENT_MESSAGES = {
     "ocr_completed": "Source image text extraction completed.",
     "ocr_awaiting_service_configuration": "Waiting for the image extraction service to be configured.",
     "ocr_failed": "Source image extraction needs attention.",
+    "ocr_quality_gate_failed": "The source is too unclear for trustworthy extraction.",
     "ocr_extraction_completed": "Normalizing the extracted image content.",
     "ocr_extraction_failed": "Image quotation extraction needs attention.",
     "ocr_assisted_extraction_completed": "OCR-assisted quotation extraction completed.",
