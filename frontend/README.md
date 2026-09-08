@@ -2,6 +2,9 @@
 
 Single-page web application built with **Vue 3**, **TypeScript**, **Tailwind CSS**, and **Vite** for the Axmed Supplier Document Intelligence platform. Provides a Home source list, source-level review, product breakdown, batch file uploader, and live Server-Sent Events (SSE) processing updates.
 
+- 🌐 **Live Platform (Cloudflare Pages)**: [https://axmed-document-ingestion.pages.dev/](https://axmed-document-ingestion.pages.dev/)
+- 🚀 **Connected Live Backend API**: [https://axmeddocumentingestion-production.up.railway.app](https://axmeddocumentingestion-production.up.railway.app)
+
 ---
 
 ## Prerequisites

@@ -2,6 +2,9 @@
 
 > Intelligent multi-format quotation extraction and human-review pipeline for pharmaceutical procurement.
 
+- 🌐 **Live Platform (Cloudflare Pages)**: [https://axmed-document-ingestion.pages.dev/](https://axmed-document-ingestion.pages.dev/)
+- 🚀 **Live Backend API (Railway)**: [https://axmeddocumentingestion-production.up.railway.app](https://axmeddocumentingestion-production.up.railway.app) *(Docs: [/docs](https://axmeddocumentingestion-production.up.railway.app/docs))*
+
 ---
 
 ## Overview
