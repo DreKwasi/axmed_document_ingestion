@@ -337,3 +337,37 @@ def test_reviewer_can_correct_any_canonical_field_with_note(client, sanova_bytes
         == "30% advance with PO, 70% against copy of Bill of Lading"
     )
     assert paths_audited["commercial_terms.payment_terms"]["after"] == "Net 60 days"
+
+
+def test_reviewer_can_correct_transit_duration_in_commercial_terms(client, sanova_bytes):
+    document = confirmed_sanova(client, sanova_bytes)
+    revision = document["quotation"]["revision"]
+    response = client.post(
+        f"/api/v1/documents/{document['id']}/reviews/correct",
+        json={
+            "request_id": "review-transit-1",
+            "expected_revision": revision,
+            "patches": [
+                {"path": "commercial_terms.transit_time_min_days", "value": 26},
+                {"path": "commercial_terms.transit_time_max_days", "value": 32},
+            ],
+            "note": "Shipment freight transit is 26 to 32 days as stated in shipping note.",
+        },
+    )
+
+    assert response.status_code == 200
+    corrected = response.json()
+    assert corrected["quotation"]["revision"] == revision + 1
+    assert corrected["quotation"]["commercial_terms"]["transit_time_min_days"] == 26
+    assert corrected["quotation"]["commercial_terms"]["transit_time_max_days"] == 32
+
+    # Verify field reviews sync
+    field_reviews = {f["field_path"]: f for f in corrected["quotation"]["field_reviews"]}
+    assert "commercial_terms.transit_time_min_days" in field_reviews
+    assert field_reviews["commercial_terms.transit_time_min_days"]["value"] == 26
+    assert field_reviews["commercial_terms.transit_time_min_days"]["review_status"] == "corrected"
+    assert field_reviews["commercial_terms.transit_time_min_days"]["extraction_method"] == "human_corrected"
+    assert "commercial_terms.transit_time_max_days" in field_reviews
+    assert field_reviews["commercial_terms.transit_time_max_days"]["value"] == 32
+    assert field_reviews["commercial_terms.transit_time_max_days"]["review_status"] == "corrected"
+

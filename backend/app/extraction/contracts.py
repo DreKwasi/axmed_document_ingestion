@@ -136,6 +136,9 @@ class CommercialTerms(BaseModel):
     incoterm_country: str | None = None
     payment_terms: str | None = None
     price_basis: str | None = None
+    transit_time_days: int | None = None
+    transit_time_min_days: int | None = None
+    transit_time_max_days: int | None = None
     hs_codes: list[str] = Field(default_factory=list)
 
 
