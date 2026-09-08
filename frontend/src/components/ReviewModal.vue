@@ -1,6 +1,10 @@
 <script setup lang="ts">
+/** Review modal dialog for capturing human audit decisions on extracted quotations. */
+
 import { computed, ref, watch } from "vue";
 import type { DocumentResponse } from "@/types";
+
+// --- Section 1: Props & Emits ---
 
 const props = defineProps<{
   isOpen: boolean;
@@ -13,6 +17,8 @@ const emit = defineEmits<{
   (event: "approve", note?: string): void;
   (event: "reject", payload: { reason: string; note?: string }): void;
 }>();
+
+// --- Section 2: State & Reset Watcher ---
 
 const note = ref("");
 const rejectionReason = ref("incorrect_extraction");
@@ -27,14 +33,19 @@ watch(
   }
 );
 
+// --- Section 3: Computed Derivations ---
+
+/** Whether document has blocking error-level validation issues preventing approval */
 const hasBlockingIssue = computed(() => {
   return props.document.quotation?.review_issues.some((issue) => issue.severity === "error") ?? false;
 });
 
+/** Action button label reflecting whether document had prior human corrections */
 const approvalLabel = computed(() => {
   return props.document.quotation?.has_corrections ? "Approve corrected source" : "Approve source";
 });
 
+/** Formatted source title combining supplier, quotation reference, or filename */
 const sourceTitle = computed(() => {
   if (props.document.source_name) return props.document.source_name;
   const supplier = props.document.quotation?.supplier.name;
@@ -43,6 +54,8 @@ const sourceTitle = computed(() => {
   if (supplier) return `${supplier} quotation`;
   return props.document.filename;
 });
+
+// --- Section 4: Action Handlers ---
 
 function onApprove() {
   emit("approve", note.value.trim() || undefined);

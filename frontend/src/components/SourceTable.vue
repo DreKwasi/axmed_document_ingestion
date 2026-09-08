@@ -1,12 +1,24 @@
 <script setup lang="ts">
+/** Dashboard table listing all uploaded quotation sources and extraction statuses. */
+
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import type { DocumentResponse } from "@/types";
 import { sourceDocumentUrl } from "@/api";
+
+// --- Section 1: Props & Emits ---
 
 const props = defineProps<{
   documents: DocumentResponse[];
   busy: boolean;
 }>();
+
+const emit = defineEmits<{
+  (event: "select", document: DocumentResponse): void;
+  (event: "ingest"): void;
+  (event: "delete", document: DocumentResponse): void;
+}>();
+
+// --- Section 2: Peer Image Extraction Row Expansion ---
 
 const sourceRows = computed(() => props.documents.flatMap((document) => {
   const isImage = document.source_system === "image" || /\.(png|jpg|jpeg)$/i.test(document.filename);
@@ -50,86 +62,9 @@ const sourceRows = computed(() => props.documents.flatMap((document) => {
   return [document];
 }));
 
-const emit = defineEmits<{
-  (event: "select", document: DocumentResponse): void;
-  (event: "ingest"): void;
-  (event: "delete", document: DocumentResponse): void;
-}>();
+// --- Section 3: Tooltip Controls ---
 
 const activeMappingTooltip = ref<string | null>(null);
-
-function sourceName(doc: DocumentResponse) {
-  if (doc.source_name) return doc.source_name;
-  const supplier = doc.quotation?.supplier.name;
-  const ref = doc.quotation?.quotation_reference;
-  if (supplier && ref) return `${supplier} · ${ref}`;
-  if (supplier) return `${supplier} quotation`;
-  const filename = doc.filename.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ").trim();
-  return filename.replace(/\b\w/g, (c) => c.toUpperCase()) || "Untitled source";
-}
-
-function confidenceClass(band?: string | null) {
-  if (band === "High") return "text-emerald-700";
-  if (band === "Medium") return "text-amber-700";
-  if (band === "Low") return "text-rose-700";
-  return "text-slate-400";
-}
-
-function productCounts(doc: DocumentResponse) {
-  return doc.product_counts ?? {
-    extracted: doc.quotation?.line_items.length ?? 0,
-    failed: 0,
-  };
-}
-
-function statusKey(doc: DocumentResponse): "ready" | "review" | "needs_attention" | "processing" {
-  if (doc.quotation?.review_status === "approved") return "ready";
-  if (["failed", "rejected"].includes(doc.status) || doc.quotation?.review_status === "rejected") {
-    return "needs_attention";
-  }
-  if (doc.status === "approved") return "ready";
-  if (doc.status === "pending_review") return "review";
-  return "processing";
-}
-
-function statusLabel(doc: DocumentResponse) {
-  if (doc.status === "failed") return "Extraction failed";
-  if (doc.status === "rejected" || doc.quotation?.review_status === "rejected") return "Rejected";
-  if (doc.status === "pending_review" && doc.quotation?.has_corrections) return "Review corrected";
-  const map = {
-    ready: "Ready",
-    review: "Pending review",
-    needs_attention: "Needs attention",
-    processing: "Processing",
-  };
-  return map[statusKey(doc)];
-}
-
-function statusClasses(doc: DocumentResponse) {
-  const map = {
-    ready: "bg-emerald-50 text-emerald-700 border-emerald-200",
-    review: "bg-teal-50 text-teal-700 border-teal-200",
-    needs_attention: "bg-rose-50 text-rose-700 border-rose-200",
-    processing: "bg-slate-100 text-slate-600 border-slate-200",
-  };
-  return map[statusKey(doc)];
-}
-
-function formatBadge(filename: string, sourceSystem?: string | null) {
-  const lower = filename.toLowerCase();
-  if (lower.endsWith(".pdf")) return "PDF";
-  if (lower.endsWith(".json")) return "JSON";
-  if (lower.endsWith(".eml")) return "EML";
-  if (lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "IMG";
-  return sourceSystem?.toUpperCase() || "DOC";
-}
-
-function mappingConfidenceExplanation(doc: DocumentResponse): string {
-  const score = doc.mapping_confidence?.score;
-  if (score == null) return "No mapped fields are available to assess.";
-  const issueCount = doc.mapping_confidence?.issue_count ?? 0;
-  return `This is the average confidence that extracted values were assigned to the correct schema fields: ${score}%. Mapping issues are counted separately: ${issueCount}.`;
-}
 
 function closeTooltips() {
   activeMappingTooltip.value = null;
@@ -161,6 +96,81 @@ onBeforeUnmount(() => {
   document.removeEventListener("click", handleDocumentClick);
   document.removeEventListener("keydown", handleDocumentKeydown);
 });
+
+// --- Section 4: Display & Status Helpers ---
+
+function sourceName(doc: DocumentResponse): string {
+  if (doc.source_name) return doc.source_name;
+  const supplier = doc.quotation?.supplier.name;
+  const ref = doc.quotation?.quotation_reference;
+  if (supplier && ref) return `${supplier} · ${ref}`;
+  if (supplier) return `${supplier} quotation`;
+  const filename = doc.filename.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ").trim();
+  return filename.replace(/\b\w/g, (c) => c.toUpperCase()) || "Untitled source";
+}
+
+function confidenceClass(band?: string | null): string {
+  if (band === "High") return "text-emerald-700";
+  if (band === "Medium") return "text-amber-700";
+  if (band === "Low") return "text-rose-700";
+  return "text-slate-400";
+}
+
+function productCounts(doc: DocumentResponse): { extracted: number; failed: number } {
+  return doc.product_counts ?? {
+    extracted: doc.quotation?.line_items.length ?? 0,
+    failed: 0,
+  };
+}
+
+function statusKey(doc: DocumentResponse): "ready" | "review" | "needs_attention" | "processing" {
+  if (doc.quotation?.review_status === "approved") return "ready";
+  if (["failed", "rejected"].includes(doc.status) || doc.quotation?.review_status === "rejected") {
+    return "needs_attention";
+  }
+  if (doc.status === "approved") return "ready";
+  if (doc.status === "pending_review") return "review";
+  return "processing";
+}
+
+function statusLabel(doc: DocumentResponse): string {
+  if (doc.status === "failed") return "Extraction failed";
+  if (doc.status === "rejected" || doc.quotation?.review_status === "rejected") return "Rejected";
+  if (doc.status === "pending_review" && doc.quotation?.has_corrections) return "Review corrected";
+  const map = {
+    ready: "Ready",
+    review: "Pending review",
+    needs_attention: "Needs attention",
+    processing: "Processing",
+  };
+  return map[statusKey(doc)];
+}
+
+function statusClasses(doc: DocumentResponse): string {
+  const map = {
+    ready: "bg-emerald-50 text-emerald-700 border-emerald-200",
+    review: "bg-teal-50 text-teal-700 border-teal-200",
+    needs_attention: "bg-rose-50 text-rose-700 border-rose-200",
+    processing: "bg-slate-100 text-slate-600 border-slate-200",
+  };
+  return map[statusKey(doc)];
+}
+
+function formatBadge(filename: string, sourceSystem?: string | null): string {
+  const lower = filename.toLowerCase();
+  if (lower.endsWith(".pdf")) return "PDF";
+  if (lower.endsWith(".json")) return "JSON";
+  if (lower.endsWith(".eml")) return "EML";
+  if (lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "IMG";
+  return sourceSystem?.toUpperCase() || "DOC";
+}
+
+function mappingConfidenceExplanation(doc: DocumentResponse): string {
+  const score = doc.mapping_confidence?.score;
+  if (score == null) return "No mapped fields are available to assess.";
+  const issueCount = doc.mapping_confidence?.issue_count ?? 0;
+  return `This is the average confidence that extracted values were assigned to the correct schema fields: ${score}%. Mapping issues are counted separately: ${issueCount}.`;
+}
 </script>
 
 <template>
