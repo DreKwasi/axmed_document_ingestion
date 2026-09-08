@@ -17,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Config, get_config
+from app.csv_export import documents_to_csv
 from app.database import create_sqlite_engine, run_migrations
 from app.documents import (
     ReviewValidationError,
@@ -371,6 +372,17 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
         """List all ingested documents ordered by creation time descending."""
         documents = session.scalars(select(DocumentRecord).order_by(DocumentRecord.created_at.desc())).all()
         return [serialize_document(session, document) for document in documents]
+
+    @app.get("/api/v1/documents/export.csv")
+    def export_documents(session: SessionDep):
+        """Download terminal database records flattened to user-facing product rows."""
+        documents = session.scalars(select(DocumentRecord).order_by(DocumentRecord.created_at.desc())).all()
+        csv_content = documents_to_csv([serialize_document(session, document) for document in documents])
+        return Response(
+            content=csv_content,
+            media_type="text/csv",
+            headers={"Content-Disposition": 'attachment; filename="axmed-export.csv"'},
+        )
 
     @app.get("/api/v1/documents/{document_id}")
     def get_document(document_id: str, session: SessionDep):
