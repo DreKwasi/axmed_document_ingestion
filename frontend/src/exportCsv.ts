@@ -1,9 +1,14 @@
+/** Multi-level CSV exporter for quotations, products, facts, and review audits. */
+
 import type { DocumentResponse, LineItem } from "@/types";
+
+// --- Section 1: CSV Column Schema Definitions ---
 
 const sourceHeaders = [
   "record_type", "source_id", "source_file", "source_status", "source_system", "failure_reason", "source_notes",
   "extraction_confidence", "mapping_confidence", "mapping_issue_count", "quotation_reference", "supplier", "commercial_currency",
 ];
+
 const productHeaders = [
   "product_position", "product", "active_ingredients", "strengths", "dosage_form", "manufacturer", "country_of_origin",
   "quoted_quantity", "quoted_quantity_uom", "quantity_basis", "minimum_order_quantity", "minimum_order_quantity_uom",
@@ -13,13 +18,17 @@ const productHeaders = [
   "lead_time_max_days", "shelf_life_months", "storage_conditions", "cold_chain_required", "who_prequalified",
   "who_pq_reference", "registered_markets", "registration_reference", "regulatory_status",
 ];
+
 const factHeaders = [
   "fact_label", "fact_value", "fact_source_path", "fact_extraction_method", "fact_confidence", "fact_confidence_reason",
   "fact_normalization_status", "fact_canonical_field", "fact_review_status",
 ];
+
 const issueHeaders = ["issue_field_path", "issue_section", "issue_code", "issue_message", "issue_severity"];
 const reviewHeaders = ["review_action", "review_prior_revision", "review_resulting_revision", "review_note", "review_rejection_reason", "review_patches"];
 const headers = [...sourceHeaders, ...productHeaders, ...factHeaders, ...issueHeaders, ...reviewHeaders];
+
+// --- Section 2: CSV Formatting Utilities ---
 
 function cell(value: unknown): string {
   const text = value == null ? "" : String(value);
@@ -29,6 +38,8 @@ function cell(value: unknown): string {
 function blanks(count: number): unknown[] {
   return Array(count).fill("");
 }
+
+// --- Section 3: Entity Serialization Helpers ---
 
 function sourceValues(document: DocumentResponse, recordType: string): unknown[] {
   const quotation = document.quotation;
@@ -62,7 +73,9 @@ function productValues(item: LineItem, position: number): unknown[] {
   ];
 }
 
-/** Includes every available representation for each uploaded source. */
+// --- Section 4: Multi-Level Document Exporter ---
+
+/** Serializes documents into a multi-level CSV including sources, products, facts, issues, and reviews. */
 export function documentsToCsv(documents: DocumentResponse[]): string {
   const rows: unknown[][] = [];
   for (const document of documents) {
@@ -93,3 +106,5 @@ export function documentsToCsv(documents: DocumentResponse[]): string {
   }
   return [headers, ...rows].map((row) => row.map(cell).join(",")).join("\r\n");
 }
+
+

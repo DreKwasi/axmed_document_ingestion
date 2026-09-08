@@ -1,3 +1,11 @@
+/** Domain type definitions for Axmed Document Intelligence. */
+
+// --- Section 1: Provenance & Evidence Types ---
+
+
+/**
+ * Audit trail record linking an extracted field to its source coordinates and confidence score.
+ */
 export type Evidence = {
   canonical_field: string;
   source_path?: string | null;
@@ -5,39 +13,105 @@ export type Evidence = {
   confidence: string;
 };
 
+// --- Section 2: Quotation Line Items & Pharmaceutical Specs ---
+
+/**
+ * Extracted pharmaceutical product line item unifying identity, packaging, pricing, supply, and regulatory data.
+ */
 export type LineItem = {
   source_key?: string | null;
   product: {
     trade_name?: string | null;
     inn: string[];
-    strength: Array<{ ingredient?: string | null; value?: string | null; unit?: string | null; per_value?: string | null; per_unit?: string | null }>;
+    strength: Array<{
+      ingredient?: string | null;
+      value?: string | null;
+      unit?: string | null;
+      per_value?: string | null;
+      per_unit?: string | null;
+    }>;
     dosage_form?: string | null;
     manufacturer?: string | null;
     country_of_origin?: string | null;
   };
-  packaging: { description?: string | null; presentation?: string | null; primary_pack?: string | null; units_per_pack?: number | null; unit_label?: string | null; packs_per_shipper?: number | null };
-  quantity: { quoted_quantity?: string | null; quoted_quantity_uom?: string | null; quantity_basis?: string | null; minimum_order_quantity?: string | null; minimum_order_quantity_uom?: string | null };
+  packaging: {
+    description?: string | null;
+    presentation?: string | null;
+    primary_pack?: string | null;
+    units_per_pack?: number | null;
+    unit_label?: string | null;
+    packs_per_shipper?: number | null;
+  };
+  quantity: {
+    quoted_quantity?: string | null;
+    quoted_quantity_uom?: string | null;
+    quantity_basis?: string | null;
+    minimum_order_quantity?: string | null;
+    minimum_order_quantity_uom?: string | null;
+  };
   pricing: {
     currency?: string | null;
     pack_price?: string | null;
     quoted_price: { amount?: string | null; uom?: string | null };
-    normalized_price: { amount?: string | null; uom?: string | null; calculation?: string | null; derived?: boolean; validation_status?: string | null };
+    normalized_price: {
+      amount?: string | null;
+      uom?: string | null;
+      calculation?: string | null;
+      derived?: boolean;
+      validation_status?: string | null;
+    };
     discount?: string | null;
     extended_price?: string | null;
-    price_tiers?: Array<{ min_quantity?: string | null; max_quantity?: string | null; quantity_uom?: string | null; price?: string | null; price_uom?: string | null }>;
-    adjustments?: Array<{ type: string; value?: string | null; value_type?: string | null; condition?: string | null }>;
+    price_tiers?: Array<{
+      min_quantity?: string | null;
+      max_quantity?: string | null;
+      quantity_uom?: string | null;
+      price?: string | null;
+      price_uom?: string | null;
+    }>;
+    adjustments?: Array<{
+      type: string;
+      value?: string | null;
+      value_type?: string | null;
+      condition?: string | null;
+    }>;
   };
-  supply: { lead_time_days?: number | null; lead_time_min_days?: number | null; lead_time_max_days?: number | null; shelf_life_months?: number | null; minimum_remaining_shelf_life_percent?: string | null; storage_conditions?: string | null; cold_chain_required?: boolean | null };
-  regulatory: { who_prequalified?: boolean | null; who_pq_reference?: string | null; registered_markets?: string[]; registration_reference?: string | null; regulatory_status?: string | null };
+  supply: {
+    lead_time_days?: number | null;
+    lead_time_min_days?: number | null;
+    lead_time_max_days?: number | null;
+    shelf_life_months?: number | null;
+    minimum_remaining_shelf_life_percent?: string | null;
+    storage_conditions?: string | null;
+    cold_chain_required?: boolean | null;
+  };
+  regulatory: {
+    who_prequalified?: boolean | null;
+    who_pq_reference?: string | null;
+    registered_markets?: string[];
+    registration_reference?: string | null;
+    regulatory_status?: string | null;
+  };
   evidence: Evidence[];
 };
 
+// --- Section 3: Canonical Quotation Aggregates ---
+
+/**
+ * Top-level canonical quotation schema aggregating all extracted products, terms, and review states.
+ */
 export type Quotation = {
   quotation_reference?: string | null;
   rfq_reference?: string | null;
   document_type?: string | null;
   supplier: { name?: string | null; country?: string | null };
-  commercial_terms: { currency?: string | null; incoterm?: string | null; incoterm_named_place?: string | null; incoterm_country?: string | null; hs_codes?: string[] };
+  commercial_terms: {
+    currency?: string | null;
+    incoterm?: string | null;
+    incoterm_named_place?: string | null;
+    incoterm_country?: string | null;
+    hs_codes?: string[];
+  };
   line_items: LineItem[];
   field_reviews?: Array<{
     field_path: string;
@@ -59,6 +133,11 @@ export type Quotation = {
   review_issues: Array<{ field_path: string; code: string; message: string; severity: string }>;
 };
 
+// --- Section 4: Ingestion Documents & Peer Extractions ---
+
+/**
+ * Peer extraction attempt from multimodal image intake (OCR-assisted or vision-direct).
+ */
 export type ImageExtractionAttempt = {
   approach: "ocr_assisted" | "vision_direct" | string;
   status: "completed" | "failed" | string;
@@ -77,6 +156,9 @@ export type ImageExtractionAttempt = {
   mapping_confidence?: DocumentResponse["mapping_confidence"];
 };
 
+/**
+ * Primary document record returned by the backend API.
+ */
 export type DocumentResponse = {
   id: string;
   filename: string;
@@ -85,7 +167,12 @@ export type DocumentResponse = {
   failure_reason?: string | null;
   source_system?: string | null;
   schema_version?: string | null;
-  parsed_summary?: { subject?: string; message_id?: string | null; page_count?: number; needs_ocr_pages?: number[] } | null;
+  parsed_summary?: {
+    subject?: string;
+    message_id?: string | null;
+    page_count?: number;
+    needs_ocr_pages?: number[];
+  } | null;
   system_decision?: "pending_review" | null;
   extraction_confidence?: {
     score: number;
@@ -131,6 +218,11 @@ export type DocumentResponse = {
   source_result?: "ocr_assisted" | "vision_direct" | string;
 };
 
+// --- Section 5: Processing Events & SSE Contracts ---
+
+/**
+ * Real-time event emitted during asynchronous processing and received via SSE.
+ */
 export type ProcessingEvent = {
   id: number;
   document_id: string;
