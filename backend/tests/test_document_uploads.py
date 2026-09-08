@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -48,6 +49,44 @@ def test_multi_file_failure_isolation_does_not_block_siblings(client: TestClient
     assert "JSON" in documents["corrupt.json"]["failure_reason"]
     assert documents["unsupported.xyz"]["status"] == "failed"
     assert "Unsupported file format" in documents["unsupported.xyz"]["failure_reason"]
+
+
+def test_unexpected_upload_failure_is_logged_and_returns_correlated_cors_response(
+    client: TestClient, sanova_bytes: bytes, monkeypatch
+):
+    observed: dict[str, object] = {}
+
+    def fail_ingestion(*_args, **_kwargs):
+        raise RuntimeError("forced ingestion failure")
+
+    def capture_exception(message, *args):
+        observed["message"] = message % args
+        observed["exception"] = sys.exc_info()[1]
+
+    monkeypatch.setattr("app.api.ingest_json", fail_ingestion)
+    monkeypatch.setattr("app.api.logger.exception", capture_exception)
+
+    response = client.post(
+        "/api/v1/documents",
+        headers={
+            "Origin": "https://axmed-document-ingestion.pages.dev",
+            "X-Railway-Request-Id": "railway-upload-123",
+        },
+        files={"files": ("supplier-private-name.json", sanova_bytes, "application/json")},
+    )
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "detail": "Document upload failed. Reference: railway-upload-123"
+    }
+    assert response.headers["access-control-allow-origin"] == "https://axmed-document-ingestion.pages.dev"
+    assert response.headers["x-request-id"] == "railway-upload-123"
+    assert observed["message"] == (
+        "Unexpected document upload failure: request_id=railway-upload-123 "
+        "file_count=1 file_extensions=['.json'] content_types=['application/json']"
+    )
+    assert isinstance(observed["exception"], RuntimeError)
+    assert "supplier-private-name" not in observed["message"]
 
 
 def test_multi_file_upload_schedules_each_pdf_with_api_background_processing(tmp_path, monkeypatch):

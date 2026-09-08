@@ -1,9 +1,11 @@
 import asyncio
 import json
+import re
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any
+from uuid import uuid4
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -44,6 +46,7 @@ from app.models import DocumentRecord
 logger = get_api_logger()
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SAFE_REQUEST_ID = re.compile(r"^[A-Za-z0-9._:-]{1,120}$")
 
 
 class ReviewPatch(BaseModel):
@@ -301,6 +304,7 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
     @app.post("/api/v1/documents", status_code=201)
     async def upload_documents(
         background_tasks: BackgroundTasks,
+        request: Request,
         session: SessionDep,
         files: list[UploadFile] = File(...),  # noqa: B008
     ):
@@ -308,15 +312,36 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
             raise HTTPException(status_code=400, detail="At least one file is required.")
         isolate_failures = len(files) > 1
         logger.info("Document upload received: %d file(s)", len(files))
-        documents = [
-            await _process_upload_file(
-                session=session,
-                file=file,
-                background_tasks=background_tasks,
-                isolate_failures=isolate_failures,
+        supplied_request_id = request.headers.get("x-railway-request-id") or request.headers.get(
+            "x-request-id", ""
+        )
+        request_id = supplied_request_id if SAFE_REQUEST_ID.fullmatch(supplied_request_id) else str(uuid4())
+        try:
+            documents = [
+                await _process_upload_file(
+                    session=session,
+                    file=file,
+                    background_tasks=background_tasks,
+                    isolate_failures=isolate_failures,
+                )
+                for file in files
+            ]
+        except HTTPException:
+            raise
+        except Exception as error:
+            logger.exception(
+                "Unexpected document upload failure: request_id=%s file_count=%d "
+                "file_extensions=%s content_types=%s",
+                request_id,
+                len(files),
+                [Path(file.filename or "").suffix.lower() or "<none>" for file in files],
+                [file.content_type or "<none>" for file in files],
             )
-            for file in files
-        ]
+            raise HTTPException(
+                status_code=500,
+                detail=f"Document upload failed. Reference: {request_id}",
+                headers={"X-Request-ID": request_id},
+            ) from error
         return documents
 
     @app.get("/api/v1/documents")

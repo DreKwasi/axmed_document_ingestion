@@ -105,6 +105,8 @@ PYTHONPATH=backend uv run --project backend ruff check backend
 | `POST` | `/api/v1/documents/{id}/reextract` | Explicitly re-extract a stored JSON source without changing completed review audit history |
 | `POST` | `/api/v1/documents/{id}/reviews/{action}` | Submit reviewer action (`approve`, `reject`, or line-item field `correct`) |
 
+Unexpected upload failures are logged with a full traceback, safe file metadata, and the inbound Railway request ID when available. The handled error response repeats that value in `X-Request-ID` and the JSON detail so a browser report can be correlated with deployment logs without logging source contents or filenames.
+
 ---
 
 ## Directory Architecture
