@@ -1,0 +1,12 @@
+{
+  "name": "axmed-document-intelligence-api-runtime",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Node runtime dependencies required by the Python API",
+  "dependencies": {
+    "@llamaindex/liteparse": "2.14.4"
+  },
+  "engines": {
+    "node": "22.x"
+  }
+}

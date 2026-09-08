@@ -1,9 +1,25 @@
 """LiteParse-backed PDF parser boundary with explicit page-level quality signals."""
 
+import shutil
 from dataclasses import dataclass
+from pathlib import Path
 
 from liteparse import LiteParse
 from liteparse.types import ParseError
+
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _liteparse_cli_path() -> str:
+    """Resolve the build-installed CLI without allowing a runtime npx download."""
+
+    installed_cli = BACKEND_ROOT / "node_modules" / ".bin" / "liteparse"
+    if installed_cli.is_file():
+        return str(installed_cli)
+    path_cli = shutil.which("liteparse")
+    if path_cli:
+        return path_cli
+    raise PdfParseError("The LiteParse CLI is not installed in the API runtime.")
 
 
 class PdfParseError(ValueError):
@@ -46,8 +62,9 @@ def parse_native_pdf(data: bytes) -> ParsedPdf:
 
     if not data.startswith(b"%PDF-"):
         raise PdfParseError("The uploaded content does not have a PDF signature.")
+    cli_path = _liteparse_cli_path()
     try:
-        result = LiteParse(install_if_not_available=False).parse(data, ocr_enabled=False, timeout=60)
+        result = LiteParse(cli_path=cli_path, install_if_not_available=False).parse(data, ocr_enabled=False, timeout=60)
         pages = tuple(
             ParsedPdfPage(
                 page_number=page.pageNum,
