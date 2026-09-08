@@ -29,6 +29,7 @@
 | 2026-09-08 | dismiss-tooltips-on-click-outside | Relying solely on local click-toggle handlers for tooltips allowed floating explanation popovers to linger over drawers and other UI surfaces when clicking elsewhere. | Attach document click-outside and Escape key listeners with data-tooltip-container boundaries, and explicitly dismiss table tooltips when opening drawers. | applied |
 | 2026-09-08 | upgrade-liteparse-v2 | Upgrading from LiteParse v1 wrapper to native Rust v2 enabled pure in-process Python execution, removing cross-runtime Node/npm CLI subprocess dependencies and simplifying container deployment. | Prefer native Python compiled extensions over subprocess-wrapped CLI binaries when cross-language parity tools are released; clean up parent image packages and lockfiles immediately. | applied |
 | 2026-09-08 | transit-duration-modeling | Strictly preventing transit time from contaminating manufacturer lead time left logistics transit duration uncaptured despite explicit mentions in quotation delivery terms. | Model shipping transit duration explicitly in document CommercialTerms (transit_time_days/min/max) and render in Delivery Terms, maintaining strict separation from factory lead_time_days. | applied |
+| 2026-09-08 | source-detail-review-endpoint | Combining an explicit click dispatch with a watcher reacting to the same selection caused one user action to issue two concurrent mutating review requests. | Give each mutation one owner and assert its browser-level request count when reactive state can also trigger the operation. | applied |
 | --- | --- | --- | --- | --- |
 | 2026-09-05 | bootstrap-agent-os | Empty repository has no runnable app or selected toolchain. | Add stack bootstrap task; validation scripts report this explicitly. | queued |
 | 2026-09-06 | plan-document-intelligence | Infrastructure-first sequencing delayed the product’s schema-memory differentiator. | Require plans to demonstrate the riskiest product thesis in the earliest viable vertical slice. | adopted |
@@ -87,4 +88,3 @@
 ## 2026-09-08 — Direct subtext action affordances
 
 - Repeating an action verb like "Download file ·" next to the source document's filename creates visual repetition and clutters tabular views. Making the metadata subtext (the filename itself) an interactive download link with hover state (`text-slate-500 hover:text-emerald-700 hover:underline`), `@click.stop`, and an informative tooltip preserves screen real estate while maintaining intuitive direct manipulation.
-
