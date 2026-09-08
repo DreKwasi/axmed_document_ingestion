@@ -43,6 +43,7 @@
 - Added an explicit help control beside the product-table Mapping confidence heading explaining the field-score average and the observable checks behind it.
 - Added amber section-level mapping notes for fields below 100%, so a product score such as 82% identifies the affected product, pricing, quantity/packaging, supply, or regulatory card even when the actionable issue count is zero.
 - Replaced internal mapping reason language with reviewer-facing explanations and human-readable field labels (for example, “Country of origin”).
+- Added a Home-level CSV export that retains every uploaded source and emits typed source, product, source-fact, mapping-issue, and review rows with shared source metadata and confidence context.
 
 ## Tests, app run, and validation
 
@@ -62,6 +63,7 @@
 - `npm --prefix frontend test -- --run src/App.spec.ts`, `npm --prefix frontend run build`, and `npm --prefix frontend run lint` — passed after section-level mapping concern placement.
 - `cd backend && uv run pytest tests/test_confidence.py -q` — 7 passed with plain-language mapping reasons.
 - `npm --prefix frontend test -- --run src/App.spec.ts`, `npm --prefix frontend run build`, and `npm --prefix frontend run lint` — passed after mapping reason updates.
+- `npm --prefix frontend test -- --run src/App.spec.ts src/exportCsv.spec.ts` — 14 passed; frontend lint and production build passed with the CSV export.
 - `cd backend && uv run pytest tests/test_confidence.py tests/test_commercial_review.py tests/test_json_extraction.py -q` — 26 passed.
 - `bin/agent-validate targeted` — frontend lint/tests, backend Ruff, mypy, and 83 backend tests passed.
 - Browser/Playwright validation intentionally omitted at user request.
