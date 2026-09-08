@@ -1325,9 +1325,10 @@ Extraction confidence is a visible 0–100 score with a `High`, `Medium`, or `Lo
 | Machine readability | 30% | native PDF text and clean email score above OCR-dependent media |
 | Parser quality | 25% | clean parse, mixed fallback, poor parse, or failed parse |
 | Grounded evidence quality | 15% | evidence recovered from the source, not model self-assessment |
-| OCR quality | 10% | OCR line confidence when OCR was used; neutral when it was not |
+| OCR quality | 15% | OCR line confidence when OCR was used; neutral when it was not |
+| Independent extraction agreement | 35% | Agreement between OCR-assisted and direct-vision readings for images |
 
-The API returns each factor, weight, score, and plain-language reason. Glare, blur, cropping, damaged scans, OCR use, weak OCR lines, and parser warnings reduce extraction confidence. Canonical schema ambiguity never does.
+The remaining weights are machine readability (20%), parser quality (15%), and grounded source evidence (15%). The API returns each factor, weight, score, and plain-language reason. Glare, blur, cropping, damaged scans, OCR use, weak OCR lines, parser warnings, and disagreement between the two image readings reduce extraction confidence. Canonical schema ambiguity never does. Each uploaded image exposes its OCR-assisted and direct-vision reading as a separate source result with its own score.
 
 Confidence exists only for an assessable extraction result: at least one extracted product must be available for review. A source that fails with zero products returns `extraction_confidence: null` and `mapping_confidence: null`; it must display as failed, never as a low-percentage extraction.
 
@@ -1346,6 +1347,8 @@ An absent source value is not a confidence penalty. A derived value has no extra
 The source table has `Extraction confidence` and `Mapping confidence` columns. `Review issues` and the opaque `lowest field band` presentation are retired. The mapping column can state, for example, `74% · 2 issues found`.
 
 Product breakdown rows show mapping confidence and their mapping issue count. In product detail, issues appear under the affected Product Identity, Pricing & Commercial Terms, Quantity & Packaging, Supply & Logistics, or Regulatory & Compliance section. Extraction confidence factors remain visible as a separate source-recovery explanation.
+
+If a product has no attributable mapping score and zero mapping issues, the product and source tables show `No issues`; they do not use a dash or invent a percentage.
 
 ---
 
