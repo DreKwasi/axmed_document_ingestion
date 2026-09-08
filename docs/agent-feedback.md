@@ -70,3 +70,6 @@
 | 2026-09-08 | mapping-and-activity-consistency | Medium mapping uncertainty could display beside `No issues found`, and a completed image-review event inherited the default active phase. | Make every sub-100 mapped field a counted issue and let terminal document/event states override historical activity labels. | applied |
 | 2026-09-08 | ocr-quality-safety-gate | Treating OCR quality only as a score still allowed semantic models to produce plausible output from mostly illegible pixels. | Use OCR quality both continuously and as a configurable pre-model gate; exclude rejected text and image regions from downstream semantic extraction. | applied |
 | 2026-09-08 | ocr-quality-safety-gate | Treating OCR quality only as a score still allowed semantic models to produce plausible records from mostly unreadable pixels. | Use OCR quality both continuously and as a configurable pre-model gate; mask rejected regions so downstream models cannot recover or guess from them. | applied |
+## 2026-09-08 — Upload failure observability
+
+- Application-level exception logging at externally exercised boundaries is essential: platform HTTP logs can report a 500 without retaining the Python traceback needed to diagnose it.
