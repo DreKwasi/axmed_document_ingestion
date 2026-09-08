@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 const sanovaFixture = fileURLToPath(
@@ -23,6 +24,30 @@ test("a reviewer corrects a source-grounded extracted offer", async ({ page }) =
 
   await page.getByLabel("Close product details").click();
   await expect(page.getByText("Pending review after correction", { exact: true })).toBeVisible();
+});
+
+test("a reviewer downloads a user-facing product CSV", async ({ page }) => {
+  await page.goto("/");
+  await page.locator('input[type="file"]').setInputFiles(sanovaFixture);
+  await expect(page.getByText("Pending human review", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Back to sources" }).click();
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export CSV" }).click();
+  const download = await downloadPromise;
+  const downloadPath = await download.path();
+  expect(downloadPath).not.toBeNull();
+  const csv = await readFile(downloadPath!, "utf8");
+  const header = csv.split("\r\n")[0];
+
+  expect(download.suggestedFilename()).toBe("axmed-export.csv");
+  expect(header).toContain('"source_file","file_format","failure_reason","source_notes"');
+  expect(header).toContain('"extraction_confidence_explanation"');
+  expect(header).not.toContain('"record_type"');
+  expect(header).not.toContain('"source_id"');
+  expect(header).not.toContain('"source_status"');
+  expect(header.match(/commercial_currency/g)).toHaveLength(1);
+  expect(csv).toContain('"Sanotri-TLD"');
 });
 
 test("opening a processed image source starts one review request", async ({ page }, testInfo) => {
