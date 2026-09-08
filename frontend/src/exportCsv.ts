@@ -25,8 +25,9 @@ const reviewHeaders = [
   "review_rejection_reason", "review_patches",
 ];
 const headers = [...sourceHeaders, ...productHeaders, ...issueHeaders, ...reviewHeaders];
-const terminalStatuses = new Set([
-  "pending_review", "approved", "rejected", "failed", "completed", "corrected", "needs_review", "auto_accepted",
+type ExportableStatus = "pending_review" | "approved" | "rejected" | "failed";
+const exportableStatuses: ReadonlySet<ExportableStatus> = new Set([
+  "pending_review", "approved", "rejected", "failed",
 ]);
 
 function cell(value: unknown): string {
@@ -40,9 +41,10 @@ function fileFormat(filename: string): string {
 }
 
 function extractionConfidenceExplanation(document: DocumentResponse): string {
-  return (document.extraction_confidence?.factors ?? [])
-    .map((factor) => `${factor.label}: ${factor.reason}`)
-    .join(" | ");
+  return [
+    ...(document.notes ?? []),
+    ...(document.extraction_confidence?.factors ?? []).map((factor) => `${factor.label}: ${factor.reason}`),
+  ].join(" | ");
 }
 
 function sourceValues(document: DocumentResponse, item?: LineItem): unknown[] {
@@ -97,8 +99,8 @@ function appliesToProduct(fieldPath: string, position: number): boolean {
   return fieldPath.startsWith(`line_items[${position}]`) || fieldPath.startsWith(`line_items.${position}.`);
 }
 
-function aggregate(values: Array<string | null | undefined>): string {
-  return [...new Set(values.filter((value): value is string => Boolean(value)))].join("; ");
+function alignedValues(values: Array<string | null | undefined>): string {
+  return values.map((value) => value ?? "").join("; ");
 }
 
 function issueValues(document: DocumentResponse, position?: number): unknown[] {
@@ -106,19 +108,19 @@ function issueValues(document: DocumentResponse, position?: number): unknown[] {
     (issue) => position == null || appliesToProduct(issue.field_path, position)
   );
   return [
-    aggregate(issues.map((issue) => issue.field_path)), aggregate(issues.map((issue) => issue.section)),
-    aggregate(issues.map((issue) => issue.code)), aggregate(issues.map((issue) => issue.message)),
-    aggregate(issues.map((issue) => issue.severity)),
+    alignedValues(issues.map((issue) => issue.field_path)), alignedValues(issues.map((issue) => issue.section)),
+    alignedValues(issues.map((issue) => issue.code)), alignedValues(issues.map((issue) => issue.message)),
+    alignedValues(issues.map((issue) => issue.severity)),
   ];
 }
 
 function reviewValues(document: DocumentResponse): unknown[] {
   return [
-    aggregate(document.reviews.map((review) => review.action)),
-    aggregate(document.reviews.map((review) => String(review.prior_revision))),
-    aggregate(document.reviews.map((review) => String(review.resulting_revision))),
-    aggregate(document.reviews.map((review) => review.note)),
-    aggregate(document.reviews.map((review) => review.rejection_reason)),
+    alignedValues(document.reviews.map((review) => review.action)),
+    alignedValues(document.reviews.map((review) => String(review.prior_revision))),
+    alignedValues(document.reviews.map((review) => String(review.resulting_revision))),
+    alignedValues(document.reviews.map((review) => review.note)),
+    alignedValues(document.reviews.map((review) => review.rejection_reason)),
     document.reviews.length ? JSON.stringify(document.reviews.flatMap((review) => review.patches)) : "",
   ];
 }
@@ -126,7 +128,9 @@ function reviewValues(document: DocumentResponse): unknown[] {
 /** Serializes terminal sources into one row per product, with one summary row when no product exists. */
 export function documentsToCsv(documents: DocumentResponse[]): string {
   const rows: unknown[][] = [];
-  for (const document of documents.filter((candidate) => terminalStatuses.has(candidate.status))) {
+  for (const document of documents.filter(
+    (candidate) => exportableStatuses.has(candidate.status as ExportableStatus)
+  )) {
     const items = document.quotation?.line_items ?? [];
     if (!items.length) {
       rows.push([

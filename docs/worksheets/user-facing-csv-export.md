@@ -41,6 +41,7 @@
 - `npx playwright test e2e/review.spec.ts -g "downloads a user-facing product CSV"` — passed against running isolated API/Vite servers; downloaded `axmed-export.csv` and verified its header and product content.
 - `bin/agent-validate targeted` — frontend lint, 26 Vitest tests, Ruff, mypy, and 93 backend tests passed.
 - `bin/agent-validate full` — frontend lint, 26 Vitest tests, production build, 5 Playwright journeys, Ruff, mypy, 93 backend tests, 5 evaluation tests, and the recorded six-case evaluation run completed successfully.
+- Re-ran `bin/agent-validate full` after resolving two-axis review findings with the same passing totals.
 - `bin/agent-sweep` completed over `HEAD~10..HEAD`; no warning affecting the export change was found.
 
 ## Review findings and resolutions
@@ -49,6 +50,8 @@
 - Plan review: no independent provider configured. The chosen product-row grain avoids ambiguous rows after removing `record_type`; failed terminal sources retain one summary row so failure context is not discarded.
 - Implementation review: quality and code-quality passes found the behavior tests cover filtering, headers, aggregation, and a real download; security found no new data exposure beyond fields already present in the previous export; performance remains linear in documents, products, issues, and reviews.
 - Wrap-up review: completion claims match the recorded commands, docs reflect the new contract, and no unresolved product risk was found. Independent-provider review remains unavailable through `bin/agent-review` configuration.
+- Two-axis code review from `14d161e` found that independent deduplication could break positional associations across multiple issue/review columns, tests covered only one issue/review, confidence explanations omitted source notes, and the export status set included undocumented legacy states. Resolved by preserving repeated aligned values, testing two issues/reviews, combining notes with factor explanations, and narrowing statuses to `pending_review`, `approved`, `rejected`, and `failed`.
+- The standards review also noted the repository's four-file commit limit forces implementation, system docs, and worksheet into contextual commits; all are grouped under the worksheet tag rather than rewriting already validated history.
 
 ## Docs updated
 

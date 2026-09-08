@@ -43,8 +43,11 @@ describe("documentsToCsv", () => {
         score: 74, band: "Medium",
         factors: [{ key: "legibility", label: "Text legibility", weight: 45, score: 60, reason: "Some text regions were unclear." }],
       },
-      mapping_confidence: { score: 82, band: "Medium", issue_count: 1 },
-      mapping_issues: [{ field_path: "line_items[0].pricing.pack_price", section: "pricing", code: "uncertain_mapping", message: "Confirm pack price", severity: "warning" }],
+      mapping_confidence: { score: 82, band: "Medium", issue_count: 2 },
+      mapping_issues: [
+        { field_path: "line_items[0].pricing.pack_price", section: "pricing", code: "uncertain_mapping", message: "Confirm pack price", severity: "warning" },
+        { field_path: "line_items[0].pricing.quoted_price", section: "pricing", code: "uncertain_mapping", message: "Confirm quoted price", severity: "warning" },
+      ],
       quotation: {
         quotation_reference: "REF-1", supplier: { name: "Supplier" }, commercial_terms: { currency: "USD" },
         line_items: [{
@@ -60,7 +63,10 @@ describe("documentsToCsv", () => {
         label: "Internal fact", value: "value", source_path: "$.fact", extraction_method: "direct_json",
         confidence: "1.00", normalization_status: "unmapped", review_status: "not_reviewable",
       }],
-      reviews: [{ action: "corrected", prior_revision: 1, resulting_revision: 2, note: "Verified against source", patches: [] }],
+      reviews: [
+        { action: "corrected", prior_revision: 1, resulting_revision: 2, note: "Verified against source", patches: [] },
+        { action: "approved", prior_revision: 2, resulting_revision: 3, patches: [] },
+      ],
     } as DocumentResponse;
     const processing = {
       id: "source-2", filename: "processing.pdf", status: "processing", quotation: null, reviews: [],
@@ -78,11 +84,14 @@ describe("documentsToCsv", () => {
     expect(values).toMatchObject({
       source_file: "offer.pdf", file_format: "PDF", failure_reason: "",
       source_notes: "Native text recovered cleanly.", extraction_confidence: "74",
-      extraction_confidence_explanation: "Text legibility: Some text regions were unclear.",
-      mapping_confidence: "82", mapping_issue_count: "1", active_ingredients: "Ingredient A; Ingredient B",
+      extraction_confidence_explanation: "Native text recovered cleanly. | Text legibility: Some text regions were unclear.",
+      mapping_confidence: "82", mapping_issue_count: "2", active_ingredients: "Ingredient A; Ingredient B",
       commercial_currency: "USD", packaging_description: "10 x 10 tablets",
-      issue_field_path: "line_items[0].pricing.pack_price", issue_message: "Confirm pack price",
-      review_action: "corrected", review_note: "Verified against source",
+      issue_field_path: "line_items[0].pricing.pack_price; line_items[0].pricing.quoted_price",
+      issue_section: "pricing; pricing", issue_message: "Confirm pack price; Confirm quoted price",
+      issue_severity: "warning; warning", review_action: "corrected; approved",
+      review_prior_revision: "1; 2", review_resulting_revision: "2; 3",
+      review_note: "Verified against source; ",
     });
     expect(parseCsv(csv)).toHaveLength(2);
   });
