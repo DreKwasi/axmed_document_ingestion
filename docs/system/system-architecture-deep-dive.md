@@ -1,7 +1,7 @@
 # System Architecture Deep Dive
 
 > Purpose: comprehensive architectural blueprint of ingestion, preprocessing, deterministic validation, LLM extraction, and persistence.
-> Status: active and synchronized with multi-format intake, dual confidence scoring, and human review workflows.
+> Status: active and synchronized with multi-format intake, dual confidence scoring, native LiteParse v2, and human review workflows.
 > Update whenever intake pipelines, parser integrations, deterministic rules, or LLM contracts change.
 > Owner persona: systems maintainer / architecture team.
 > Related: `docs/system/architecture.md`, `docs/product/axmed_document_intelligence_prd.md`, `backend/app/README.md`.
@@ -30,9 +30,9 @@
 ├──────────────┬──────────────┬──────────────┬─────────────┤
 │     JSON     │     PDF      │     EML      │    IMAGE    │
 │  Structural  │  LiteParse   │  MIME parser │  PaddleOCR  │
-│  profiling & │  table grid  │  PII & email │  line & box │
-│  JSONPaths   │  & reading   │  greeting    │  confidence │
-│  validation  │  order text  │  redaction   │  extraction │
+│  profiling & │  v2 (Rust)   │  PII & email │  line & box │
+│  JSONPaths   │  in-process  │  greeting    │  confidence │
+│  validation  │  grid & text │  redaction   │  extraction │
 └──────┬───────┴──────┬───────┴──────┬───────┴──────┬──────┘
        │              │              │              │
        │              │              │      ┌───────┴────────┐
@@ -97,9 +97,9 @@ flowchart TD
     subgraph Preprocessing ["Specialized Format Preprocessing"]
         E --> G{"File Type?"}
         G -->|JSON| H["JSON Structural Profiler & JSONPath Validator"]
-        G -->|PDF| I["LiteParse CLI Engine: Native Layout & Reading Order"]
+        G -->|PDF| I["LiteParse v2 (Rust in-process): Table Grid & Reading Order"]
         G -->|EML| J["MIME Parser + PII Greeting/Signature Stripper"]
-        G -->|Image| K["PaddleOCR OCR Client: Line Confidence & Bounding Boxes"]
+        G -->|Image| K["PaddleOCR Client: Line Confidence & Bounding Boxes"]
     end
 
     subgraph Safety ["Deterministic Safety & Gates"]
@@ -164,9 +164,9 @@ The backend leverages FastAPI's in-process `BackgroundTasks` without requiring e
    └────┬────┘    └─────┬─────┘    └─────┬─────┘  └─────┬─────┘
         │               │                │              │
         ▼               ▼                ▼              ▼
-   Flatten Keys    LiteParse CLI    MIME Parser   PaddleOCR GPU
-   & JSONPath      Extract Tables   Strip PII &   Line & Bounding
-   Pointers        & Reading Text   Greetings     Box Coordinates
+   Flatten Keys    LiteParse v2     MIME Parser   PaddleOCR GPU
+   & JSONPath      Native Rust      Strip PII &   Line & Bounding
+   Pointers        In-Process       Greetings     Box Coordinates
         │               │                │              │
         │               │                │              ▼
         │               │                │      Check Safety Gate
@@ -189,8 +189,8 @@ flowchart LR
     end
 
     subgraph Sub_PDF ["PDF"]
-        P1["Raw PDF"] --> P2["LiteParse Node CLI"]
-        P2 --> P3["Extract Cell Coordinates & Reading Order"]
+        P1["Raw PDF"] --> P2["LiteParse v2 (Rust)"]
+        P2 --> P3["Extract Cell Coordinates & Reading Order in Memory"]
     end
 
     subgraph Sub_EML ["EML"]
@@ -213,13 +213,14 @@ flowchart LR
 - **Ground Truth Verification**: If an extractor claims a source value, the deterministic engine validates that the JSONPath actually exists and the value matches before permitting it into canonical quotation state.
 - **Unmapped Fact Retention**: Unmapped fields are stored in `extracted_source_facts` for compliance audits rather than lowering extraction confidence or raising spurious review errors.
 
-### PDF Documents
-- **LiteParse Engine**: Handled by [`backend/app/extraction/pdf_parser.py`](file:///Users/andrewsboateng/Projects/axmed-takehome/backend/app/extraction/pdf_parser.py).
-- **No Naive Markdown/HTML Conversions**: Avoids universal heuristic table rebuilds.
+### PDF Documents (LiteParse v2.0 Native Rust Engine)
+- **In-Process Native Execution**: Handled by [`backend/app/extraction/pdf_parser.py`](file:///Users/andrewsboateng/Projects/axmed-takehome/backend/app/extraction/pdf_parser.py) via `liteparse>=2.14.4`. LiteParse v2 is compiled in Rust against a custom PDFium build and `tesseract-rs`, running natively in Python process memory via PyO3 bindings.
+- **Decoupled from Node.js**: Completely removes external Node.js, `npm`, `npx`, and CLI subprocess invocation. It eliminates process launch overhead, achieving a 5–100x speedup on small documents and ~3x on large files.
+- **No Naive Conversions**: Explicitly rejects hand-crafted universal table/Markdown reconstruction layers.
 - **Dual Representation**:
-  1. *Spatial Table Geometry*: Bounding boxes, row/column indices, and cell groupings.
-  2. *Clean Reading-Order Text*: Coherent text stream for narrative clauses and footnotes.
-- LiteParse raw JSON is retained permanently as ground truth evidence.
+  1. *Spatial Table Geometry*: Bounding boxes, row/column indices, cell text items (`x`, `y`, `width`, `height`, `confidence`).
+  2. *Clean Reading-Order Text*: Coherent text stream for narrative clauses, delivery conditions, and footnotes.
+- **Evidence Retention**: The parsed page representation (`raw_representation`) is preserved permanently as ground truth evidence.
 
 ### EML (Email Correspondence)
 - **MIME Parsing**: Handled by [`backend/app/extraction/email_parser.py`](file:///Users/andrewsboateng/Projects/axmed-takehome/backend/app/extraction/email_parser.py).
@@ -296,14 +297,14 @@ The LLM is invoked strictly for semantic synthesis, entity resolution, and disco
 
 ```mermaid
 sequenceDiagram
-    participant Parser as LiteParse Engine
+    participant Parser as LiteParse v2 (Rust In-Process)
     participant Extractor as LangChainSemanticExtractor
     participant Gemini as Google Gemini
     participant Norm as Normalization Engine
 
-    Parser->>Extractor: Send Table Layout and Text
+    Parser->>Extractor: Pass In-Memory Table Layout & Text
     Note over Extractor: Pass 1: Primary Tabular Extraction
-    Extractor->>Gemini: Prompt and Table Layout JSON
+    Extractor->>Gemini: Prompt and Table Layout Geometry
     Gemini-->>Extractor: Line Items and Commercial Terms
     
     Note over Extractor: Pass 2: Text Narrative Enrichment
@@ -364,3 +365,19 @@ erDiagram
   $$\text{received} \longrightarrow \text{processing} \longrightarrow \text{pending\_review} \longrightarrow \text{approved} \text{ or } \text{rejected}$$
 - **Inline Corrections**: Reviewers can edit any extracted field in the `ProductDetailDrawer`. Saving a correction automatically recalculates commercial math and audits before/after states.
 - **CSV Export**: Emits complete structured extracts covering document metadata, line items, confidence scores, and review decisions.
+
+---
+
+## 7. Deployment & Environment Configuration
+
+### Unified Python Service
+- **Runtime Environment**: Python 3.12/3.13 managed via `uv`.
+- **Cloud Deployment ([`backend/railpack.json`](file:///Users/andrewsboateng/Projects/axmed-takehome/backend/railpack.json))**:
+  ```json
+  {
+    "$schema": "https://schema.railpack.com",
+    "provider": "python"
+  }
+  ```
+  The backend builds as a pure Python container with no Node 22, npm, or cross-runtime tooling overhead. Native extensions (such as `liteparse` Rust binaries) are resolved directly from PyPI platform wheels during container build.
+- **Unified Local Supervisor**: `bin/dev` (or `make dev`) starts FastAPI and the Vite Vue 3 frontend simultaneously under a single coordinated development process.
