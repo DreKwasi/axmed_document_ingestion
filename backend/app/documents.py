@@ -564,16 +564,19 @@ def _sync_normalized_line_items(session: Session, quotation_id: str, canonical: 
         )
 
 
-def _normalized_line_items(session: Session, quotation_id: str) -> list[dict[str, Any]] | None:
-    """Read line items from normalized tables and return API-compatible JSON values."""
+def _normalized_line_items_batch(session: Session, quotation_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+    """Read line items for multiple quotations from normalized tables and return API-compatible JSON values."""
+    if not quotation_ids:
+        return {}
 
     rows = session.scalars(
         select(QuotationLineItemRecord)
-        .where(QuotationLineItemRecord.quotation_id == quotation_id)
-        .order_by(QuotationLineItemRecord.position)
+        .where(QuotationLineItemRecord.quotation_id.in_(quotation_ids))
+        .order_by(QuotationLineItemRecord.quotation_id, QuotationLineItemRecord.position)
     ).all()
     if not rows:
-        return None
+        return {}
+
     line_item_ids = [row.id for row in rows]
 
     def grouped(model):
@@ -590,9 +593,10 @@ def _normalized_line_items(session: Session, quotation_id: str) -> list[dict[str
     price_tiers = grouped(QuotationLineItemPriceTierRecord)
     adjustments = grouped(QuotationLineItemAdjustmentRecord)
     markets = grouped(QuotationLineItemMarketRecord)
-    result: list[dict[str, Any]] = []
+
+    items_by_quotation: dict[str, list[dict[str, Any]]] = {qid: [] for qid in quotation_ids}
     for row in rows:
-        result.append(
+        items_by_quotation.setdefault(row.quotation_id, []).append(
             {
                 "source_key": row.source_key,
                 "product": {
@@ -679,7 +683,19 @@ def _normalized_line_items(session: Session, quotation_id: str) -> list[dict[str
                 "evidence": [],
             }
         )
-    return json.loads(json.dumps(result, default=str))
+
+    # Decode JSON values for API consistency
+    return {
+        qid: json.loads(json.dumps(items, default=str))
+        for qid, items in items_by_quotation.items()
+        if items
+    }
+
+
+def _normalized_line_items(session: Session, quotation_id: str) -> list[dict[str, Any]] | None:
+    """Read line items from normalized tables and return API-compatible JSON values."""
+    batch = _normalized_line_items_batch(session, [quotation_id])
+    return batch.get(quotation_id)
 
 
 def _restore_snapshot_number_format(value: Any, snapshot: Any) -> Any:
@@ -1414,120 +1430,134 @@ def _clear_document_quotation(session: Session, document_id: str) -> None:
     session.execute(delete(QuotationRecord).where(QuotationRecord.id.in_(quotation_ids)))
 
 
-def serialize_document(session: Session, document: DocumentRecord) -> dict[str, Any]:
-    quotation = session.scalar(select(QuotationRecord).where(QuotationRecord.document_id == document.id))
-    stored_quotation_payload = None if quotation is None else json.loads(quotation.payload_json)
-    quotation_payload = None if document.status == "failed" else stored_quotation_payload
-    field_values: list[QuotationFieldValueRecord] = []
-    assessment = None
-    if quotation_payload is not None and quotation is not None:
-        assessment = assess_mapping_confidence(CanonicalQuotation.model_validate(quotation_payload))
-        normalized_items = _normalized_line_items(session, quotation.id)
-        if normalized_items is not None:
-            snapshot_items = quotation_payload.get("line_items", [])
-            normalized_items = _restore_snapshot_number_format(normalized_items, snapshot_items)
-            for index, line_item in enumerate(normalized_items):
-                if index < len(snapshot_items):
-                    line_item["evidence"] = snapshot_items[index].get("evidence", [])
-            quotation_payload["line_items"] = normalized_items
-        quotation_payload["revision"] = quotation.revision
-        quotation_payload["system_decision"] = quotation.system_decision
-        quotation_payload["review_status"] = quotation.review_status
-        quotation_payload["has_corrections"] = quotation.has_corrections
-        field_values = list(
-            session.scalars(
-                select(QuotationFieldValueRecord)
-                .where(QuotationFieldValueRecord.quotation_id == quotation.id)
-                .order_by(QuotationFieldValueRecord.canonical_field)
-            )
-        )
-        quotation_payload["field_reviews"] = [
-            {
-                "field_path": field_value.canonical_field,
-                "value": json.loads(field_value.value_json),
-                "review_status": field_value.review_status,
-                "mapping_confidence_band": (
-                    None if field_value.reliability == "Not applicable" else field_value.reliability
-                ),
-                "mapping_confidence_score": (
-                    None
-                    if field_value.reliability == "Not applicable"
-                    else _mapping_score_for_path(field_value.canonical_field, assessment)
-                ),
-                "mapping_confidence_reason": field_value.reliability_reason,
-                "source_evidence_score": str(field_value.confidence),
-                "extraction_method": field_value.extraction_method,
-                "source_path": field_value.source_path,
-                "source_location": field_value.source_location,
-            }
-            for field_value in field_values
-        ]
-    source_facts = list(
-        session.scalars(
-            select(ExtractedSourceFactRecord)
-            .where(ExtractedSourceFactRecord.document_id == document.id)
-            .order_by(ExtractedSourceFactRecord.created_at, ExtractedSourceFactRecord.id)
-        )
-    )
-    image_attempts = list(
-        session.scalars(
-            select(ImageExtractionAttemptRecord)
-            .where(ImageExtractionAttemptRecord.document_id == document.id)
-            .order_by(ImageExtractionAttemptRecord.approach)
-        )
-    )
+def _build_quotation_projection(
+    document: DocumentRecord,
+    quotation: QuotationRecord | None,
+    line_items: list[dict[str, Any]] | None,
+    field_values: list[QuotationFieldValueRecord],
+) -> tuple[dict[str, Any] | None, MappingAssessment | None]:
+    """Assemble the validated, normalized quotation view with line-item evidence and field reviews."""
+    if quotation is None or not quotation.payload_json or document.status == "failed":
+        return None, None
+
+    stored_payload = json.loads(quotation.payload_json)
+    try:
+        assessment = assess_mapping_confidence(CanonicalQuotation.model_validate(stored_payload))
+    except Exception:
+        assessment = None
+
+    if line_items is not None:
+        snapshot_items = stored_payload.get("line_items", [])
+        normalized_items = _restore_snapshot_number_format(line_items, snapshot_items)
+        for index, item in enumerate(normalized_items):
+            if index < len(snapshot_items):
+                item["evidence"] = snapshot_items[index].get("evidence", [])
+        stored_payload["line_items"] = normalized_items
+
+    stored_payload["revision"] = quotation.revision
+    stored_payload["system_decision"] = quotation.system_decision
+    stored_payload["review_status"] = quotation.review_status
+    stored_payload["has_corrections"] = quotation.has_corrections
+
+    stored_payload["field_reviews"] = [
+        {
+            "field_path": fv.canonical_field,
+            "value": json.loads(fv.value_json),
+            "review_status": fv.review_status,
+            "mapping_confidence_band": None if fv.reliability == "Not applicable" else fv.reliability,
+            "mapping_confidence_score": (
+                None
+                if fv.reliability == "Not applicable" or assessment is None
+                else _mapping_score_for_path(fv.canonical_field, assessment)
+            ),
+            "mapping_confidence_reason": fv.reliability_reason,
+            "source_evidence_score": str(fv.confidence),
+            "extraction_method": fv.extraction_method,
+            "source_path": fv.source_path,
+            "source_location": fv.source_location,
+        }
+        for fv in field_values
+    ]
+    return stored_payload, assessment
+
+
+def _assemble_serialized_document(
+    session: Session,
+    document: DocumentRecord,
+    *,
+    quotation: QuotationRecord | None,
+    quotation_payload: dict[str, Any] | None,
+    assessment: MappingAssessment | None,
+    artifacts: list[DocumentArtifactRecord],
+    source_facts: list[ExtractedSourceFactRecord],
+    image_attempts: list[ImageExtractionAttemptRecord],
+    reviews: list[ReviewRecord],
+    ocr_job: OcrJobRecord | None,
+    email_extraction: EmailExtractionRecord | None,
+    pdf_extraction: PdfExtractionRecord | None,
+) -> dict[str, Any]:
+    """Format single document payload dictionary from pre-loaded relational entities."""
+    stored_raw = json.loads(quotation.payload_json) if (quotation and quotation.payload_json) else None
     extraction_confidence = assess_extraction_confidence(
-        _extraction_confidence_signals(
-            session,
+        _build_extraction_confidence_signals(
             document,
-            has_extracted_result=bool((stored_quotation_payload or {}).get("line_items")),
+            artifacts,
+            ocr_job,
+            has_extracted_result=bool((stored_raw or {}).get("line_items")),
         )
     )
+
     return {
         "id": document.id,
         "filename": document.original_filename,
-        "source_name": _source_name(document, stored_quotation_payload),
+        "source_name": _source_name(document, stored_raw),
         "status": document.status,
         "failure_reason": document.failure_reason,
         "source_system": document.source_system,
         "schema_version": document.schema_version,
         "parsed_summary": _safe_parsed_summary(document),
-        "system_decision": None if quotation_payload is None or quotation is None else quotation.system_decision,
-        "extraction_confidence": None
-        if extraction_confidence is None
-        else {
-            "score": extraction_confidence.score,
-            "band": extraction_confidence.band,
-            "factors": [
-                {
-                    "key": factor.key,
-                    "label": factor.label,
-                    "weight": factor.weight,
-                    "score": factor.score,
-                    "reason": factor.reason,
-                }
-                for factor in extraction_confidence.factors
-            ],
-        },
-        "mapping_confidence": None
-        if assessment is None
-        else {
-            "score": assessment.score,
-            "band": assessment.band,
-            "issue_count": len(assessment.issues),
-        },
-        "mapping_issues": []
-        if assessment is None
-        else [
-            {
-                "field_path": issue.field_path,
-                "section": issue.section,
-                "code": issue.code,
-                "message": issue.message,
-                "severity": issue.severity,
+        "system_decision": None if (quotation_payload is None or quotation is None) else quotation.system_decision,
+        "extraction_confidence": (
+            None
+            if extraction_confidence is None
+            else {
+                "score": extraction_confidence.score,
+                "band": extraction_confidence.band,
+                "factors": [
+                    {
+                        "key": factor.key,
+                        "label": factor.label,
+                        "weight": factor.weight,
+                        "score": factor.score,
+                        "reason": factor.reason,
+                    }
+                    for factor in extraction_confidence.factors
+                ],
             }
-            for issue in assessment.issues
-        ],
+        ),
+        "mapping_confidence": (
+            None
+            if assessment is None
+            else {
+                "score": assessment.score,
+                "band": assessment.band,
+                "issue_count": len(assessment.issues),
+            }
+        ),
+        "mapping_issues": (
+            []
+            if assessment is None
+            else [
+                {
+                    "field_path": issue.field_path,
+                    "section": issue.section,
+                    "code": issue.code,
+                    "message": issue.message,
+                    "severity": issue.severity,
+                }
+                for issue in assessment.issues
+            ]
+        ),
         "product_counts": _product_counts(document, quotation_payload),
         "notes": _document_notes(document, quotation_payload),
         "artifacts": [
@@ -1536,11 +1566,7 @@ def serialize_document(session: Session, document: DocumentRecord) -> dict[str, 
                 "page_number": artifact.page_number,
                 "metadata": json.loads(artifact.metadata_json),
             }
-            for artifact in session.scalars(
-                select(DocumentArtifactRecord)
-                .where(DocumentArtifactRecord.document_id == document.id)
-                .order_by(DocumentArtifactRecord.page_number)
-            )
+            for artifact in artifacts
         ],
         "extracted_source_facts": [
             {
@@ -1566,19 +1592,147 @@ def serialize_document(session: Session, document: DocumentRecord) -> dict[str, 
                 "rejection_reason": review.rejection_reason,
                 "patches": json.loads(review.patches_json),
             }
-            for review in session.scalars(
-                select(ReviewRecord)
-                .where(ReviewRecord.document_id == document.id)
-                .order_by(ReviewRecord.created_at.desc())
-            )
+            for review in reviews
         ],
-        "email_extraction": _serialize_email_extraction(session, document.id),
-        "pdf_extraction": _serialize_pdf_extraction(session, document.id),
-        "ocr": _serialize_ocr_job(session, document.id),
+        "email_extraction": None
+        if email_extraction is None
+        else {"id": email_extraction.id, "status": email_extraction.status},
+        "pdf_extraction": None
+        if pdf_extraction is None
+        else {"id": pdf_extraction.id, "status": pdf_extraction.status},
+        "ocr": None if ocr_job is None else {
+            "id": ocr_job.id,
+            "status": ocr_job.status,
+            "selected_pages": json.loads(ocr_job.selected_pages_json),
+        },
         "image_extraction_attempts": [
             _serialize_image_attempt(session, document, attempt) for attempt in image_attempts
         ],
     }
+
+
+def serialize_documents(session: Session, documents: list[DocumentRecord]) -> list[dict[str, Any]]:
+    """Batch-serialize multiple documents using eager IN(...) relational loading."""
+    if not documents:
+        return []
+
+    doc_ids = [doc.id for doc in documents]
+
+    # Eager batch queries across all documents
+    quotations = session.scalars(
+        select(QuotationRecord).where(QuotationRecord.document_id.in_(doc_ids))
+    ).all()
+    quotation_by_doc_id = {q.document_id: q for q in quotations}
+    quotation_ids = [q.id for q in quotations]
+
+    # Fetch field values in bulk
+    field_values_by_quotation_id: dict[str, list[QuotationFieldValueRecord]] = {qid: [] for qid in quotation_ids}
+    if quotation_ids:
+        raw_fvs = session.scalars(
+            select(QuotationFieldValueRecord)
+            .where(QuotationFieldValueRecord.quotation_id.in_(quotation_ids))
+            .order_by(QuotationFieldValueRecord.canonical_field)
+        ).all()
+        for fv in raw_fvs:
+            field_values_by_quotation_id.setdefault(fv.quotation_id, []).append(fv)
+
+    # Fetch line items in bulk
+    line_items_by_quotation_id = _normalized_line_items_batch(session, quotation_ids) if quotation_ids else {}
+
+    # Fetch source facts in bulk
+    source_facts_by_doc_id: dict[str, list[ExtractedSourceFactRecord]] = {did: [] for did in doc_ids}
+    raw_facts = session.scalars(
+        select(ExtractedSourceFactRecord)
+        .where(ExtractedSourceFactRecord.document_id.in_(doc_ids))
+        .order_by(ExtractedSourceFactRecord.created_at, ExtractedSourceFactRecord.id)
+    ).all()
+    for fact in raw_facts:
+        source_facts_by_doc_id.setdefault(fact.document_id, []).append(fact)
+
+    # Fetch image attempts in bulk
+    image_attempts_by_doc_id: dict[str, list[ImageExtractionAttemptRecord]] = {did: [] for did in doc_ids}
+    raw_attempts = session.scalars(
+        select(ImageExtractionAttemptRecord)
+        .where(ImageExtractionAttemptRecord.document_id.in_(doc_ids))
+        .order_by(ImageExtractionAttemptRecord.approach)
+    ).all()
+    for attempt in raw_attempts:
+        image_attempts_by_doc_id.setdefault(attempt.document_id, []).append(attempt)
+
+    # Fetch document artifacts in bulk
+    artifacts_by_doc_id: dict[str, list[DocumentArtifactRecord]] = {did: [] for did in doc_ids}
+    raw_artifacts = session.scalars(
+        select(DocumentArtifactRecord)
+        .where(DocumentArtifactRecord.document_id.in_(doc_ids))
+        .order_by(DocumentArtifactRecord.page_number)
+    ).all()
+    for art in raw_artifacts:
+        artifacts_by_doc_id.setdefault(art.document_id, []).append(art)
+
+    # Fetch review history in bulk
+    reviews_by_doc_id: dict[str, list[ReviewRecord]] = {did: [] for did in doc_ids}
+    raw_reviews = session.scalars(
+        select(ReviewRecord)
+        .where(ReviewRecord.document_id.in_(doc_ids))
+        .order_by(ReviewRecord.created_at.desc())
+    ).all()
+    for rev in raw_reviews:
+        reviews_by_doc_id.setdefault(rev.document_id, []).append(rev)
+
+    # Fetch extractions / OCR jobs in bulk
+    email_ext_by_doc_id = {
+        rec.document_id: rec
+        for rec in session.scalars(
+            select(EmailExtractionRecord).where(EmailExtractionRecord.document_id.in_(doc_ids))
+        ).all()
+    }
+    pdf_ext_by_doc_id = {
+        rec.document_id: rec
+        for rec in session.scalars(
+            select(PdfExtractionRecord).where(PdfExtractionRecord.document_id.in_(doc_ids))
+        ).all()
+    }
+    ocr_jobs_by_doc_id = {
+        rec.document_id: rec
+        for rec in session.scalars(
+            select(OcrJobRecord).where(OcrJobRecord.document_id.in_(doc_ids))
+        ).all()
+    }
+
+    results: list[dict[str, Any]] = []
+    for document in documents:
+        quotation = quotation_by_doc_id.get(document.id)
+        quotation_payload, assessment = _build_quotation_projection(
+            document,
+            quotation,
+            line_items=line_items_by_quotation_id.get(quotation.id) if quotation else None,
+            field_values=field_values_by_quotation_id.get(quotation.id, []) if quotation else [],
+        )
+
+        results.append(
+            _assemble_serialized_document(
+                session,
+                document,
+                quotation=quotation,
+                quotation_payload=quotation_payload,
+                assessment=assessment,
+                artifacts=artifacts_by_doc_id.get(document.id, []),
+                source_facts=source_facts_by_doc_id.get(document.id, []),
+                image_attempts=image_attempts_by_doc_id.get(document.id, []),
+                reviews=reviews_by_doc_id.get(document.id, []),
+                ocr_job=ocr_jobs_by_doc_id.get(document.id),
+                email_extraction=email_ext_by_doc_id.get(document.id),
+                pdf_extraction=pdf_ext_by_doc_id.get(document.id),
+            )
+        )
+
+    return results
+
+
+def serialize_document(session: Session, document: DocumentRecord) -> dict[str, Any]:
+    """Serialize a single document using the unified batch serializer."""
+    results = serialize_documents(session, [document])
+    return results[0]
 
 
 def _source_name(document: DocumentRecord, quotation_payload: dict[str, Any] | None) -> str:
@@ -1597,14 +1751,14 @@ def _mapping_score_for_path(field_path: str, assessment: MappingAssessment) -> i
     return None if confidence is None else confidence.score
 
 
-def _extraction_confidence_signals(
-    session: Session,
+def _build_extraction_confidence_signals(
     document: DocumentRecord,
+    artifacts: list[DocumentArtifactRecord],
+    ocr_job: OcrJobRecord | None,
     *,
     has_extracted_result: bool,
 ) -> ConfidenceSignals:
-    """Build source-recovery signals from persisted parser, OCR, and evidence records."""
-
+    """Build source-recovery signals using already fetched records."""
     source_type = (document.source_system or "").casefold()
     if source_type not in {"json", "email", "pdf", "image"}:
         suffix = Path(document.original_filename).suffix.casefold()
@@ -1617,13 +1771,6 @@ def _extraction_confidence_signals(
             ".jpeg": "image",
         }.get(suffix, "unknown")
 
-    artifacts = list(
-        session.scalars(
-            select(DocumentArtifactRecord)
-            .where(DocumentArtifactRecord.document_id == document.id)
-            .order_by(DocumentArtifactRecord.page_number)
-        )
-    )
     page_qualities = [
         str(json.loads(artifact.metadata_json).get("quality"))
         for artifact in artifacts
@@ -1640,7 +1787,6 @@ def _extraction_confidence_signals(
     else:
         parser_quality = None
 
-    ocr_job = session.scalar(select(OcrJobRecord).where(OcrJobRecord.document_id == document.id))
     ocr_scores: tuple[float, ...] = ()
     if ocr_job and ocr_job.safe_result_json:
         ocr_scores = tuple(_confidence_values(json.loads(ocr_job.safe_result_json)))
@@ -1650,6 +1796,29 @@ def _extraction_confidence_signals(
         ocr_used=source_type == "image" or bool(parsed_summary.get("needs_ocr_pages")),
         parser_quality=parser_quality,
         ocr_scores=ocr_scores,
+        has_extracted_result=has_extracted_result,
+    )
+
+
+def _extraction_confidence_signals(
+    session: Session,
+    document: DocumentRecord,
+    *,
+    has_extracted_result: bool,
+) -> ConfidenceSignals:
+    """Build source-recovery signals from persisted parser, OCR, and evidence records."""
+    artifacts = list(
+        session.scalars(
+            select(DocumentArtifactRecord)
+            .where(DocumentArtifactRecord.document_id == document.id)
+            .order_by(DocumentArtifactRecord.page_number)
+        )
+    )
+    ocr_job = session.scalar(select(OcrJobRecord).where(OcrJobRecord.document_id == document.id))
+    return _build_extraction_confidence_signals(
+        document,
+        artifacts,
+        ocr_job,
         has_extracted_result=has_extracted_result,
     )
 

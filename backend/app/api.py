@@ -32,6 +32,7 @@ from app.documents import (
     ingest_pdf,
     reextract_json_document,
     serialize_document,
+    serialize_documents,
 )
 from app.events import list_events_after, record_event, serialize_event
 from app.extraction.email_processing import consume_email_extraction
@@ -370,14 +371,14 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
     @app.get("/api/v1/documents")
     def list_documents(session: SessionDep):
         """List all ingested documents ordered by creation time descending."""
-        documents = session.scalars(select(DocumentRecord).order_by(DocumentRecord.created_at.desc())).all()
-        return [serialize_document(session, document) for document in documents]
+        documents = list(session.scalars(select(DocumentRecord).order_by(DocumentRecord.created_at.desc())).all())
+        return serialize_documents(session, documents)
 
     @app.get("/api/v1/documents/export.csv")
     def export_documents(session: SessionDep):
         """Download terminal database records flattened to user-facing product rows."""
-        documents = session.scalars(select(DocumentRecord).order_by(DocumentRecord.created_at.desc())).all()
-        csv_content = documents_to_csv([serialize_document(session, document) for document in documents])
+        documents = list(session.scalars(select(DocumentRecord).order_by(DocumentRecord.created_at.desc())).all())
+        csv_content = documents_to_csv(serialize_documents(session, documents))
         return Response(
             content=csv_content,
             media_type="text/csv",
