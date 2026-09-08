@@ -110,10 +110,10 @@ function sourceName(doc: DocumentResponse): string {
 }
 
 function confidenceClass(band?: string | null): string {
-  if (band === "High") return "text-emerald-700";
-  if (band === "Medium") return "text-amber-700";
-  if (band === "Low") return "text-rose-700";
-  return "text-slate-400";
+  if (band === "High") return "text-ok";
+  if (band === "Medium") return "text-alert";
+  if (band === "Low") return "text-down";
+  return "text-ink-3";
 }
 
 function productCounts(doc: DocumentResponse): { extracted: number; failed: number } {
@@ -148,10 +148,10 @@ function statusLabel(doc: DocumentResponse): string {
 
 function statusClasses(doc: DocumentResponse): string {
   const map = {
-    ready: "bg-emerald-50 text-emerald-700 border-emerald-200",
-    review: "bg-teal-50 text-teal-700 border-teal-200",
-    needs_attention: "bg-rose-50 text-rose-700 border-rose-200",
-    processing: "bg-slate-100 text-slate-600 border-slate-200",
+    ready: "bg-ok-bg text-ok border-[#a6f4c5]",
+    review: "bg-axmed-primary-tint text-axmed-primary border-[#d0d5dd]",
+    needs_attention: "bg-down-bg text-down border-[#fecdca]",
+    processing: "bg-surface-alt text-ink-3 border-rule",
   };
   return map[statusKey(doc)];
 }
@@ -176,21 +176,21 @@ function mappingConfidenceExplanation(doc: DocumentResponse): string {
 <template>
   <div class="space-y-4">
     <!-- Uploaded Sources Table Card -->
-    <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
-      <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-6 py-4.5">
+    <div class="overflow-hidden rounded-2xl border border-rule bg-surface shadow-xs">
+      <div class="flex flex-wrap items-center justify-between gap-3 border-b border-rule px-4 py-3 sm:px-6 sm:py-4.5">
         <div>
-          <h2 class="text-base font-bold text-slate-900">Uploaded sources</h2>
-          <p class="mt-0.5 text-xs text-slate-500">
+          <h2 class="text-sm sm:text-base font-bold text-ink">Uploaded sources</h2>
+          <p class="mt-0.5 text-xs text-ink-3">
             {{ documents.length }} total documents · {{ sourceRows.length }} extraction results · Click any row to view extracted products and schema.
           </p>
         </div>
       </div>
 
       <div v-if="documents.length" class="overflow-x-auto">
-        <table class="w-full text-left text-xs">
-          <thead class="bg-slate-50 text-[10px] font-bold uppercase tracking-wider text-slate-500 border-b border-slate-100">
+        <table class="w-full min-w-[640px] text-left text-xs">
+          <thead class="bg-surface-alt text-[10px] font-bold uppercase tracking-wider text-ink-2 border-b border-rule">
             <tr>
-              <th class="px-6 py-3.5">Source</th>
+              <th class="px-4 py-3 sm:px-6 sm:py-3.5">Source</th>
               <th class="px-4 py-3.5">Extraction confidence</th>
               <th class="px-4 py-3.5">Mapping confidence</th>
               <th class="px-4 py-3.5">Products</th>
@@ -198,38 +198,37 @@ function mappingConfidenceExplanation(doc: DocumentResponse): string {
               <th class="px-6 py-3.5 text-right">Actions</th>
             </tr>
           </thead>
-          <tbody class="divide-y divide-slate-100">
+          <tbody class="divide-y divide-rule">
             <tr
               v-for="doc in sourceRows"
               :key="`${doc.id}:${doc.source_result ?? 'source'}`"
-              class="group cursor-pointer transition hover:bg-slate-50/80"
+              class="group cursor-pointer transition hover:bg-surface-alt/70"
               @click="closeTooltips(); emit('select', doc)"
             >
               <!-- Source Name, File, Download -->
               <td class="px-6 py-4 align-top">
                 <div class="flex items-start gap-2.5">
-                  <span class="mt-0.5 rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-bold tracking-wider text-slate-600 uppercase border border-slate-200">
+                  <span class="mt-0.5 rounded-md bg-surface-alt px-2 py-0.5 text-[10px] font-bold tracking-wider text-ink-2 uppercase border border-rule">
                     {{ formatBadge(doc.filename, doc.source_system) }}
                   </span>
                   <div>
                     <button
                       type="button"
-                      class="group block text-left font-bold text-slate-900 group-hover:text-emerald-800 transition"
+                      class="group block text-left font-bold text-ink group-hover:text-axmed-primary transition cursor-pointer"
                       :title="sourceName(doc)"
                     >
                       <span class="block truncate max-w-sm sm:max-w-md">{{ sourceName(doc) }}</span>
                     </button>
-                    <div class="mt-1 flex items-center gap-2 text-[11px]">
+                    <div class="mt-1 flex items-center text-[11px]">
                       <a
-                        class="font-semibold text-emerald-700 hover:text-emerald-900 hover:underline transition"
+                        class="font-mono text-[10px] text-ink-3 hover:text-axmed-primary hover:underline transition truncate max-w-xs sm:max-w-md cursor-pointer"
                         :href="sourceDocumentUrl(doc.id)"
                         :download="doc.filename"
+                        :title="`Download ${doc.filename}`"
                         @click.stop
                       >
-                        Download file
+                        {{ doc.filename }}
                       </a>
-                      <span class="text-slate-300">·</span>
-                      <span class="text-slate-400 font-mono text-[10px] truncate max-w-xs">{{ doc.filename }}</span>
                     </div>
                     <p v-if="doc.notes?.[0]" class="mt-1 text-[11px] text-slate-500 line-clamp-1">
                       {{ doc.notes[0] }}
@@ -302,7 +301,7 @@ function mappingConfidenceExplanation(doc: DocumentResponse): string {
                 <div class="inline-flex items-center gap-1">
                   <button
                     type="button"
-                    class="rounded-lg px-2 py-1.5 text-[11px] font-semibold text-rose-600 hover:bg-rose-50 hover:text-rose-700 transition disabled:cursor-not-allowed disabled:opacity-50"
+                    class="rounded-lg px-2 py-1.5 text-[11px] font-semibold text-down hover:bg-down-bg transition disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
                     :disabled="busy"
                     :aria-label="`Delete ${sourceName(doc)}`"
                     @click.stop="emit('delete', doc)"
@@ -311,7 +310,7 @@ function mappingConfidenceExplanation(doc: DocumentResponse): string {
                   </button>
                   <button
                     type="button"
-                    class="rounded-lg p-1.5 text-slate-400 group-hover:text-emerald-700 group-hover:translate-x-0.5 transition"
+                    class="rounded-lg p-1.5 text-ink-3 group-hover:text-axmed-primary group-hover:translate-x-0.5 transition cursor-pointer"
                     :aria-label="`Open ${sourceName(doc)}`"
                   >
                     →
@@ -325,16 +324,16 @@ function mappingConfidenceExplanation(doc: DocumentResponse): string {
 
       <!-- Clean Empty State -->
       <div v-else class="px-6 py-16 text-center">
-        <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-slate-400 text-xl mb-3">
+        <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-surface-alt text-ink-3 text-xl mb-3 border border-rule">
           📄
         </div>
-        <p class="text-sm font-bold text-slate-800">No sources yet.</p>
-        <p class="mt-1 text-xs text-slate-500 max-w-sm mx-auto">
+        <p class="text-sm font-bold text-ink">No sources yet.</p>
+        <p class="mt-1 text-xs text-ink-3 max-w-sm mx-auto">
           Ingest a PDF, email, image, or JSON offer to begin review.
         </p>
         <button
           type="button"
-          class="mt-4 rounded-xl bg-emerald-800 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-900 transition shadow-xs"
+          class="mt-4 rounded-xl bg-[#261c7a] px-4 py-2 text-xs font-bold text-white hover:bg-[#1e155c] active:bg-[#150f42] transition shadow-xs cursor-pointer"
           :disabled="busy"
           @click="emit('ingest')"
         >
