@@ -17,6 +17,7 @@ The finished take-home should demonstrate one coherent workflow:
 4. See derived values, uncertainty, validation issues, and source evidence separately.
 5. Route exceptions to review, then correct, approve, or reject the result with an auditable outcome.
 6. Re-extract a retained JSON source explicitly without changing its human-review audit history.
+7. Export terminal processing results as product-oriented CSV rows without internal persistence identifiers or in-progress records.
 
 ### Required product stories
 
