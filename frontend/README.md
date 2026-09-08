@@ -109,7 +109,7 @@ npx playwright test --ui
 - **Source-grounded JSON extraction**: JSON uploads are interpreted independently. Correctly recovered facts are retained even when they do not yet have a certain canonical destination.
 - **Inline Field Corrections**: Correct any misread canonical field and retain an immutable revision trail.
 - **Decision Boundary**: Explicitly Approve or Reject quotations before export.
-- **User-facing CSV**: Export terminal source results as product rows with source context, confidence explanations, mapping issues, and review history; queued and actively processing sources are omitted.
+- **User-facing CSV**: Download the backend-owned flattened database projection as product rows with source context, confidence explanations, mapping issues, and review history; queued and actively processing sources are omitted.
 
 ---
 

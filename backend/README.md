@@ -2,6 +2,8 @@
 
 FastAPI REST & Server-Sent Events (SSE) service backed by SQLite WAL. It uses API-owned Python background tasks for multi-format supplier document extraction (JSON, Native PDF, EML, Image Scans), deterministic-first progressive parsing, contact PII redaction, LangChain semantic reasoning powered by Google Gemini (`gemini-3.1-flash-lite`), and commercial validation for pharmaceutical procurement.
 
+The backend is also the single source of truth for CSV export: `GET /api/v1/documents/export.csv` flattens persisted terminal document and image-attempt results into user-facing product rows.
+
 - 🚀 **Live Production API (Railway)**: [https://axmeddocumentingestion-production.up.railway.app](https://axmeddocumentingestion-production.up.railway.app)
 - 📖 **Interactive Swagger UI**: [https://axmeddocumentingestion-production.up.railway.app/docs](https://axmeddocumentingestion-production.up.railway.app/docs)
 - 🌐 **Connected Frontend**: [https://axmed-document-ingestion.pages.dev/](https://axmed-document-ingestion.pages.dev/)
