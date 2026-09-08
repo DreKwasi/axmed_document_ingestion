@@ -209,7 +209,7 @@ function toggleMappingTooltip(documentId: string) {
                 >
                   {{ doc.mapping_confidence.issue_count }} {{ doc.mapping_confidence.issue_count === 1 ? "issue" : "issues" }} found
                 </span>
-                <span v-else class="block text-[10px] text-slate-500">
+                <span v-else-if="doc.mapping_confidence?.score != null" class="block text-[10px] text-slate-500">
                   {{ doc.status === "failed" ? "Not applicable" : "No issues found" }}
                 </span>
               </td>

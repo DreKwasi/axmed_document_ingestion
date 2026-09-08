@@ -202,6 +202,26 @@ describe("App", () => {
     expect(rows[0].findAll("td")[2].text()).not.toContain("—");
   });
 
+  it("does not present a completed image review event as active extraction", async () => {
+    api.fetchDocuments.mockResolvedValue([{
+      id: "reviewed-image", filename: "image.jpg", status: "pending_review", source_system: "image",
+      quotation: { supplier: {}, commercial_terms: {}, line_items: [], revision: 1, system_decision: "pending_review", review_status: "pending_review", review_issues: [] },
+      reviews: [],
+    }]);
+    api.fetchEvents.mockResolvedValue([{
+      id: 9, document_id: "reviewed-image", stage: "image_extraction_opened_for_review",
+      phase: "In progress", message: "Image extraction result opened for human review.", metadata: {},
+    }]);
+
+    const wrapper = mount(App);
+    await flushPromises();
+    await wrapper.get("button.group").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).not.toContain("Image extraction result opened for human review.");
+    expect(wrapper.text()).not.toContain("In progress:");
+  });
+
   it("confirms and deletes an uploaded source from the table", async () => {
     api.fetchDocuments.mockResolvedValue([{
       id: "delete-me",

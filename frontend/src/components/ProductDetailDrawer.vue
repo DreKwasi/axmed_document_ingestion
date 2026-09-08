@@ -116,14 +116,15 @@ const rowMappingConfidence = computed(() => {
     .filter((score): score is number => score != null) ?? [];
   return values.length ? Math.round(values.reduce((sum, score) => sum + score, 0) / values.length) : null;
 });
+const rowMappingIssueCount = computed(() => (props.document.mapping_issues ?? [])
+  .filter((issue) => issue.field_path.startsWith(`line_items[${props.lineIndex}]`)).length);
 const rowMappingExplanation = computed(() => {
   const fields = props.document.quotation?.field_reviews
     ?.filter((field) => field.field_path.startsWith(`line_items[${props.lineIndex}]`)) ?? [];
   const scores = fields.map((field) => field.mapping_confidence_score).filter((score): score is number => score != null);
   if (!scores.length) return "No mapped fields are available to assess.";
   const reasons = [...new Set(fields.map((field) => field.mapping_confidence_reason).filter((reason): reason is string => Boolean(reason)))];
-  const issueCount = (props.document.mapping_issues ?? []).filter((issue) => issue.field_path.startsWith(`line_items[${props.lineIndex}]`)).length;
-  return `Average of ${scores.length} mapped field score${scores.length === 1 ? "" : "s"}: ${rowMappingConfidence.value}%. ${reasons.join(" ")} Mapping issues are counted separately: ${issueCount}.`;
+  return `Average of ${scores.length} mapped field score${scores.length === 1 ? "" : "s"}: ${rowMappingConfidence.value}%. ${reasons.join(" ")} Mapping issues are counted separately: ${rowMappingIssueCount.value}.`;
 });
 
 const extractionFactors = computed(() => props.document.extraction_confidence?.factors ?? []);
@@ -249,7 +250,7 @@ function editableValue(item: LineItem, path: string): string {
               aria-label="Explain mapping confidence"
               @click.stop="showMappingExplanation = !showMappingExplanation"
             >
-              Mapping confidence: <strong class="text-emerald-700">{{ rowMappingConfidence != null ? `${rowMappingConfidence}%` : "—" }}</strong>
+              Mapping confidence: <strong class="text-emerald-700">{{ rowMappingConfidence != null ? `${rowMappingConfidence}%` : (rowMappingIssueCount === 0 ? "No issues" : "Needs review") }}</strong>
             </button>
             <span
               v-if="showMappingExplanation"
@@ -295,7 +296,7 @@ function editableValue(item: LineItem, path: string): string {
               class="absolute right-0 top-7 z-50 w-80 rounded-lg border border-slate-200 bg-white p-3 text-[11px] font-normal leading-4 text-slate-700 shadow-lg"
             >
               <span class="font-semibold text-slate-900">How this is calculated</span>
-              <span class="mt-1 block">The score combines source format, readability, parser quality, recovered evidence, and OCR quality. Only observed recovery problems reduce the score.</span>
+              <span class="mt-1 block">The score combines readability, parser quality, recovered evidence, OCR quality, and agreement between independent OCR and vision readings. Only observed recovery problems reduce the score.</span>
               <span class="mt-2 block whitespace-pre-line">{{ extractionCalculation }}</span>
             </span>
           </span>

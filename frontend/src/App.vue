@@ -257,7 +257,7 @@ function isExtractionOngoing(doc: DocumentResponse | null): boolean {
   if (latest) {
     const phaseLower = (latest.phase || "").toLowerCase();
     const stageLower = (latest.stage || "").toLowerCase();
-    if (phaseLower === "complete" || stageLower.endsWith("_completed") || stageLower === "image_extractions_ready_for_comparison") return false;
+    if (phaseLower === "complete" || stageLower.endsWith("_completed") || ["image_extractions_ready_for_comparison", "image_extraction_opened_for_review"].includes(stageLower)) return false;
     if (phaseLower === "needs attention" || stageLower.endsWith("_failed")) return false;
     return true;
   }
