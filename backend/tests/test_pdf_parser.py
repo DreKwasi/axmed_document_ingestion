@@ -56,6 +56,14 @@ def test_native_pdf_parser_rejects_non_pdf_content():
         parse_native_pdf(b'{"not": "a PDF"}')
 
 
+def test_native_pdf_parser_fails_fast_when_runtime_cli_is_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.extraction.pdf_parser.BACKEND_ROOT", tmp_path)
+    monkeypatch.setattr("app.extraction.pdf_parser.shutil.which", lambda _command: None)
+
+    with pytest.raises(PdfParseError, match="CLI is not installed"):
+        parse_native_pdf(b"%PDF-placeholder")
+
+
 def test_pdf_upload_persists_page_quality_metadata_and_never_exposes_native_text(client):
     source = (PDF_FIXTURES / "farmaceutica_andina_proforma_FA-COT-2026-118.pdf").read_bytes()
 

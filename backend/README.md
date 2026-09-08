@@ -47,11 +47,15 @@ The backend configuration is managed by `app/config.py`. Variables can be define
 ## Running the Backend
 
 The backend is one FastAPI process. It runs API-owned background tasks after source intake responses have been sent.
+PDF parsing also requires the pinned `@llamaindex/liteparse` Node CLI from `backend/package.json`.
+Run `npm install --prefix backend` for local development. Railway reads `backend/railpack.json`, installs Node 22 and
+the locked CLI package, copies `node_modules` into the runtime image, and adds its binaries to `PATH`.
 
 ### Option A: Supervised (Recommended)
 From the repository root, start the FastAPI server and Vue frontend together:
 
 ```bash
+npm install --prefix backend
 make dev
 # or: bin/dev
 ```
