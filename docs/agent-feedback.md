@@ -83,3 +83,8 @@
 ## 2026-09-08 — Non-verbose code structure and clean section headers
 
 - Multi-line ASCII banner borders and duplicate table-of-contents lists in module docstrings add unnecessary verbosity without improving discoverability. Concise single-line headers (`# --- Section X: ... ---` and `// --- Section X: ... ---`) paired with focused 1-2 sentence docstrings establish clear architectural boundaries across backend and frontend code while keeping files crisp and readable.
+
+## 2026-09-08 — Direct subtext action affordances
+
+- Repeating an action verb like "Download file ·" next to the source document's filename creates visual repetition and clutters tabular views. Making the metadata subtext (the filename itself) an interactive download link with hover state (`text-slate-500 hover:text-emerald-700 hover:underline`), `@click.stop`, and an informative tooltip preserves screen real estate while maintaining intuitive direct manipulation.
+
