@@ -15,9 +15,7 @@ class ConfidenceSignals:
     source_type: str | None
     ocr_used: bool = False
     parser_quality: str | None = None
-    evidence_scores: tuple[float, ...] = ()
     ocr_scores: tuple[float, ...] = ()
-    cross_check_scores: tuple[float, ...] = ()
     has_extracted_result: bool = True
 
 
@@ -90,33 +88,25 @@ def assess_extraction_confidence(signals: ConfidenceSignals) -> ExtractionConfid
     }.get(quality, "No parser-quality warning was recorded.")
 
     if signals.ocr_used:
-        ocr_score = _average_score(signals.ocr_scores, default=50)
+        ocr_average = _average_score(signals.ocr_scores, default=0)
+        legible_share = (
+            round(sum(score >= 0.8 for score in signals.ocr_scores) / len(signals.ocr_scores) * 100)
+            if signals.ocr_scores
+            else 0
+        )
+        ocr_score = round((ocr_average + legible_share) / 2)
         ocr_reason = (
-            f"OCR text confidence averaged {ocr_score}%."
+            f"OCR confidence averaged {ocr_average}%, and {legible_share}% of text lines were clearly legible."
             if signals.ocr_scores
             else "OCR was used but no line-quality score was available."
         )
     else:
         ocr_score, ocr_reason = 100, "No OCR transcription was required."
 
-    evidence_score = _average_score(signals.evidence_scores, default=100 if source_type == "json" else 70)
-    evidence_reason = (
-        f"Grounded source evidence averaged {evidence_score}%."
-        if signals.evidence_scores
-        else "No numeric source-evidence score was available."
-    )
-    cross_check_score = _average_score(signals.cross_check_scores, default=100)
-    cross_check_reason = (
-        f"Independent extraction results agreed at {cross_check_score}%."
-        if signals.cross_check_scores
-        else "No independent extraction disagreement was recorded."
-    )
     factors = (
-        ConfidenceFactor("readability", "Machine readability", 20, readability_score, readability_reason),
-        ConfidenceFactor("parser_quality", "Parser quality", 15, parser_score, parser_reason),
-        ConfidenceFactor("evidence_quality", "Recovered evidence", 15, evidence_score, evidence_reason),
-        ConfidenceFactor("ocr_quality", "OCR quality", 15, ocr_score, ocr_reason),
-        ConfidenceFactor("cross_check", "Independent extraction agreement", 35, cross_check_score, cross_check_reason),
+        ConfidenceFactor("readability", "Machine readability", 30, readability_score, readability_reason),
+        ConfidenceFactor("parser_quality", "Parser quality", 25, parser_score, parser_reason),
+        ConfidenceFactor("ocr_quality", "Text legibility", 45, ocr_score, ocr_reason),
     )
     score = round(sum(factor.weight * factor.score for factor in factors) / 100)
     return ExtractionConfidence(score, _band(score), factors)
@@ -154,7 +144,7 @@ def assess_mapping_confidence(quotation: CanonicalQuotation) -> MappingAssessmen
                 )
             )
     for path, confidence in fields.items():
-        if confidence.band == "Low" and not any(_issue_applies_to_field(issue.field_path, path) for issue in issues):
+        if confidence.score < 100 and not any(_issue_applies_to_field(issue.field_path, path) for issue in issues):
             mapping_issues.append(
                 MappingIssue(
                     path,

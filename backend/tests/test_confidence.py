@@ -43,17 +43,17 @@ def line_item(method: str = "direct_json") -> LineItem:
 
 def test_clean_machine_readable_json_has_high_extraction_confidence():
     result = assess_extraction_confidence(
-        ConfidenceSignals(source_type="json", parser_quality="good", evidence_scores=(0.98, 1.0))
+        ConfidenceSignals(source_type="json", parser_quality="good")
     )
 
     assert result.score == 100
     assert result.band == "High"
-    assert [factor.weight for factor in result.factors] == [20, 15, 15, 15, 35]
+    assert [factor.weight for factor in result.factors] == [30, 25, 45]
 
 
 def test_clean_native_pdf_has_no_format_penalty():
     result = assess_extraction_confidence(
-        ConfidenceSignals(source_type="pdf", parser_quality="good", evidence_scores=(1.0,))
+        ConfidenceSignals(source_type="pdf", parser_quality="good")
     )
 
     assert result.score == 100
@@ -71,7 +71,7 @@ def test_no_extraction_result_has_no_confidence_to_report():
 def test_ocr_and_poor_parser_reduce_extraction_confidence_without_changing_mapping():
     extraction = assess_extraction_confidence(
         ConfidenceSignals(
-            source_type="image", ocr_used=True, parser_quality="poor", evidence_scores=(0.55,), ocr_scores=(0.45,)
+            source_type="image", ocr_used=True, parser_quality="poor", ocr_scores=(0.45,)
         )
     )
     mapping = assess_mapping_confidence(CanonicalQuotation(line_items=[line_item()]))
@@ -81,37 +81,33 @@ def test_ocr_and_poor_parser_reduce_extraction_confidence_without_changing_mappi
     assert not mapping.issues
 
 
-def test_disagreeing_image_readings_materially_reduce_extraction_confidence():
+def test_mostly_illegible_ocr_lines_materially_reduce_image_extraction_confidence():
     result = assess_extraction_confidence(
         ConfidenceSignals(
             source_type="image",
             ocr_used=True,
             parser_quality="mixed",
-            evidence_scores=(0.70,),
-            ocr_scores=(0.604,),
-            cross_check_scores=(1 / 6,),
+            ocr_scores=(0.97, 0.70, 0.60, 0.55, 0.45, 0.35),
         )
     )
 
     assert result.score <= 55
     assert result.band == "Low"
-    assert any(factor.key == "cross_check" and factor.score == 17 for factor in result.factors)
+    assert any(factor.key == "ocr_quality" and factor.score < 45 for factor in result.factors)
 
 
-def test_agreeing_image_readings_preserve_confidence():
+def test_consistently_legible_ocr_lines_preserve_image_extraction_confidence():
     result = assess_extraction_confidence(
         ConfidenceSignals(
             source_type="image",
             ocr_used=True,
             parser_quality="mixed",
-            evidence_scores=(0.98,),
-            ocr_scores=(0.981,),
-            cross_check_scores=(1.0,),
+            ocr_scores=(0.99, 0.98, 0.97, 0.96),
         )
     )
 
     assert result.score >= 70
-    assert any(factor.key == "cross_check" and factor.score == 100 for factor in result.factors)
+    assert any(factor.key == "ocr_quality" and factor.score >= 98 for factor in result.factors)
 
 
 def test_conflicting_price_is_one_actionable_mapping_issue():
@@ -161,3 +157,12 @@ def test_source_key_for_quantity_cannot_score_as_a_price_mapping():
     field = result.fields["line_items[0].pricing.quoted_price.amount"]
     assert field.band == "Low"
     assert result.issues[0].code == "uncertain_mapping"
+
+
+def test_every_below_full_mapping_score_has_a_counted_field_issue():
+    result = assess_mapping_confidence(CanonicalQuotation(line_items=[line_item("ocr")]))
+
+    assert result.score < 100
+    assert result.issues
+    assert {issue.field_path for issue in result.issues} == set(result.fields)
+    assert all(issue.code == "uncertain_mapping" for issue in result.issues)
