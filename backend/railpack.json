@@ -1,27 +1,4 @@
 {
   "$schema": "https://schema.railpack.com",
-  "provider": "python",
-  "packages": {
-    "node": "22"
-  },
-  "steps": {
-    "install": {
-      "commands": [
-        "...",
-        { "src": "package.json", "dest": "package.json" },
-        { "src": "package-lock.json", "dest": "package-lock.json" },
-        {
-          "cmd": "npm ci --omit=dev",
-          "customName": "Install LiteParse CLI"
-        }
-      ]
-    }
-  },
-  "deploy": {
-    "inputs": [
-      "...",
-      { "step": "install", "include": ["node_modules"] }
-    ],
-    "paths": ["...", "/app/node_modules/.bin"]
-  }
+  "provider": "python"
 }
