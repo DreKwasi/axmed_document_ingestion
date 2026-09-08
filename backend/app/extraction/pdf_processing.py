@@ -17,6 +17,8 @@ from app.security.redaction import redact_for_model
 
 logger = logging.getLogger("app.extraction.pdf")
 
+# --- Section 1: Context Preparation & Structured Table Layout Detection ---
+
 
 def _semantic_pdf_context(stored_context: dict[str, Any]) -> dict[str, Any]:
     """Prepare the low-token semantic pass from deterministic PDF reading order.
@@ -24,8 +26,13 @@ def _semantic_pdf_context(stored_context: dict[str, Any]) -> dict[str, Any]:
     LiteParse geometry is retained for table-cell fidelity. The follow-up
     semantic pass receives text only, so supply and regulatory enrichment does
     not repeatedly send the price-table layout.
-    """
 
+    Args:
+        stored_context: Raw context dictionary generated during initial parsing.
+
+    Returns:
+        Structured context dictionary partitioned into layout and semantic views.
+    """
     pages = [
         {
             "page_number": page.get("page_number"),
@@ -56,11 +63,16 @@ def _semantic_pdf_context(stored_context: dict[str, Any]) -> dict[str, Any]:
 
 
 def _has_structured_table_layout(text: str) -> bool:
-    """Identify table-shaped pages without assuming a supplier's column names."""
+    """Identify table-shaped pages without assuming a supplier's column names.
 
+    Requires at least 3 common pharmaceutical quotation column markers (e.g. qty, price, uom).
+    """
     markers = ("item", "product", "quantity", "qty", "price", "uom", "amount", "discount")
     normalized = text.casefold()
     return sum(marker in normalized for marker in markers) >= 3
+
+
+# --- Section 2: Telemetry & Invocation Auditing Helpers ---
 
 
 def _upsert_invocation(
@@ -76,6 +88,7 @@ def _upsert_invocation(
     output_tokens: int | None = None,
     estimated_cost_usd: str | None = None,
 ) -> None:
+    """Record or update model execution telemetry, duration, token usage, and cost."""
     invocation = session.scalar(
         select(ModelInvocationRecord).where(
             ModelInvocationRecord.document_id == extraction.document_id,
@@ -109,7 +122,36 @@ def _upsert_invocation(
     invocation.safe_metadata_json = json.dumps(metadata, sort_keys=True)
 
 
+def _cost_text(value: Any) -> str | None:
+    """Convert decimal or numeric cost value into formatted string or None."""
+    return None if value is None else str(value)
+
+
+def _sum_optional(left: Any, right: Any) -> Any:
+    """Sum two optional numeric values, returning None only if both are None."""
+    if left is None and right is None:
+        return None
+    return (left or 0) + (right or 0)
+
+
+# --- Section 3: Asynchronous PDF Extraction Orchestration Pipeline ---
+
+
 def consume_pdf_extraction(session: Session, extraction_id: str, settings: Config) -> None:
+    """Execute the full PDF extraction and enrichment pipeline for a pending document.
+
+    Orchestration Flow:
+    1. Loads `PdfExtractionRecord` and redact PII contact data.
+    2. Runs Primary Pass: LangChain + Gemini for canonical quotation and table line items.
+    3. Runs Second Pass: Narrative section enrichment for storage, WHO PQ, and lead times.
+    4. Merges enrichments and applies deterministic commercial rules (price normalizations).
+    5. Persists quotation record, updates relational line items, and emits SSE events.
+
+    Args:
+        session: Active SQLAlchemy database session.
+        extraction_id: Primary key of the PdfExtractionRecord.
+        settings: Application runtime configuration.
+    """
     extraction = session.get(PdfExtractionRecord, extraction_id)
     if extraction is None or extraction.status in {"completed", "awaiting_model_configuration"}:
         return
@@ -247,13 +289,3 @@ def consume_pdf_extraction(session: Session, extraction_id: str, settings: Confi
     )
     record_event(session, document_id=document.id, stage="pdf_extraction_awaiting_model_configuration")
     session.commit()
-
-
-def _cost_text(value: Any) -> str | None:
-    return None if value is None else str(value)
-
-
-def _sum_optional(left: Any, right: Any) -> Any:
-    if left is None and right is None:
-        return None
-    return (left or 0) + (right or 0)

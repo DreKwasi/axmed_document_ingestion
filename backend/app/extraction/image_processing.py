@@ -21,10 +21,14 @@ from app.extraction.ocr_contract import OcrResult
 from app.models import DocumentRecord, ImageExtractionAttemptRecord, ModelInvocationRecord, OcrJobRecord
 from app.security.redaction import redact_for_model
 
+# --- Section 1: OCR Context Preparation & Quality Safety Gate ---
+
 
 def _semantic_ocr_context(result: OcrResult, confidence_floor: float = 0.0) -> dict[str, object]:
-    """Return OCR transcription text without layout metadata or inferred row structure."""
+    """Assemble OCR transcription text without layout metadata or inferred row structure.
 
+    Filters lines below the confidence floor to avoid poisoning LLM context with noise.
+    """
     return {
         "pages": [
             {
@@ -37,13 +41,21 @@ def _semantic_ocr_context(result: OcrResult, confidence_floor: float = 0.0) -> d
 
 
 def _ocr_quality_gate(result: OcrResult, *, confidence_floor: float, minimum_ratio: float) -> bool:
+    """Evaluate whether an OCR result has sufficient legibility to justify LLM reasoning.
+
+    Requires that the proportion of lines meeting or exceeding the confidence floor
+    is at or above `minimum_ratio` (e.g. 60% of lines >= 0.80).
+    """
     lines = [line for page in result.pages for line in page.lines]
     return bool(lines) and sum(line.confidence >= confidence_floor for line in lines) / len(lines) >= minimum_ratio
 
 
 def _trusted_image_regions(source_media: bytes, result: OcrResult, confidence_floor: float) -> bytes:
-    """Mask OCR-rejected pixels so vision receives only trusted text regions."""
+    """Mask OCR-rejected pixels so vision receives only verified legible text regions.
 
+    Creates an image where only bounding boxes of lines >= confidence_floor are preserved,
+    preventing degraded or noisy regions from distracting vision models.
+    """
     with Image.open(BytesIO(source_media)) as opened:
         source = opened.convert("RGB")
         trusted = Image.new("RGB", source.size, "white")
@@ -67,6 +79,9 @@ def _trusted_image_regions(source_media: bytes, result: OcrResult, confidence_fl
         return output.getvalue()
 
 
+# --- Section 2: Peer Attempt Execution & Audit Logging ---
+
+
 def _run_image_attempt(
     extractor: LangChainSemanticExtractor,
     *,
@@ -75,6 +90,7 @@ def _run_image_attempt(
     source_media: bytes | None = None,
     source_media_type: str | None = None,
 ) -> tuple[CanonicalQuotation | None, dict[str, Any], str | None]:
+    """Execute one image extraction approach (OCR-assisted or direct Vision)."""
     try:
         quotation, telemetry = extractor.extract_canonical_quotation(
             context,
@@ -96,6 +112,7 @@ def _persist_image_attempt(
     telemetry: dict[str, Any],
     failure_reason: str | None,
 ) -> ImageExtractionAttemptRecord:
+    """Save an extraction attempt result and its telemetry as an auditable peer record."""
     attempt = session.scalar(
         select(ImageExtractionAttemptRecord).where(
             ImageExtractionAttemptRecord.document_id == document_id,
@@ -146,7 +163,24 @@ def _persist_image_attempt(
     return attempt
 
 
+# --- Section 3: Asynchronous OCR Job Processing Pipeline ---
+
+
 def consume_ocr(session: Session, job_id: str, settings: Config) -> None:
+    """Consume an OCR job, invoke external OCR, apply safety gates, and run peer extractions.
+
+    Pipeline Stages:
+    1. Submits image/PDF binary to external Modal PaddleOCR endpoint.
+    2. Enforces OCR Quality Gate: fails early if line confidence ratio is below threshold.
+    3. Runs OCR-assisted semantic extraction (text lines + coordinates -> Gemini).
+    4. For image sources, additionally runs Vision Direct extraction on trusted regions.
+    5. Saves peer attempts for human review comparison.
+
+    Args:
+        session: Active SQLAlchemy database session.
+        job_id: Primary key of the OcrJobRecord.
+        settings: Application runtime configuration.
+    """
     job = session.get(OcrJobRecord, job_id)
     if job is None or job.status in {"completed", "awaiting_service_configuration"}:
         return
@@ -286,7 +320,7 @@ def consume_ocr(session: Session, job_id: str, settings: Config) -> None:
             document.failure_reason = "No products could be extracted from this source."
             record_event(session, document_id=document.id, stage="image_extraction_failed")
         elif document.media_type.startswith("image/"):
-            # Both paths are peers.  A human explicitly chooses a result to begin
+            # Both paths are peers. A human explicitly chooses a result to begin
             # reviewing; never promote one because it has more products or happens
             # to complete first.
             document.status = "pending_review"
