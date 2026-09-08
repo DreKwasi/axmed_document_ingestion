@@ -7,6 +7,8 @@ from email.parser import BytesParser
 
 from app.security.redaction import redact_text
 
+# --- Section 1: Regex Heuristics ---
+
 GREETING_PATTERN = re.compile(r"(?im)^dear\s+[^\n,]+,\s*\n+")
 SIGNATURE_PATTERN = re.compile(
     r"(?ims)^\s*(?:best regards|kind regards|regards|sincerely)[,\s]*\n"
@@ -17,18 +19,24 @@ LEGAL_ENTITY_LINE_PATTERN = re.compile(
     r"sa|sas|bv|nv|oy|ab|pte\.?(?:\s+ltd\.?)?)\b.*$"
 )
 
+# --- Section 2: Data Transfer Objects ---
+
 
 @dataclass(frozen=True)
 class ParsedEmail:
+    """Sanitized email payload ready for semantic LLM reasoning."""
+
     subject: str
     message_id: str | None
     body_text: str
     supplier_organization: str | None = None
 
 
-def _signature_organization(body_text: str) -> str | None:
-    """Keep only a legal entity from a sign-off; discard personal contact material."""
+# --- Section 3: MIME Traversal & Sanitization Pipeline ---
 
+
+def _signature_organization(body_text: str) -> str | None:
+    """Extract legal corporate organization from a sign-off while discarding personal names."""
     match = SIGNATURE_PATTERN.search(body_text)
     if not match:
         return None
@@ -42,8 +50,18 @@ def _signature_organization(body_text: str) -> str | None:
 
 
 def parse_email(data: bytes) -> ParsedEmail:
-    """Prefer plain text and never execute or render HTML from an uploaded email."""
+    """Parse raw RFC 822 email bytes into sanitized plaintext.
 
+    Extracts `text/plain` parts, discards attachments/HTML execution, extracts
+    corporate organization names, removes personal greetings/signatures, and applies
+    contact PII redactions.
+
+    Args:
+        data: Raw binary email bytes.
+
+    Returns:
+        ParsedEmail instance containing cleaned body text and metadata.
+    """
     message = BytesParser(policy=policy.default).parsebytes(data)
     plain_parts = [
         part.get_content()

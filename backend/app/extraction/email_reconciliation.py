@@ -5,12 +5,16 @@ from decimal import Decimal, InvalidOperation
 
 from app.extraction.contracts import CanonicalQuotation
 
+# --- Section 1: Block Splitting & Pricing Regex Patterns ---
+
 ITEM_BLOCK_PATTERN = re.compile(
     r"(?ms)^\s*\d+[.)]\s*(?P<item>.*?)(?=^\s*\d+[.)]\s|\Z)"
 )
 PRICE_PATTERN = re.compile(
     r"(?im)^\s*price\s*:\s*(?:[A-Z]{3}\s*)?(?P<amount>\d+(?:[.,]\d+)?)\s+per\s+(?P<uom>[a-z]+)\b"
 )
+
+# --- Section 2: Deterministic UOM Reconciliation Pipeline ---
 
 
 def reconcile_email_price_uoms(quotation: CanonicalQuotation, body_text: str) -> CanonicalQuotation:
@@ -19,8 +23,14 @@ def reconcile_email_price_uoms(quotation: CanonicalQuotation, body_text: str) ->
     This intentionally does not infer a UOM from packaging. It only repairs a
     model-normalized UOM when an item's source block states ``Price: amount per
     uom`` and its amount exactly agrees with the structured extraction.
-    """
 
+    Args:
+        quotation: Extracted canonical quotation.
+        body_text: Sanitized email body text.
+
+    Returns:
+        The canonical quotation with reconciled pricing UOMs where verbatim matches exist.
+    """
     for line in quotation.line_items:
         name = (line.product.trade_name or "").casefold()
         amount = line.pricing.quoted_price.amount or line.pricing.pack_price

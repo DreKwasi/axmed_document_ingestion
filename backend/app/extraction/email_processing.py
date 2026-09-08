@@ -18,6 +18,8 @@ from app.security.redaction import redact_for_model
 
 logger = logging.getLogger("app.extraction.email")
 
+# --- Section 1: Telemetry & Invocation Auditing Helpers ---
+
 
 def _upsert_invocation(
     session: Session,
@@ -32,6 +34,7 @@ def _upsert_invocation(
     output_tokens: int | None = None,
     estimated_cost_usd: str | None = None,
 ) -> None:
+    """Record or update model telemetry metrics for an email extraction run."""
     invocation = session.scalar(
         select(ModelInvocationRecord).where(ModelInvocationRecord.email_extraction_id == extraction.id)
     )
@@ -61,7 +64,29 @@ def _upsert_invocation(
     invocation.safe_metadata_json = json.dumps(metadata, sort_keys=True)
 
 
+def _cost_text(value: Any) -> str | None:
+    """Format cost value as string or None."""
+    return None if value is None else str(value)
+
+
+# --- Section 2: Asynchronous Email Extraction Pipeline ---
+
+
 def consume_email_extraction(session: Session, extraction_id: str, settings: Config) -> None:
+    """Execute the email extraction pipeline for a pending email extraction record.
+
+    Pipeline Stages:
+    1. Loads context and applies security redactions for external LLMs.
+    2. Invokes LangChain + Gemini with `source_type="email"`.
+    3. Reconciles verbatim source price UOMs from numbered text blocks.
+    4. Evaluates commercial rules and computes normalized prices.
+    5. Saves quotation to database and notifies client via SSE event stream.
+
+    Args:
+        session: Active SQLAlchemy database session.
+        extraction_id: Primary key of EmailExtractionRecord.
+        settings: Application runtime configuration.
+    """
     extraction = session.get(EmailExtractionRecord, extraction_id)
     if extraction is None or extraction.status in {"completed", "awaiting_model_configuration"}:
         return
@@ -185,7 +210,3 @@ def consume_email_extraction(session: Session, extraction_id: str, settings: Con
     )
     record_event(session, document_id=document.id, stage="email_extraction_awaiting_model_configuration")
     session.commit()
-
-
-def _cost_text(value: Any) -> str | None:
-    return None if value is None else str(value)
