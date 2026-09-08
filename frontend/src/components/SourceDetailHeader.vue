@@ -82,6 +82,27 @@ const confidence = computed(() => {
 /** Non-empty Harmonized System (HS) tariff codes from commercial terms */
 const hsCodes = computed(() => props.document.quotation?.commercial_terms.hs_codes?.filter(Boolean) ?? []);
 
+/** Human-readable shipping transit duration */
+const transitDuration = computed(() => {
+  const terms = props.document.quotation?.commercial_terms;
+  if (!terms) return null;
+  if (terms.transit_time_min_days != null && terms.transit_time_max_days != null) {
+    return terms.transit_time_min_days === terms.transit_time_max_days
+      ? `${terms.transit_time_min_days} days`
+      : `${terms.transit_time_min_days}–${terms.transit_time_max_days} days`;
+  }
+  if (terms.transit_time_days != null) {
+    return `${terms.transit_time_days} days`;
+  }
+  if (terms.transit_time_min_days != null) {
+    return `≥ ${terms.transit_time_min_days} days`;
+  }
+  if (terms.transit_time_max_days != null) {
+    return `≤ ${terms.transit_time_max_days} days`;
+  }
+  return null;
+});
+
 /** Uppercase format badge (PDF, JSON, EML, IMAGE) */
 const formatBadge = computed(() => {
   const lower = props.document.filename.toLowerCase();
@@ -290,6 +311,12 @@ const statusDotClass = computed(() => {
             </p>
             <p v-if="document.quotation?.commercial_terms?.incoterm_country" class="mt-1 text-[11px] text-slate-500">
               Delivery country: {{ document.quotation.commercial_terms.incoterm_country }}
+            </p>
+            <p v-if="transitDuration" class="mt-1 text-[11px] text-slate-500">
+              Transit: {{ transitDuration }}
+            </p>
+            <p v-if="document.quotation?.commercial_terms?.payment_terms" class="mt-1 text-[11px] text-slate-500">
+              Payment: {{ document.quotation.commercial_terms.payment_terms }}
             </p>
             <p v-if="hsCodes.length" class="mt-1 text-[11px] text-slate-500">
               HS codes: {{ hsCodes.join(" · ") }}

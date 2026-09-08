@@ -110,6 +110,11 @@ export type Quotation = {
     incoterm?: string | null;
     incoterm_named_place?: string | null;
     incoterm_country?: string | null;
+    payment_terms?: string | null;
+    price_basis?: string | null;
+    transit_time_days?: number | null;
+    transit_time_min_days?: number | null;
+    transit_time_max_days?: number | null;
     hs_codes?: string[];
   };
   line_items: LineItem[];

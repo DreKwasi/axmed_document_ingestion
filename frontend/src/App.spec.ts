@@ -133,6 +133,40 @@ describe("App", () => {
     expect(wrapper.text()).not.toContain("Source Schema / System");
   });
 
+  it("displays shipping transit duration and payment terms in the delivery terms card", () => {
+    const wrapper = mount(SourceDetailHeader, {
+      props: {
+        busy: false,
+        document: {
+          id: "doc-transit",
+          filename: "andina.pdf",
+          status: "pending_review",
+          source_system: "pdf",
+          quotation: {
+            supplier: { name: "Farmaceutica Andina S.A.S.", country: "Colombia" },
+            commercial_terms: {
+              currency: "USD",
+              incoterm: "FOB",
+              incoterm_named_place: "Cartagena (COCTG)",
+              transit_time_min_days: 26,
+              transit_time_max_days: 32,
+              payment_terms: "T/T 30 days from B/L date",
+            },
+            line_items: [],
+            revision: 1,
+            system_decision: "pending_review",
+            review_status: "pending_review",
+            review_issues: [],
+          },
+          reviews: [],
+        },
+      },
+    });
+
+    expect(wrapper.text()).toContain("Transit: 26–32 days");
+    expect(wrapper.text()).toContain("Payment: T/T 30 days from B/L date");
+  });
+
   it("lists sources at a high level and opens a product breakdown with quoted quantity", async () => {
     api.fetchDocuments.mockResolvedValue([{
       id: "document-quantity",

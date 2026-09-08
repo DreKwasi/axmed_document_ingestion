@@ -159,6 +159,9 @@ function humanizeFieldPath(path: string): string {
     "pricing.pack_price": "Pack price",
     "quantity.quoted_quantity": "Quoted quantity",
     "quantity.minimum_order_quantity": "Minimum order quantity",
+    "commercial_terms.transit_time_days": "Transit duration",
+    "commercial_terms.transit_time_min_days": "Min transit duration",
+    "commercial_terms.transit_time_max_days": "Max transit duration",
   };
   if (labels[path]) return labels[path];
   return path
