@@ -13,7 +13,8 @@ const api = vi.hoisted(() => ({
   sourceDocumentUrl: vi.fn((documentId: string) => `/api/v1/documents/${documentId}/source`),
   eventStreamUrl: vi.fn((documentId: string) => `/api/v1/documents/${documentId}/events/stream`),
   fetchEvents: vi.fn(),
-  fetchDocument: vi.fn()
+  fetchDocument: vi.fn(),
+  openImageExtractionForReview: vi.fn(),
 }));
 
 vi.mock("@/api", () => ({
@@ -86,6 +87,50 @@ describe("App", () => {
     expect(wrapper.text()).toContain("Extraction failed");
     expect(wrapper.text()).toContain("No source-grounded quotation facts could be extracted from this JSON source.");
     expect(wrapper.text()).not.toContain("Needs attention");
+  });
+
+  it("displays page count in the metadata line and omits redundant source system card for PDFs", () => {
+    const wrapper = mount(SourceDetailHeader, {
+      props: {
+        busy: false,
+        document: {
+          id: "doc-pdf",
+          filename: "andina.pdf",
+          status: "pending_review",
+          source_system: "pdf",
+          parsed_summary: { page_count: 2 },
+          quotation: null,
+          reviews: [],
+        },
+      },
+    });
+
+    expect(wrapper.text()).toContain("PDF");
+    expect(wrapper.text()).toContain("andina.pdf");
+    expect(wrapper.text()).toContain("2 pages");
+    expect(wrapper.text()).not.toContain("Source Schema / System");
+    expect(wrapper.text()).not.toContain("pdf · 2 pages");
+  });
+
+  it("displays external schema system and version in the metadata line for structured sources", () => {
+    const wrapper = mount(SourceDetailHeader, {
+      props: {
+        busy: false,
+        document: {
+          id: "doc-erp",
+          filename: "offer.json",
+          status: "pending_review",
+          source_system: "SupplierERP",
+          schema_version: "1.0",
+          quotation: null,
+          reviews: [],
+        },
+      },
+    });
+
+    expect(wrapper.text()).toContain("JSON");
+    expect(wrapper.text()).toContain("SupplierERP v1.0");
+    expect(wrapper.text()).not.toContain("Source Schema / System");
   });
 
   it("lists sources at a high level and opens a product breakdown with quoted quantity", async () => {
@@ -200,6 +245,114 @@ describe("App", () => {
     expect(rows[1].text()).toContain("Direct vision");
     expect(rows[0].findAll("td")[2].text()).toContain("No issues");
     expect(rows[0].findAll("td")[2].text()).not.toContain("—");
+  });
+
+  it("opens the selected image approach directly without a comparison interstitial", async () => {
+    const baseDoc = {
+      id: "image-source", filename: "glare.jpg", source_name: "Glare quotation", status: "pending_review",
+      source_system: "image", reviews: [], quotation: null,
+      image_extraction_attempts: [
+        { approach: "ocr_assisted", status: "completed", result: { supplier: { name: "Andina" }, line_items: [{ product: { trade_name: "Dolostop 500", inn: [] }, pricing: { quoted_price: { amount: "1.00" } } }] }, product_count: 1,
+          extraction_confidence: { score: 49, band: "Low", factors: [] }, mapping_confidence: { score: null, band: null, issue_count: 0 } },
+        { approach: "vision_direct", status: "completed", result: { supplier: { name: "Andina" }, line_items: [{ product: { trade_name: "Direct Dolostop", inn: [] }, pricing: { quoted_price: { amount: "1.00" } } }] }, product_count: 1,
+          extraction_confidence: { score: 61, band: "Low", factors: [] }, mapping_confidence: { score: null, band: null, issue_count: 0 } },
+      ],
+    };
+    api.fetchDocuments.mockResolvedValue([baseDoc]);
+    api.openImageExtractionForReview.mockResolvedValue({
+      ...baseDoc,
+      quotation: {
+        supplier: { name: "Andina" },
+        quotation_reference: "REF-1",
+        commercial_terms: {},
+        line_items: [{ product: { trade_name: "Dolostop 500", inn: [] }, pricing: { quoted_price: { amount: "1.00" } }, packaging: {}, quantity: {}, supply: {}, regulatory: {}, evidence: [] }],
+        revision: 1,
+        system_decision: "pending_review",
+        review_status: "pending_review",
+        review_issues: [],
+      },
+    });
+
+    const wrapper = mount(App);
+    await flushPromises();
+
+    const rows = wrapper.findAll("tbody tr");
+    await rows[0].trigger("click");
+    await flushPromises();
+
+    expect(api.openImageExtractionForReview).toHaveBeenCalledWith("image-source", "ocr_assisted");
+    expect(wrapper.text()).not.toContain("Compare image extractions");
+    expect(wrapper.text()).toContain("Dolostop 500");
+  });
+
+  it("stays on the Home page when an image is uploaded", async () => {
+    api.fetchDocuments.mockResolvedValue([]);
+    api.uploadDocuments.mockResolvedValue([{
+      id: "new-image",
+      filename: "photo.png",
+      source_system: "image",
+      status: "pending_review",
+      reviews: [],
+      quotation: null,
+      image_extraction_attempts: [],
+    }]);
+
+    const wrapper = mount(App);
+    await flushPromises();
+
+    const input = wrapper.get('input[type="file"]');
+    const file = new File(["dummy"], "photo.png", { type: "image/png" });
+    Object.defineProperty(input.element, "files", { value: [file] });
+    await input.trigger("change");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Uploaded sources");
+    expect(wrapper.text()).not.toContain("Back to sources");
+  });
+
+  it("allows switching between OCR-assisted and Direct vision readings in detail header", async () => {
+    const baseDoc = {
+      id: "image-source", filename: "glare.jpg", source_name: "Glare quotation", status: "pending_review",
+      source_system: "image", reviews: [],
+      quotation: {
+        supplier: { name: "Andina" },
+        quotation_reference: "REF-1",
+        commercial_terms: {},
+        line_items: [{ product: { trade_name: "Dolostop 500", inn: [] }, pricing: { quoted_price: { amount: "1.00" } }, packaging: {}, quantity: {}, supply: {}, regulatory: {}, evidence: [] }],
+        revision: 1,
+        system_decision: "pending_review",
+        review_status: "pending_review",
+        review_issues: [],
+      },
+      image_extraction_attempts: [
+        { approach: "ocr_assisted", status: "completed", result: { supplier: { name: "Andina" }, line_items: [] }, product_count: 1,
+          extraction_confidence: { score: 49, band: "Low", factors: [] }, mapping_confidence: { score: null, band: null, issue_count: 0 } },
+        { approach: "vision_direct", status: "completed", result: { supplier: { name: "Andina" }, line_items: [] }, product_count: 2,
+          extraction_confidence: { score: 61, band: "Low", factors: [] }, mapping_confidence: { score: null, band: null, issue_count: 0 } },
+      ],
+    };
+    api.fetchDocuments.mockResolvedValue([baseDoc]);
+    api.openImageExtractionForReview.mockResolvedValue({
+      ...baseDoc,
+      quotation: {
+        ...baseDoc.quotation,
+        line_items: [{ product: { trade_name: "Direct Dolostop", inn: [] }, pricing: { quoted_price: { amount: "2.00" } }, packaging: {}, quantity: {}, supply: {}, regulatory: {}, evidence: [] }],
+      },
+    });
+
+    const wrapper = mount(App);
+    await flushPromises();
+
+    const rows = wrapper.findAll("tbody tr");
+    await rows[0].trigger("click");
+    await flushPromises();
+
+    const visionButton = wrapper.findAll("button").find((b) => b.text() === "Direct vision");
+    expect(visionButton).toBeDefined();
+    await visionButton!.trigger("click");
+    await flushPromises();
+
+    expect(api.openImageExtractionForReview).toHaveBeenCalledWith("image-source", "vision_direct");
   });
 
   it("does not present a completed image review event as active extraction", async () => {
@@ -671,6 +824,10 @@ describe("App", () => {
     await rows[0].trigger("click");
     await flushPromises();
 
+    // Table tooltip closes when opening the drawer so it does not linger over the drawer
+    expect(wrapper.text()).not.toContain("How mapping confidence is built");
+    expect(mappingDefinitionHelp.attributes("aria-expanded")).toBe("false");
+
     // Internal provenance does not appear in the routine product-review drawer.
     expect(wrapper.text()).not.toContain("Field Evidence & Provenance");
     expect(wrapper.text()).toContain("Substance A");
@@ -687,5 +844,85 @@ describe("App", () => {
     await mappingHelp.trigger("click");
     expect(wrapper.text()).toContain("Average of 1 mapped field score");
     expect(wrapper.text()).toContain("Mapping issues are counted separately: 1");
+
+    // Clicking outside closes the drawer tooltip
+    window.document.body.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flushPromises();
+    expect(mappingHelp.attributes("aria-expanded")).toBe("false");
+    expect(wrapper.text()).not.toContain("Average of 1 mapped field score");
+  });
+
+  it("closes tooltips when clicking outside, pressing Escape, or navigating", async () => {
+    const doc = {
+      id: "doc-tooltip-test",
+      filename: "quotation.pdf",
+      source_name: "Tooltip Test Doc",
+      status: "pending_review",
+      source_system: "pdf",
+      quotation: {
+        supplier: { name: "Pharma Co" },
+        quotation_reference: "Q-123",
+        commercial_terms: { currency: "USD", incoterm: "FOB" },
+        line_items: [
+          {
+            product: { trade_name: "Item 1", inn: ["Ingredient 1"], dosage_form: "capsule" },
+            quantity: { quoted_quantity: 50 },
+            pricing: { currency: "USD", quoted_price: { amount: 5 } },
+            source_provenance: {},
+          },
+        ],
+        field_reviews: [],
+      },
+      extraction_confidence: { score: 88, band: "High", factors: [] },
+      mapping_confidence: { score: 92, band: "High", issue_count: 0 },
+      mapping_issues: [],
+      reviews: [],
+    };
+    api.fetchDocuments.mockResolvedValue([doc]);
+    const wrapper = mount(App);
+    await flushPromises();
+
+    // 1. SourceTable mapping tooltip dismisses on outside click and Escape
+    const sourceMappingBtn = wrapper.get('td button[aria-label="Explain mapping confidence"]');
+    await sourceMappingBtn.trigger("click");
+    expect(sourceMappingBtn.attributes("aria-expanded")).toBe("true");
+    expect(wrapper.text()).toContain("This is the average confidence");
+
+    // Outside click closes it
+    window.document.body.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flushPromises();
+    expect(sourceMappingBtn.attributes("aria-expanded")).toBe("false");
+    expect(wrapper.text()).not.toContain("This is the average confidence");
+
+    // Open again, Escape closes it
+    await sourceMappingBtn.trigger("click");
+    expect(sourceMappingBtn.attributes("aria-expanded")).toBe("true");
+    window.document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await flushPromises();
+    expect(sourceMappingBtn.attributes("aria-expanded")).toBe("false");
+
+    // Open the source detail
+    await wrapper.get("button.group").trigger("click");
+    await flushPromises();
+
+    // 2. ProductTable tooltip dismisses on Escape and outside click
+    const tableMappingHelp = wrapper.get('button[aria-label="How mapping confidence is calculated"]');
+    await tableMappingHelp.trigger("click");
+    expect(tableMappingHelp.attributes("aria-expanded")).toBe("true");
+    expect(wrapper.text()).toContain("How mapping confidence is built");
+
+    window.document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await flushPromises();
+    expect(tableMappingHelp.attributes("aria-expanded")).toBe("false");
+    expect(wrapper.text()).not.toContain("How mapping confidence is built");
+
+    // 3. Row mapping confidence tooltip dismisses on outside click
+    const rowMappingBtn = wrapper.findAll("tbody tr")[0].findAll("td")[4].find("button");
+    await rowMappingBtn.trigger("click");
+    expect(rowMappingBtn.attributes("aria-expanded")).toBe("true");
+
+    window.document.body.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flushPromises();
+    expect(rowMappingBtn.attributes("aria-expanded")).toBe("false");
   });
 });

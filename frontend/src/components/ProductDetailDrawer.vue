@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { DocumentResponse, LineItem } from "@/types";
 
 const props = defineProps<{
@@ -68,10 +68,40 @@ const mappingConcernDefinition =
   + "and whether related values agree. A score below 100% means the evidence is less direct; "
   + "it is not automatically an actionable issue.";
 
+function closeTooltips() {
+  showExtractionCalculation.value = false;
+  showMappingExplanation.value = false;
+  showMappingConcernDefinition.value = false;
+}
+
+function handleDocumentClick(event: MouseEvent) {
+  const target = event.target as Element | null;
+  if (!target) return;
+  if (target.closest?.("[data-tooltip-container]")) return;
+  closeTooltips();
+}
+
+function handleDocumentKeydown(event: KeyboardEvent) {
+  if (event.key === "Escape") {
+    closeTooltips();
+  }
+}
+
+onMounted(() => {
+  document.addEventListener("click", handleDocumentClick);
+  document.addEventListener("keydown", handleDocumentKeydown);
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener("click", handleDocumentClick);
+  document.removeEventListener("keydown", handleDocumentKeydown);
+});
+
 // Pre-fill correctionValue when selectedField or lineItem changes
 watch(
   [() => props.lineItem, selectedField, () => props.isOpen],
   () => {
+    closeTooltips();
     if (!props.lineItem) {
       correctionValue.value = "";
       return;
@@ -242,7 +272,7 @@ function editableValue(item: LineItem, path: string): string {
           <span class="rounded-md bg-emerald-100 px-2 py-0.5 text-[11px] font-bold text-emerald-800">
             Line {{ lineIndex + 1 }}
           </span>
-          <span class="relative text-xs font-semibold text-slate-500">
+          <span class="relative text-xs font-semibold text-slate-500" data-tooltip-container>
             <button
               type="button"
               class="cursor-help rounded px-1 text-left hover:bg-slate-100"
@@ -280,7 +310,7 @@ function editableValue(item: LineItem, path: string): string {
       <div v-if="extractionFactors.length" class="rounded-2xl border border-sky-200 bg-sky-50/50 p-4">
         <div class="flex items-center justify-between gap-3">
           <h3 class="text-xs font-bold uppercase tracking-wider text-sky-900">Extraction confidence</h3>
-          <span class="relative">
+          <span class="relative" data-tooltip-container>
             <button
               type="button"
               class="flex h-5 w-5 items-center justify-center rounded-full border border-sky-300 text-[10px] font-bold text-sky-700 hover:bg-sky-100"
@@ -307,9 +337,14 @@ function editableValue(item: LineItem, path: string): string {
         <span class="sr-only">{{ extractionCalculation }}</span>
       </div>
 
-      <div v-if="showMappingConcernDefinition" role="tooltip" class="rounded-xl border border-amber-200 bg-amber-50 p-3 text-[11px] leading-4 text-amber-900">
-        <span class="font-semibold">How field mapping confidence is calculated:</span>
-        {{ mappingConcernDefinition }}
+      <div v-if="showMappingConcernDefinition" role="tooltip" class="rounded-xl border border-amber-200 bg-amber-50 p-3 text-[11px] leading-4 text-amber-900" data-tooltip-container>
+        <div class="flex items-start justify-between gap-2">
+          <div>
+            <span class="font-semibold">How field mapping confidence is calculated:</span>
+            {{ mappingConcernDefinition }}
+          </div>
+          <button type="button" class="text-amber-700 hover:text-amber-900 font-bold text-xs" @click.stop="showMappingConcernDefinition = false">✕</button>
+        </div>
       </div>
 
       <!-- Edit / Correction Card (Clean & Inline) -->
@@ -365,7 +400,7 @@ function editableValue(item: LineItem, path: string): string {
         <div v-if="mappingConcernsFor('product').length" class="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] text-amber-900">
           <p class="flex items-center gap-1 font-semibold">
             {{ mappingConcernsFor('product').length }} field{{ mappingConcernsFor('product').length === 1 ? "" : "s" }} below full mapping confidence:
-            <button type="button" class="flex h-4 w-4 items-center justify-center rounded-full border border-amber-500 text-[9px] font-bold hover:bg-amber-100" aria-label="Explain field mapping confidence" :aria-expanded="showMappingConcernDefinition" @click.stop="showMappingConcernDefinition = !showMappingConcernDefinition">?</button>
+            <button type="button" data-tooltip-container class="flex h-4 w-4 items-center justify-center rounded-full border border-amber-500 text-[9px] font-bold hover:bg-amber-100" aria-label="Explain field mapping confidence" :aria-expanded="showMappingConcernDefinition" @click.stop="showMappingConcernDefinition = !showMappingConcernDefinition">?</button>
           </p>
           <p v-for="concern in mappingConcernsFor('product')" :key="concern.label">{{ concern.label }} ({{ concern.score }}%): {{ concern.reason }}</p>
         </div>
@@ -410,7 +445,7 @@ function editableValue(item: LineItem, path: string): string {
         <div v-if="mappingConcernsFor('pricing').length" class="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] text-amber-900">
           <p class="flex items-center gap-1 font-semibold">
             {{ mappingConcernsFor('pricing').length }} field{{ mappingConcernsFor('pricing').length === 1 ? "" : "s" }} below full mapping confidence:
-            <button type="button" class="flex h-4 w-4 items-center justify-center rounded-full border border-amber-500 text-[9px] font-bold hover:bg-amber-100" aria-label="Explain field mapping confidence" :aria-expanded="showMappingConcernDefinition" @click.stop="showMappingConcernDefinition = !showMappingConcernDefinition">?</button>
+            <button type="button" data-tooltip-container class="flex h-4 w-4 items-center justify-center rounded-full border border-amber-500 text-[9px] font-bold hover:bg-amber-100" aria-label="Explain field mapping confidence" :aria-expanded="showMappingConcernDefinition" @click.stop="showMappingConcernDefinition = !showMappingConcernDefinition">?</button>
           </p>
           <p v-for="concern in mappingConcernsFor('pricing')" :key="concern.label">{{ concern.label }} ({{ concern.score }}%): {{ concern.reason }}</p>
         </div>
@@ -498,7 +533,7 @@ function editableValue(item: LineItem, path: string): string {
         <div v-if="mappingConcernsFor('quantity_packaging').length" class="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] text-amber-900">
           <p class="flex items-center gap-1 font-semibold">
             {{ mappingConcernsFor('quantity_packaging').length }} field{{ mappingConcernsFor('quantity_packaging').length === 1 ? "" : "s" }} below full mapping confidence:
-            <button type="button" class="flex h-4 w-4 items-center justify-center rounded-full border border-amber-500 text-[9px] font-bold hover:bg-amber-100" aria-label="Explain field mapping confidence" :aria-expanded="showMappingConcernDefinition" @click.stop="showMappingConcernDefinition = !showMappingConcernDefinition">?</button>
+            <button type="button" data-tooltip-container class="flex h-4 w-4 items-center justify-center rounded-full border border-amber-500 text-[9px] font-bold hover:bg-amber-100" aria-label="Explain field mapping confidence" :aria-expanded="showMappingConcernDefinition" @click.stop="showMappingConcernDefinition = !showMappingConcernDefinition">?</button>
           </p>
           <p v-for="concern in mappingConcernsFor('quantity_packaging')" :key="concern.label">{{ concern.label }} ({{ concern.score }}%): {{ concern.reason }}</p>
         </div>
@@ -549,7 +584,7 @@ function editableValue(item: LineItem, path: string): string {
         <div v-if="mappingConcernsFor('supply').length" class="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] text-amber-900">
           <p class="flex items-center gap-1 font-semibold">
             {{ mappingConcernsFor('supply').length }} field{{ mappingConcernsFor('supply').length === 1 ? "" : "s" }} below full mapping confidence:
-            <button type="button" class="flex h-4 w-4 items-center justify-center rounded-full border border-amber-500 text-[9px] font-bold hover:bg-amber-100" aria-label="Explain field mapping confidence" :aria-expanded="showMappingConcernDefinition" @click.stop="showMappingConcernDefinition = !showMappingConcernDefinition">?</button>
+            <button type="button" data-tooltip-container class="flex h-4 w-4 items-center justify-center rounded-full border border-amber-500 text-[9px] font-bold hover:bg-amber-100" aria-label="Explain field mapping confidence" :aria-expanded="showMappingConcernDefinition" @click.stop="showMappingConcernDefinition = !showMappingConcernDefinition">?</button>
           </p>
           <p v-for="concern in mappingConcernsFor('supply')" :key="concern.label">{{ concern.label }} ({{ concern.score }}%): {{ concern.reason }}</p>
         </div>
@@ -593,7 +628,7 @@ function editableValue(item: LineItem, path: string): string {
         <div v-if="mappingConcernsFor('regulatory').length" class="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] text-amber-900">
           <p class="flex items-center gap-1 font-semibold">
             {{ mappingConcernsFor('regulatory').length }} field{{ mappingConcernsFor('regulatory').length === 1 ? "" : "s" }} below full mapping confidence:
-            <button type="button" class="flex h-4 w-4 items-center justify-center rounded-full border border-amber-500 text-[9px] font-bold hover:bg-amber-100" aria-label="Explain field mapping confidence" :aria-expanded="showMappingConcernDefinition" @click.stop="showMappingConcernDefinition = !showMappingConcernDefinition">?</button>
+            <button type="button" data-tooltip-container class="flex h-4 w-4 items-center justify-center rounded-full border border-amber-500 text-[9px] font-bold hover:bg-amber-100" aria-label="Explain field mapping confidence" :aria-expanded="showMappingConcernDefinition" @click.stop="showMappingConcernDefinition = !showMappingConcernDefinition">?</button>
           </p>
           <p v-for="concern in mappingConcernsFor('regulatory')" :key="concern.label">{{ concern.label }} ({{ concern.score }}%): {{ concern.reason }}</p>
         </div>

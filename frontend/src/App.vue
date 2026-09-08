@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
 import {
   deleteDocument as apiDeleteDocument,
@@ -54,15 +54,28 @@ function exportAllData() {
   URL.revokeObjectURL(url);
 }
 
-function openDocument(document: DocumentResponse) {
+const selectedApproach = ref<string | null>(null);
+
+async function openDocument(document: DocumentResponse & { source_result?: string }) {
   selectedDocumentId.value = document.id;
+  selectedApproach.value = document.source_result ?? null;
   selectedLineIndex.value = 0;
   isDrawerOpen.value = false;
   void loadActivity(document.id);
+
+  if (
+    document.source_result &&
+    document.image_extraction_attempts?.some(
+      (a) => a.approach === document.source_result && a.status === "completed"
+    )
+  ) {
+    await openCandidateForReview(document.source_result);
+  }
 }
 
 function closeDocument() {
   selectedDocumentId.value = null;
+  selectedApproach.value = null;
   isDrawerOpen.value = false;
   isReviewModalOpen.value = false;
 }
@@ -144,7 +157,12 @@ async function chooseFile(event: Event) {
     const uploadedIds = new Set(uploaded.map((document) => document.id));
     documents.value = [...uploaded, ...documents.value.filter((document) => !uploadedIds.has(document.id))];
     uploaded.forEach((document) => watchDocument(document.id));
-    if (uploaded.length === 1) openDocument(uploaded[0]);
+    const isImageUpload = uploaded.some(
+      (doc) => doc.source_system === "image" || /\.(png|jpg|jpeg)$/i.test(doc.filename)
+    );
+    if (uploaded.length === 1 && !isImageUpload) {
+      void openDocument(uploaded[0]);
+    }
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : "Upload failed.";
   } finally {
@@ -170,6 +188,7 @@ async function reextract(document: DocumentResponse) {
 async function openCandidateForReview(approach: string) {
   const doc = selectedDocument.value;
   if (!doc) return;
+  selectedApproach.value = approach;
   busy.value = true;
   errorMessage.value = "";
   try {
@@ -180,6 +199,26 @@ async function openCandidateForReview(approach: string) {
     busy.value = false;
   }
 }
+
+watch(
+  () => [
+    selectedDocument.value?.id,
+    selectedDocument.value?.image_extraction_attempts?.length,
+    selectedDocument.value?.quotation,
+  ] as const,
+  ([, attemptsLength, quotation]) => {
+    const doc = selectedDocument.value;
+    if (doc && !quotation && (attemptsLength ?? 0) > 0) {
+      const approach =
+        selectedApproach.value ||
+        doc.image_extraction_attempts?.find((a) => a.status === "completed")?.approach ||
+        doc.image_extraction_attempts?.[0]?.approach;
+      if (approach) {
+        void openCandidateForReview(approach);
+      }
+    }
+  }
+);
 
 async function handleSaveCorrection(payload: { fieldPath: string; value: unknown; lineIndex: number }) {
   const doc = selectedDocument.value;
@@ -351,8 +390,10 @@ onBeforeUnmount(() => eventSources.forEach((source) => source.close()));
         <!-- Source Detail Header & Schema Strip -->
         <SourceDetailHeader
           :document="selectedDocument"
+          :selected-approach="selectedApproach"
           :busy="busy"
           @back="closeDocument"
+          @switch-approach="openCandidateForReview"
           @open-review="isReviewModalOpen = true"
           @reextract="reextract(selectedDocument)"
         />
@@ -396,54 +437,16 @@ onBeforeUnmount(() => eventSources.forEach((source) => source.close()));
           />
         </section>
 
-        <section
-          v-else-if="selectedDocument.image_extraction_attempts?.length"
-          class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs"
+        <!-- Failed State Display -->
+        <div
+          v-else-if="selectedDocument.status === 'failed'"
+          class="rounded-2xl border border-rose-200 bg-rose-50 p-6 text-center"
         >
-          <div class="border-b border-slate-100 px-6 py-5">
-            <h2 class="text-base font-bold text-slate-900">Compare image extractions</h2>
-            <p class="mt-1 text-xs text-slate-500">
-              These are two independent readings of the same source. Neither has been selected automatically.
-            </p>
-          </div>
-          <div class="grid gap-4 p-5 lg:grid-cols-2">
-            <article
-              v-for="attempt in selectedDocument.image_extraction_attempts"
-              :key="attempt.approach"
-              class="rounded-xl border border-slate-200 p-4"
-            >
-              <div class="flex items-start justify-between gap-3">
-                <div>
-                  <h3 class="font-bold text-slate-900">
-                    {{ attempt.approach === "ocr_assisted" ? "OCR-assisted extraction" : "Direct image extraction" }}
-                  </h3>
-                  <p class="mt-1 text-xs text-slate-500">
-                    {{ attempt.status === "completed" ? `${attempt.product_count} extracted products` : attempt.failure_reason || "Extraction did not complete." }}
-                  </p>
-                </div>
-                <button
-                  v-if="attempt.status === 'completed' && attempt.result?.line_items.length"
-                  type="button"
-                  class="rounded-lg bg-emerald-800 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-900 disabled:opacity-50"
-                  :disabled="busy"
-                  @click="openCandidateForReview(attempt.approach)"
-                >
-                  Review this extraction
-                </button>
-              </div>
-              <dl v-if="attempt.result" class="mt-4 space-y-2 text-xs">
-                <div class="flex justify-between gap-3"><dt class="text-slate-500">Supplier</dt><dd class="font-semibold text-slate-800 text-right">{{ attempt.result.supplier.name || "—" }}</dd></div>
-                <div class="flex justify-between gap-3"><dt class="text-slate-500">Quotation reference</dt><dd class="font-semibold text-slate-800 text-right">{{ attempt.result.quotation_reference || "—" }}</dd></div>
-              </dl>
-              <ul v-if="attempt.result?.line_items.length" class="mt-4 divide-y divide-slate-100 border-t border-slate-100 text-xs">
-                <li v-for="(item, index) in attempt.result.line_items" :key="item.source_key || index" class="flex justify-between gap-3 py-2">
-                  <span class="font-semibold text-slate-800">{{ item.product.trade_name || item.product.inn.join(" · ") || "Unnamed product" }}</span>
-                  <span class="text-slate-500">{{ item.product.dosage_form || "—" }}</span>
-                </li>
-              </ul>
-            </article>
-          </div>
-        </section>
+          <p class="text-sm font-bold text-rose-900">Extraction failed</p>
+          <p class="mt-1 text-xs text-rose-700">
+            {{ selectedDocument.failure_reason || "No products could be extracted from this source." }}
+          </p>
+        </div>
 
         <!-- Product Details Drawer / Inspector -->
         <ProductDetailDrawer

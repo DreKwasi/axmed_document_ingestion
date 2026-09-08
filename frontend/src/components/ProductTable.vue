@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { onBeforeUnmount, onMounted, ref } from "vue";
 import type { LineItem } from "@/types";
 
 const props = defineProps<{
@@ -63,9 +63,43 @@ function mappingIssueCountForLine(index: number): number {
   return props.mappingIssues.filter((issue) => issue.field_path.startsWith(prefix)).length;
 }
 
+function closeTooltips() {
+  activeMappingTooltip.value = null;
+  showMappingDefinition.value = false;
+}
+
 function toggleMappingTooltip(index: number) {
+  showMappingDefinition.value = false;
   activeMappingTooltip.value = activeMappingTooltip.value === index ? null : index;
 }
+
+function toggleMappingDefinition() {
+  activeMappingTooltip.value = null;
+  showMappingDefinition.value = !showMappingDefinition.value;
+}
+
+function handleDocumentClick(event: MouseEvent) {
+  const target = event.target as Element | null;
+  if (!target) return;
+  if (target.closest?.("[data-tooltip-container]")) return;
+  closeTooltips();
+}
+
+function handleDocumentKeydown(event: KeyboardEvent) {
+  if (event.key === "Escape") {
+    closeTooltips();
+  }
+}
+
+onMounted(() => {
+  document.addEventListener("click", handleDocumentClick);
+  document.addEventListener("keydown", handleDocumentKeydown);
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener("click", handleDocumentClick);
+  document.removeEventListener("keydown", handleDocumentKeydown);
+});
 </script>
 
 <template>
@@ -88,14 +122,14 @@ function toggleMappingTooltip(index: number) {
             <th class="px-4 py-3.5">Quoted quantity</th>
             <th class="px-4 py-3.5">Quoted Price</th>
             <th class="relative px-4 py-3.5">
-              <span class="inline-flex items-center gap-1">
+              <span class="inline-flex items-center gap-1" data-tooltip-container>
                 Mapping confidence
                 <button
                   type="button"
                   class="flex h-4 w-4 items-center justify-center rounded-full border border-slate-400 text-[9px] font-bold normal-case hover:border-emerald-700 hover:text-emerald-700"
                   aria-label="How mapping confidence is calculated"
                   :aria-expanded="showMappingDefinition"
-                  @click.stop="showMappingDefinition = !showMappingDefinition"
+                  @click.stop="toggleMappingDefinition"
                 >
                   ?
                 </button>
@@ -120,7 +154,7 @@ function toggleMappingTooltip(index: number) {
             :key="item.source_key ?? index"
             class="group cursor-pointer transition hover:bg-slate-50/80"
             :class="selectedIndex === index ? 'bg-emerald-50/40' : ''"
-            @click="emit('selectLine', index)"
+            @click="closeTooltips(); emit('selectLine', index)"
           >
             <!-- Product Trade Name & INN -->
             <td class="px-6 py-4 align-top">
@@ -161,7 +195,7 @@ function toggleMappingTooltip(index: number) {
             </td>
 
             <td class="px-4 py-4 align-top">
-              <span class="relative inline-flex">
+              <span class="relative inline-flex" data-tooltip-container>
                 <button
                   type="button"
                   class="inline-flex items-center rounded-lg border px-2.5 py-1 text-[11px] font-bold"
