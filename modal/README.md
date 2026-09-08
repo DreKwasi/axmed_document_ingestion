@@ -15,10 +15,3 @@ uvx modal deploy ocr_service.py
 ```
 
 Set the printed `/ocr` URL as `AXMED_OCR_SERVICE_URL` and the same random token as `AXMED_OCR_SERVICE_TOKEN` in the backend environment. The endpoint accepts only the versioned contract; it does not accept browser uploads directly.
-
-Measure a deployed image endpoint without retaining OCR text:
-
-```sh
-set -a; source ../backend/.env; set +a
-uvx --from modal python benchmark_ocr.py ../backend/evals/fixtures/ocr/scan_02_lowres_fax_andina_p1.png --runs 3
-```
