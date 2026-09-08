@@ -13,6 +13,8 @@ from app.security.redaction import redact_for_model
 
 logger = logging.getLogger("app.events")
 
+# --- Section 1: Phase Mappings & Status Messages ---
+
 _EVENT_PHASES = {
     "queued": "Queued",
     "started": "In progress",
@@ -67,7 +69,7 @@ _EVENT_MESSAGES = {
     "json_extraction_failed": "JSON quotation extraction failed.",
 }
 
-
+# --- Section 2: Event Persistence & Logging ---
 
 
 def record_event(
@@ -77,8 +79,17 @@ def record_event(
     stage: str,
     metadata: dict[str, Any] | None = None,
 ) -> ProcessingEventRecord:
-    """Persist only redacted metadata; never accept document text at this boundary."""
+    """Persist only redacted metadata; never accept unredacted document text at this boundary.
 
+    Args:
+        session: Active SQLAlchemy database session.
+        document_id: ID of the affected document record.
+        stage: Machine-readable lifecycle stage code.
+        metadata: Optional dictionary with auxiliary parameters (e.g. page_count, duration_ms).
+
+    Returns:
+        The newly persisted ProcessingEventRecord.
+    """
     meta_redacted = redact_for_model(metadata or {})
     event = ProcessingEventRecord(
         document_id=document_id,
@@ -94,7 +105,11 @@ def record_event(
     return event
 
 
+# --- Section 3: Event Querying & SSE Serialization ---
+
+
 def list_events_after(session: Session, document_id: str, after_id: int = 0) -> Iterable[ProcessingEventRecord]:
+    """Retrieve all processing events for a document occurring after a given sequence ID."""
     return session.scalars(
         select(ProcessingEventRecord)
         .where(ProcessingEventRecord.document_id == document_id, ProcessingEventRecord.id > after_id)
@@ -103,6 +118,11 @@ def list_events_after(session: Session, document_id: str, after_id: int = 0) -> 
 
 
 def serialize_event(event: ProcessingEventRecord) -> dict[str, Any]:
+    """Convert an event record into a client-safe dictionary for SSE transport.
+
+    Computes user-facing phase badges ('In progress', 'Complete', 'Needs attention')
+    and descriptive progress messages.
+    """
     metadata = json.loads(event.metadata_json)
     message = metadata.get("message") or _EVENT_MESSAGES.get(event.stage, event.stage.replace("_", " ").capitalize())
     terminal_stages = {"image_extractions_ready_for_comparison", "image_extraction_opened_for_review"}

@@ -1,3 +1,5 @@
+"""Document lifecycle orchestration, multi-format intake, and relational quotation management."""
+
 import hashlib
 import json
 import re
@@ -54,13 +56,18 @@ from app.models import (
 )
 from app.security.redaction import redact_for_model
 
+# --- Section 1: Validation & Ingestion Helpers ---
+
 
 class UploadValidationError(ValueError):
+    """Raised when an uploaded file fails signature, format, or size constraints."""
     pass
 
 
 class ReviewValidationError(ValueError):
+    """Raised when a human review decision or patch payload is invalid."""
     pass
+
 
 
 REJECTION_REASONS = {
@@ -74,6 +81,7 @@ REJECTION_REASONS = {
 
 
 def validate_json_upload(filename: str, content_type: str | None, data: bytes, settings: Config) -> None:
+    """Validate JSON file extension, non-empty byte length, size ceiling, and valid JSON root object."""
     if not filename.lower().endswith(".json"):
         raise UploadValidationError("Slice 1 accepts JSON files only.")
     if len(data) == 0:
@@ -93,10 +101,14 @@ def validate_json_upload(filename: str, content_type: str | None, data: bytes, s
 
 
 def read_json(data: bytes) -> dict[str, Any]:
+    """Parse JSON bytes and ensure root element is a dictionary object."""
     parsed = json.loads(data)
     if not isinstance(parsed, dict):
         raise UploadValidationError("The uploaded JSON root must be an object.")
     return parsed
+
+
+# --- Section 2: Unstructured Ingestion Pipelines (Email, PDF, Image) ---
 
 
 def ingest_email(
@@ -107,6 +119,7 @@ def ingest_email(
     data: bytes,
     settings: Config,
 ) -> DocumentRecord:
+    """Ingest an RFC 822 MIME email message file and queue background extraction."""
     if not filename.lower().endswith(".eml"):
         raise UploadValidationError("The upload is not an EML file.")
     if not data or len(data) > settings.max_upload_bytes:
@@ -165,6 +178,7 @@ def ingest_pdf(
     data: bytes,
     settings: Config,
 ) -> DocumentRecord:
+    """Ingest a PDF file, assess native text quality with LiteParse, and route to semantic extraction or OCR."""
     if not filename.lower().endswith(".pdf"):
         raise UploadValidationError("The upload is not a PDF file.")
     if not data or len(data) > settings.max_upload_bytes:
@@ -274,6 +288,7 @@ def ingest_image(
     data: bytes,
     settings: Config,
 ) -> DocumentRecord:
+    """Ingest a scanned image file (PNG/JPEG) and schedule OCR and vision extraction."""
     if not filename.lower().endswith((".png", ".jpg", ".jpeg")):
         raise UploadValidationError("The upload is not a supported image file.")
     if not data or len(data) > settings.max_upload_bytes:
@@ -315,9 +330,14 @@ def ingest_image(
     return document
 
 
+# --- Section 3: Quotation Upsert & Relational Normalization ---
+
+
 def _upsert_quotation(
     session: Session, document: DocumentRecord, quotation: CanonicalQuotation
 ) -> QuotationRecord | None:
+    """Upsert quotation payload, sync relational line items, and evaluate mapping confidence."""
+
     if not quotation.line_items:
         _clear_document_quotation(session, document.id)
         document.status = "failed"
@@ -687,10 +707,14 @@ def _restore_snapshot_number_format(value: Any, snapshot: Any) -> Any:
     return value
 
 
+# --- Section 4: Provenance, Field Evidence & Grounded Source Facts ---
+
+
 def _sync_field_evidence(
     session: Session, document_id: str, quotation: QuotationRecord, canonical: CanonicalQuotation
 ) -> None:
     """Persist field provenance separately from business values for review and audit queries."""
+
 
     session.execute(delete(FieldEvidenceRecord).where(FieldEvidenceRecord.quotation_id == quotation.id))
     evidence_with_paths = [(evidence, "") for evidence in canonical.evidence]
@@ -898,12 +922,17 @@ def _sync_field_values(
         )
 
 
+# --- Section 5: Human Review Workflow & Patch Application ---
+
+
 def _set_field_review_status(session: Session, quotation_id: str, status: str) -> None:
+    """Update review_status ('approved', 'rejected', 'corrected') across all field value records."""
     session.execute(
         update(QuotationFieldValueRecord)
         .where(QuotationFieldValueRecord.quotation_id == quotation_id)
         .values(review_status=status)
     )
+
 
 
 _READ_ONLY_FIELDS = {"normalized_price", "evidence", "review_issues"}
@@ -1148,6 +1177,9 @@ def apply_review_action(session: Session, document_id: str, action: str, command
     return document
 
 
+# --- Section 6: Structured JSON Ingestion & Re-Extraction ---
+
+
 def ingest_json(
     session: Session,
     *,
@@ -1157,6 +1189,8 @@ def ingest_json(
     settings: Config,
     extractor: JsonSemanticExtractor,
 ) -> DocumentRecord:
+    """Ingest a JSON quotation document, profile structure, and execute semantic extraction."""
+
     validate_json_upload(filename, content_type, data, settings)
     payload = read_json(data)
     source_system = str(payload.get("source_system") or (payload.get("meta") or {}).get("source_system") or "unknown")
@@ -1305,8 +1339,12 @@ def reextract_json_document(
     return _extract_json_document(session, document, payload, extractor)
 
 
+# --- Section 7: Document Lifecycle, Deletion & Serialization ---
+
+
 def delete_document(session: Session, document_id: str, settings: Config) -> None:
     """Permanently remove one uploaded source and every record derived from it."""
+
 
     document = session.get(DocumentRecord, document_id)
     if document is None:

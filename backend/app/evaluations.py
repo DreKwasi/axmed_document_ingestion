@@ -1,3 +1,5 @@
+"""Evaluation runner and scoring engine for golden benchmark datasets."""
+
 import json
 import re
 from decimal import Decimal, InvalidOperation
@@ -18,13 +20,17 @@ from app.extraction.pdf_parser import parse_native_pdf
 from app.models import EvaluationCaseRecord, EvaluationResultRecord, EvaluationRunRecord
 from app.security.redaction import redact_for_model
 
+# --- Section 1: Fixture Path Resolution & Case Seeding ---
+
 
 def _dataset_fixture_path(golden_dataset_path: Path, fixture: str) -> Path:
+    """Resolve fixture file path relative to the golden dataset JSON file."""
     fixture_path = Path(fixture)
     return fixture_path if fixture_path.is_absolute() else golden_dataset_path.parent / fixture_path
 
 
 def seed_evaluation_cases(session: Session, golden_dataset_path: Path) -> None:
+    """Load benchmark evaluation cases from golden_dataset.json into the database."""
     dataset = json.loads(golden_dataset_path.read_text())
     for case in dataset["cases"]:
         expected = case.get("expected")
@@ -46,6 +52,9 @@ def seed_evaluation_cases(session: Session, golden_dataset_path: Path) -> None:
     session.commit()
 
 
+# --- Section 2: Recorded Offline Evaluation Runner ---
+
+
 def run_recorded_evaluation(
     session: Session,
     *,
@@ -53,6 +62,7 @@ def run_recorded_evaluation(
     golden_dataset_path: Path,
     extractor: JsonSemanticExtractor,
 ) -> EvaluationRunRecord:
+    """Execute recorded offline evaluation against golden dataset JSON fixtures."""
     dataset = json.loads(golden_dataset_path.read_text())
     run = EvaluationRunRecord(
         rubric_version=dataset["rubric_version"],
@@ -148,6 +158,9 @@ def run_recorded_evaluation(
     return run
 
 
+# --- Section 3: Live PDF Extraction Pipeline Evaluation ---
+
+
 def run_live_pdf_evaluation(
     session: Session,
     *,
@@ -156,7 +169,6 @@ def run_live_pdf_evaluation(
     settings: Config,
 ) -> EvaluationRunRecord:
     """Run source PDFs through the production extraction stages and score reviewed fields."""
-
     if not settings.gemini_api_key:
         raise ValueError("Live PDF evaluation requires configured Gemini credentials.")
     dataset = json.loads(golden_dataset_path.read_text())
@@ -222,6 +234,9 @@ def run_live_pdf_evaluation(
     return run
 
 
+# --- Section 4: Live OCR Text Evidence Evaluation ---
+
+
 def run_live_ocr_evaluation(
     session: Session,
     *,
@@ -229,7 +244,6 @@ def run_live_ocr_evaluation(
     settings: Config,
 ) -> EvaluationRunRecord:
     """Evaluate configured OCR evidence without invoking an extraction model."""
-
     if not settings.ocr_service_url or not settings.ocr_service_token:
         raise ValueError("Live OCR evaluation requires configured OCR service credentials.")
     dataset = json.loads(golden_dataset_path.read_text())
@@ -284,6 +298,9 @@ def run_live_ocr_evaluation(
     return run
 
 
+# --- Section 5: Live Email Extraction Pipeline Evaluation ---
+
+
 def run_live_email_evaluation(
     session: Session,
     *,
@@ -291,7 +308,6 @@ def run_live_email_evaluation(
     settings: Config,
 ) -> EvaluationRunRecord:
     """Run approved email cases through parse, redaction, structured extraction, and rules."""
-
     if not settings.gemini_api_key:
         raise ValueError("Live email evaluation requires configured Gemini credentials.")
     dataset = json.loads(golden_dataset_path.read_text())
@@ -350,7 +366,11 @@ def run_live_email_evaluation(
     return run
 
 
+# --- Section 6: Parity Comparison & Scoring Utilities ---
+
+
 def _ocr_anchor_result(expected: dict[str, Any], text: str) -> tuple[list[str], list[str]]:
+    """Match required textual anchors against normalized OCR transcription."""
     normalized_text = _normalize_ocr_text(text)
     matched = [anchor for anchor in expected["anchors"] if _normalize_ocr_text(anchor) in normalized_text]
     missing = [anchor for anchor in expected["anchors"] if anchor not in matched]
@@ -358,10 +378,12 @@ def _ocr_anchor_result(expected: dict[str, Any], text: str) -> tuple[list[str], 
 
 
 def _normalize_ocr_text(value: str) -> str:
+    """Strip all non-alphanumeric characters for fuzzy anchor matching."""
     return re.sub(r"[^a-z0-9]+", "", value.lower())
 
 
 def _subset_mismatches(expected: Any, actual: Any, path: str = "") -> list[str]:
+    """Recursively identify differences where actual output diverges from expected baseline."""
     if isinstance(expected, dict):
         if not isinstance(actual, dict):
             return [f"{path or '$'} expected object."]
@@ -384,6 +406,7 @@ def _subset_mismatches(expected: Any, actual: Any, path: str = "") -> list[str]:
 
 
 def _values_match(expected: Any, actual: Any) -> bool:
+    """Compare scalar values with numeric equality fallback."""
     try:
         return Decimal(str(expected)) == Decimal(str(actual))
     except (InvalidOperation, ValueError):
@@ -391,6 +414,7 @@ def _values_match(expected: Any, actual: Any) -> bool:
 
 
 def _get_path(payload: dict[str, Any], path: str) -> Any:
+    """Navigate a dotted path through nested dictionaries and lists."""
     current: Any = payload
     for segment in path.split("."):
         current = current[int(segment)] if isinstance(current, list) else current[segment]
@@ -409,4 +433,5 @@ def _remove_operational_evidence(value: Any) -> None:
 
 
 def list_runs(session: Session) -> list[EvaluationRunRecord]:
+    """Fetch recent evaluation runs ordered by creation timestamp descending."""
     return list(session.scalars(select(EvaluationRunRecord).order_by(EvaluationRunRecord.created_at.desc()).limit(20)))
