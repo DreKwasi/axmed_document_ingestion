@@ -16,7 +16,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-(cd "$workspace_root" && set -a && source backend/.env && set +a && PYTHONPATH=backend uv run --project backend python -c 'from pathlib import Path; from app.config import get_config; from app.database import run_migrations; run_migrations(get_config().database_url, Path.cwd())')
+(cd "$workspace_root/backend" && set -a && source .env && set +a && uv run python -c 'from pathlib import Path; from app.config import get_config; from app.database import run_migrations; run_migrations(get_config().database_url, Path.cwd())')
 (cd "$workspace_root/backend" && set -a && source .env && set +a && uv run uvicorn main:app --host 127.0.0.1 --port "$api_port" --reload) &
 api_pid=$!
 (cd "$workspace_root" && npm --prefix frontend run dev -- --host 127.0.0.1 --port "$web_port") &

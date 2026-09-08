@@ -44,10 +44,14 @@ def create_all() -> None:
     Base.metadata.create_all(bind=engine)
 
 
-def run_migrations(database_url: str, project_root: Path) -> None:
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+
+
+def run_migrations(database_url: str, project_root: Path = BACKEND_ROOT) -> None:
     """Upgrade the application schema; safely baseline the pre-Alembic local preview DB."""
-    config = Config(str(project_root / "backend/alembic.ini"))
-    config.set_main_option("script_location", str(project_root / "backend/migrations"))
+    root = project_root if (project_root / "alembic.ini").is_file() else BACKEND_ROOT
+    config = Config(str(root / "alembic.ini"))
+    config.set_main_option("script_location", str(root / "migrations"))
     config.set_main_option("sqlalchemy.url", database_url)
     migration_engine = create_sqlite_engine(database_url)
     expected_tables = {

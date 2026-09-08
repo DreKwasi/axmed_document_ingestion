@@ -43,7 +43,7 @@ from app.models import DocumentRecord
 
 logger = get_api_logger()
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReviewPatch(BaseModel):
@@ -60,7 +60,11 @@ class ReviewCommand(BaseModel):
 
 
 def _absolute_path(path: Path) -> Path:
-    return path if path.is_absolute() else PROJECT_ROOT / path
+    if path.is_absolute():
+        return path
+    if path.parts and path.parts[0] == "backend":
+        path = Path(*path.parts[1:])
+    return PROJECT_ROOT / path
 
 
 def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtractor | None = None) -> FastAPI:
