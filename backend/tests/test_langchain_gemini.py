@@ -27,6 +27,7 @@ from app.extraction.contracts import (
 from app.extraction.email_processing import consume_email_extraction
 from app.extraction.json import JsonSemanticExtraction, JsonSourceFact
 from app.extraction.llm import (
+    JsonFactAudit,
     LangChainSemanticExtractor,
     SemanticEnrichment,
     SemanticLineItemEnrichment,
@@ -66,7 +67,9 @@ def test_product_dosage_form_preserves_the_complete_source_phrase():
 
 
 def test_packaging_reads_explicit_quantity_without_relabeling_the_source_basis():
-    line = LineItem(packaging={"description": "PVC/Alu blister, 1,000 tablets/pack"})
+    description = "PVC/Alu blister, 1,000 tablets/pack"
+    line = LineItem(packaging={"description": description})
+    assert line.packaging.presentation == description
     assert line.packaging.units_per_pack == 1000
     assert line.packaging.unit_label == "tablet"
 
@@ -206,8 +209,19 @@ def test_langchain_json_extraction_returns_source_grounded_facts():
 
     mock_llm_chain = MagicMock()
     mock_llm_chain.invoke.return_value = result
+    audit_chain = MagicMock()
+    audit_chain.invoke.return_value = JsonFactAudit(
+        source_facts=[
+            JsonSourceFact(
+                label="Supplier",
+                value="Acme",
+                source_path="$.vendor",
+                canonical_field="supplier.name",
+            )
+        ]
+    )
     extractor._llm = MagicMock()
-    extractor._llm.with_structured_output.return_value = mock_llm_chain
+    extractor._llm.with_structured_output.side_effect = [mock_llm_chain, audit_chain]
 
     extraction, telemetry = extractor.extract_json_quotation(
         {"ref": "Q-123", "vendor": "Acme", "cur": "USD"},
@@ -218,7 +232,23 @@ def test_langchain_json_extraction_returns_source_grounded_facts():
 
     assert telemetry["provider"] == "google-gemini"
     assert extraction.quotation.quotation_reference == "Q-123"
-    assert extraction.source_facts[0].source_path == "$.ref"
+    assert [fact.source_path for fact in extraction.source_facts] == ["$.ref", "$.vendor"]
+
+    system_prompt = mock_llm_chain.invoke.call_args.args[0][0].content
+    assert "Canonical field dictionary" in system_prompt
+    assert "pack_description" in system_prompt
+    assert "price_per_uom" in system_prompt
+    assert "minimum_order_quantity_packs" in system_prompt
+    assert "Pair combination strengths with INNs in source order" in system_prompt
+    assert "Final completeness lookup" in system_prompt
+    assert "inspect every source leaf" in system_prompt
+
+    audit_prompt = audit_chain.invoke.call_args.args[0][0].content
+    assert "Return only source facts omitted by the primary extraction" in audit_prompt
+    assert "$.ref" in audit_chain.invoke.call_args.args[0][1].content
+    assert '"populated_canonical_fields_without_source_fact": [\n    "supplier.name"' in (
+        audit_chain.invoke.call_args.args[0][1].content
+    )
 
 
 def test_email_worker_executes_langchain_when_gemini_configured(tmp_path):

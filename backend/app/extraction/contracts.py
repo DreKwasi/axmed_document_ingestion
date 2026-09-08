@@ -71,11 +71,17 @@ class Strength(BaseModel):
     or 5 mg/ml per 10 ml ampoule).
     """
 
-    ingredient: str | None = None
-    value: Decimal | None = None
-    unit: str | None = None
-    per_value: Decimal | None = None
-    per_unit: str | None = None
+    ingredient: str | None = Field(
+        default=None,
+        description="Active ingredient this potency belongs to; pair combination strengths with INNs in source order.",
+    )
+    value: Decimal | None = Field(default=None, description="Numeric potency before any denominator.")
+    unit: str | None = Field(default=None, description="Potency unit, for example mg, mcg, g, IU, or percent.")
+    per_value: Decimal | None = Field(
+        default=None,
+        description="Explicit denominator quantity; use 1 for concentrations written with only '/mL'.",
+    )
+    per_unit: str | None = Field(default=None, description="Explicit denominator unit, for example mL or actuation.")
 
     @field_validator("ingredient")
     @classmethod
@@ -93,9 +99,15 @@ class Product(BaseModel):
     Names (INN) and captures dosage form, manufacturer, and country of origin.
     """
 
-    trade_name: str | None = None
-    inn: list[str] = Field(default_factory=list)
-    strength: list[Strength] = Field(default_factory=list)
+    trade_name: str | None = Field(default=None, description="Supplier brand or proprietary product name.")
+    inn: list[str] = Field(
+        default_factory=list,
+        description="Active ingredients or International Nonproprietary Names in source order.",
+    )
+    strength: list[Strength] = Field(
+        default_factory=list,
+        description="Structured potency or concentration entries paired to active ingredients in source order.",
+    )
     dosage_form: str | None = None
     manufacturer: str | None = None
     country_of_origin: str | None = None
@@ -150,12 +162,27 @@ class CommercialTerms(BaseModel):
 class Packaging(BaseModel):
     """Packaging hierarchy from primary container to shipping carton."""
 
-    description: str | None = None
-    presentation: str | None = None
-    primary_pack: str | None = None
-    units_per_pack: int | None = None
-    unit_label: str | None = None
-    packs_per_shipper: int | None = None
+    description: str | None = Field(
+        default=None,
+        description="Complete source packaging text, preserved without dropping configuration details.",
+    )
+    presentation: str | None = Field(
+        default=None,
+        description=(
+            "Review-facing product presentation. Use an explicit presentation value when supplied; otherwise retain "
+            "the complete packaging description so a differently labelled source does not appear missing."
+        ),
+    )
+    primary_pack: str | None = Field(
+        default=None,
+        description="Immediate named container or material, such as Alu-Alu blister, HDPE bottle, vial, or ampoule.",
+    )
+    units_per_pack: int | None = Field(default=None, description="Total count of saleable units in one quoted pack.")
+    unit_label: str | None = Field(default=None, description="Saleable unit contained by the pack, singularized.")
+    packs_per_shipper: int | None = Field(
+        default=None,
+        description="Number of packs contained in an outer shipper or shipping carton.",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -169,7 +196,9 @@ class Packaging(BaseModel):
 
     @model_validator(mode="after")
     def fill_explicit_pack_quantity(self) -> "Packaging":
-        """Infer pack unit count and label from description when not explicitly provided."""
+        """Retain the review presentation and infer explicit pack quantity from the full description."""
+        if self.presentation is None and self.description:
+            self.presentation = self.description
         parsed = _pack_quantity_from_description(self.description)
         if parsed is not None:
             units, label = parsed

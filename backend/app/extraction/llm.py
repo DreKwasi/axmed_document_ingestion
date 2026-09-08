@@ -11,12 +11,84 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, Field
 
 from app.extraction.contracts import CanonicalQuotation, Regulatory, Supply
-from app.extraction.json import JsonSemanticExtraction
+from app.extraction.json import JsonSemanticExtraction, JsonSourceFact
 
 # --- Section 1: Prompt Version Constants & Intermediate Enrichment Models ---
 
 CANONICAL_QUOTATION_PROMPT_VERSION = "canonical-quotation-v8"
-JSON_SEMANTIC_EXTRACTION_PROMPT_VERSION = "json-semantic-extraction-v1"
+JSON_SEMANTIC_EXTRACTION_PROMPT_VERSION = "json-semantic-extraction-v2"
+
+
+JSON_CANONICAL_FIELD_DICTIONARY = {
+    "quotation_reference": "Supplier quotation, quote, offer, proposal, or proforma reference/ID/number.",
+    "rfq_reference": "Buyer RFQ, enquiry, tender, requisition, or request reference/ID/number.",
+    "document_type": "Document kind such as supplier quotation, offer, proforma invoice, or email offer.",
+    "issue_date": "Issued, quotation, quote, offer, or document date.",
+    "valid_until": "Expiry, valid-through, validity end, or offer expiration date.",
+    "supplier.name": "Supplier/vendor legal or trading name; prefer the complete legal name.",
+    "supplier.supplier_code": "Supplier/vendor/account code or identifier.",
+    "supplier.country": "Supplier address or explicitly stated supplier country.",
+    "supplier.manufacturing_site": "Explicit manufacturing facility or site.",
+    "commercial_terms.currency": "Quotation, offer, pricing, or line-item currency.",
+    "commercial_terms.incoterm": "Incoterm or delivery/trade term such as CIP, FOB, CIF, DDP, or EXW.",
+    "commercial_terms.incoterm_named_place": "Named destination/place attached to the Incoterm.",
+    "commercial_terms.incoterm_country": "Country of the named Incoterm place, only when explicit or unambiguous.",
+    "commercial_terms.payment_terms": "Payment method, timing, credit terms, LC, or advance/payment conditions.",
+    "commercial_terms.price_basis": "Document-level stated basis or conditions applying to prices.",
+    "commercial_terms.transit_time_days": "Single stated shipping, delivery, or transit duration in days.",
+    "commercial_terms.transit_time_min_days": "Minimum of an explicit transit/shipping duration range.",
+    "commercial_terms.transit_time_max_days": "Maximum of an explicit transit/shipping duration range.",
+    "commercial_terms.hs_codes": "Shipment/product HS, harmonized-system, tariff, or customs codes.",
+    "line_items[].source_key": "Source row, line, item, SKU, or product identifier.",
+    "line_items[].product.trade_name": "Trade, brand, proprietary, marketed, or product name.",
+    "line_items[].product.inn": "INN, generic name, active ingredient, active moiety, API, or composition.",
+    "line_items[].product.strength": (
+        "Strength, potency, dose, concentration, or composition quantity. Parse scalar source strings into structured "
+        "ingredient/value/unit/per-value/per-unit entries."
+    ),
+    "line_items[].product.dosage_form": (
+        "Dosage, pharmaceutical, or dose form such as tablet or solution for injection."
+    ),
+    "line_items[].product.manufacturer": "Explicit product manufacturer or manufacturing organization.",
+    "line_items[].product.country_of_origin": "Explicit product origin, made-in, or country of manufacture.",
+    "line_items[].packaging.description": (
+        "Complete pack description, pack details, package configuration, presentation text, or packing specification."
+    ),
+    "line_items[].packaging.presentation": (
+        "Explicit presentation, or the complete pack description/configuration when that is the source's equivalent."
+    ),
+    "line_items[].packaging.primary_pack": "Immediate container/material such as blister, bottle, vial, or ampoule.",
+    "line_items[].packaging.units_per_pack": "Units, tablets, capsules, vials, or ampoules in one pack/carton/box.",
+    "line_items[].packaging.unit_label": "Unit contained in the pack or the unit-of-measure for pack contents.",
+    "line_items[].packaging.packs_per_shipper": "Packs, cartons, or boxes in an outer shipper/case.",
+    "line_items[].quantity.quoted_quantity": "Quoted, offered, requested, order, or line quantity.",
+    "line_items[].quantity.quoted_quantity_uom": "Explicit basis/unit for the quoted quantity.",
+    "line_items[].quantity.quantity_basis": "Text explaining the quoted quantity basis.",
+    "line_items[].quantity.minimum_order_quantity": "MOQ, minimum order, or minimum purchase quantity.",
+    "line_items[].quantity.minimum_order_quantity_uom": "Explicit MOQ unit, including keys such as MOQ packs/boxes.",
+    "line_items[].pricing.currency": "Line-level currency when distinct or explicitly repeated.",
+    "line_items[].pricing.quoted_price.amount": (
+        "Quoted, unit, per-UOM, per-item, each, offer, or tender price amount; includes price_per_uom."
+    ),
+    "line_items[].pricing.quoted_price.uom": "Explicit commercial price basis/UOM; never invent pack as a fallback.",
+    "line_items[].pricing.pack_price": "Price per pack, carton, box, kit, bottle, or other stated package.",
+    "line_items[].pricing.discount": "Explicit discount percentage or amount as represented by the source.",
+    "line_items[].pricing.extended_price": "Line total, extended value, amount, or net line value.",
+    "line_items[].pricing.price_tiers": "Quantity breaks, volume tiers, or tiered prices with their bases.",
+    "line_items[].pricing.adjustments": "Freight, surcharge, tariff, rebate, discount, or other price adjustment.",
+    "line_items[].supply.lead_time_days": "Single manufacturing/availability lead time in days.",
+    "line_items[].supply.lead_time_min_days": "Minimum of an explicit manufacturing lead-time range.",
+    "line_items[].supply.lead_time_max_days": "Maximum of an explicit manufacturing lead-time range.",
+    "line_items[].supply.shelf_life_months": "Shelf life, expiry period, or product life in months.",
+    "line_items[].supply.minimum_remaining_shelf_life_percent": "Minimum remaining shelf life in percentage points.",
+    "line_items[].supply.storage_conditions": "Storage temperature, humidity, light, freezing, or handling conditions.",
+    "line_items[].supply.cold_chain_required": "Explicit refrigeration/cold-chain requirement or temperature evidence.",
+    "line_items[].regulatory.who_prequalified": "WHO prequalification flag or status.",
+    "line_items[].regulatory.who_pq_reference": "WHO prequalification reference/identifier.",
+    "line_items[].regulatory.registered_markets": "Countries or markets where the product is registered/authorized.",
+    "line_items[].regulatory.registration_reference": "Registration, authorization, dossier, or variation reference.",
+    "line_items[].regulatory.regulatory_status": "Approval, registration, authorization, pending, or variation status.",
+}
 
 
 class SemanticLineItemEnrichment(BaseModel):
@@ -31,6 +103,12 @@ class SemanticEnrichment(BaseModel):
     """Collection of narrative line-item enrichments from footnotes and appendices."""
 
     line_items: list[SemanticLineItemEnrichment] = Field(default_factory=list)
+
+
+class JsonFactAudit(BaseModel):
+    """Source facts omitted by a primary JSON semantic extraction pass."""
+
+    source_facts: list[JsonSourceFact] = Field(default_factory=list)
 
 
 # --- Section 2: LangChain Semantic Extractor Core Engine ---
@@ -284,7 +362,28 @@ class LangChainSemanticExtractor:
             "leave canonical_field null and keep it as an unmapped fact. That is a successful extraction and must not "
             "lower confidence. Do not emit a canonical value without a supporting source fact.\n"
             "The canonical quotation has a rigid schema, but the incoming JSON has no assumed structure. Do not infer "
-            "a relationship merely because source keys look similar."
+            "a relationship merely because source keys look similar. Determine meaning from the key, value, sibling "
+            "fields, parent object, and line-item context together. Source labels do not need to exactly equal "
+            "canonical field names.\n\n"
+            "Canonical field dictionary (descriptions include common source-language variants, not an exhaustive "
+            f"allow-list):\n{json.dumps(JSON_CANONICAL_FIELD_DICTIONARY, indent=2, sort_keys=True)}\n\n"
+            "Pharmaceutical and packaging normalization:\n"
+            "- Pair combination strengths with INNs in source order when their counts and context align. For example, "
+            "INN `Amoxicillin + Clavulanic acid` and strength `500 mg / 125 mg` become two strength entries.\n"
+            "- Parse a single strength such as `1000 mg` into one entry. Parse `10 IU/mL` as value 10, unit IU, "
+            "per_value 1, per_unit mL. Do not treat a slash as a concentration denominator when it separates the "
+            "strengths of multiple ingredients.\n"
+            "- A source `pack_description`, `pack details`, `packing`, or similarly labelled value can support "
+            "packaging.description and packaging.presentation even when the word `presentation` is absent. Preserve "
+            "the complete text in description/presentation, and also decompose explicit container and counts into "
+            "primary_pack, units_per_pack, unit_label, and packs_per_shipper where supported.\n"
+            "- A source `price_per_uom`, `unit price`, `price each`, or equivalent can support quoted_price.amount; "
+            "use an explicit sibling UOM as quoted_price.uom and never invent the basis. A key such as "
+            "minimum_order_quantity_packs explicitly supplies both the MOQ value and its `pack` UOM.\n\n"
+            "Final completeness lookup: before returning, inspect every source leaf and every empty canonical field. "
+            "Check whether an unused source fact or a partially interpreted composite value explicitly supports that "
+            "field. Add every quotation-relevant source leaf to source_facts even when it remains unmapped. Fill only "
+            "supported canonical fields, never overwrite a stronger value, and leave ambiguous destinations unmapped."
         )
 
         context = {
@@ -305,13 +404,57 @@ class LangChainSemanticExtractor:
         )
 
         extraction, usage = _structured_result(result, JsonSemanticExtraction)
+
+        audit_system_prompt = (
+            "You audit one supplier quotation JSON extraction for omissions. Return only source facts omitted by the "
+            "primary extraction. Each fact must use an exact JSONPath and its value must exactly equal the scalar or "
+            "collection at that path. Use the canonical field dictionary to map a fact when its meaning is supported "
+            "by its value and context; otherwise leave canonical_field null. A composite source value may be emitted "
+            "more than once when it supports multiple populated canonical fields. Do not change the canonical "
+            "quotation, calculate new commercial values, repeat already reported facts, or report invalid paths. "
+            "The audit context lists every populated canonical field that still lacks a source fact. For each listed "
+            "field, emit at least one supporting fact when the source supports it; otherwise leave it unsupported so "
+            "the application can surface the provenance gap.\n\n"
+            f"Canonical field dictionary:\n{json.dumps(JSON_CANONICAL_FIELD_DICTIONARY, indent=2, sort_keys=True)}"
+        )
+        audit_context = {
+            "source_json": payload,
+            "canonical_quotation": extraction.quotation.model_dump(mode="json"),
+            "already_reported_source_paths": [fact.source_path for fact in extraction.source_facts],
+            "populated_canonical_fields_without_source_fact": _populated_fields_without_source_fact(extraction),
+            "invalid_source_paths": invalid_source_paths,
+        }
+        audit_llm = self._llm.with_structured_output(JsonFactAudit, include_raw=True)
+        audit_result = audit_llm.invoke(
+            [
+                SystemMessage(content=audit_system_prompt),
+                HumanMessage(
+                    content=f"Audit this extraction for omitted facts:\n\n{json.dumps(audit_context, indent=2)}"
+                ),
+            ]
+        )
+        audit, audit_usage = _structured_result(audit_result, JsonFactAudit)
+        known_facts = {
+            (fact.source_path, fact.canonical_field, json.dumps(fact.value, default=str, sort_keys=True))
+            for fact in extraction.source_facts
+        }
+        for fact in audit.source_facts:
+            identity = (fact.source_path, fact.canonical_field, json.dumps(fact.value, default=str, sort_keys=True))
+            if identity not in known_facts:
+                extraction.source_facts.append(fact)
+                known_facts.add(identity)
+
         duration_ms = max(1, int((time.perf_counter() - started_at) * 1000))
         return extraction, {
             "provider": "google-gemini",
             "model": self.model_name,
             "prompt_version": JSON_SEMANTIC_EXTRACTION_PROMPT_VERSION,
             "duration_ms": duration_ms,
-            **usage,
+            "input_tokens": _sum_optional_counts(usage["input_tokens"], audit_usage["input_tokens"]),
+            "output_tokens": _sum_optional_counts(usage["output_tokens"], audit_usage["output_tokens"]),
+            "estimated_cost_usd": _sum_optional_decimals(
+                usage["estimated_cost_usd"], audit_usage["estimated_cost_usd"]
+            ),
         }
 
 
@@ -342,6 +485,42 @@ def _fill_missing_model_values(target: Supply | Regulatory, source: Supply | Reg
             continue
         if target_value is None or target_value == []:
             setattr(target, field_name, source_value)
+
+
+def _populated_fields_without_source_fact(extraction: JsonSemanticExtraction) -> list[str]:
+    """List populated canonical fields that the primary JSON pass did not ground in a source fact."""
+    payload = extraction.quotation.model_dump(mode="json")
+    mapped_fields = {fact.canonical_field for fact in extraction.source_facts if fact.canonical_field}
+    candidates: list[str] = []
+    line_field_patterns = [field for field in JSON_CANONICAL_FIELD_DICTIONARY if "line_items[]" in field]
+    document_field_patterns = [field for field in JSON_CANONICAL_FIELD_DICTIONARY if "line_items[]" not in field]
+    for field_pattern in line_field_patterns:
+        for index in range(len(payload.get("line_items", []))):
+            candidates.append(field_pattern.replace("line_items[]", f"line_items[{index}]"))
+    candidates.extend(document_field_patterns)
+
+    return [
+        field_path
+        for field_path in candidates
+        if field_path not in mapped_fields and _canonical_path_is_populated(payload, field_path)
+    ]
+
+
+def _canonical_path_is_populated(payload: dict[str, Any], field_path: str) -> bool:
+    """Resolve one dictionary field path against a canonical quotation dump."""
+    current: Any = payload
+    for segment in field_path.split("."):
+        if segment.startswith("line_items[") and segment.endswith("]"):
+            index = int(segment.removeprefix("line_items[").removesuffix("]"))
+            items = current.get("line_items") if isinstance(current, dict) else None
+            if not isinstance(items, list) or index >= len(items):
+                return False
+            current = items[index]
+            continue
+        if not isinstance(current, dict) or segment not in current:
+            return False
+        current = current[segment]
+    return current not in (None, "", [], {})
 
 
 # --- Section 4: Token Usage & Structured Output Telemetry Parsers ---
@@ -378,3 +557,15 @@ def _token_count(value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return parsed if parsed >= 0 else None
+
+
+def _sum_optional_counts(*values: int | None) -> int | None:
+    """Sum provider token counts while preserving an entirely unavailable measurement."""
+    present = [value for value in values if value is not None]
+    return sum(present) if present else None
+
+
+def _sum_optional_decimals(*values: Decimal | None) -> Decimal | None:
+    """Sum provider costs while preserving an entirely unavailable measurement."""
+    present = [value for value in values if value is not None]
+    return sum(present, start=Decimal("0")) if present else None
