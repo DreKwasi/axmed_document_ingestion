@@ -73,6 +73,11 @@ export function sourceDocumentUrl(documentId: string): string {
   return `${API_BASE_URL}/api/v1/documents/${documentId}/source`;
 }
 
+/** Direct URL for the backend-owned flattened CSV export. */
+export function exportDocumentsUrl(): string {
+  return `${API_BASE_URL}/api/v1/documents/export.csv`;
+}
+
 /** Server-Sent Events URL for live progress streaming. */
 export function eventStreamUrl(documentId: string, afterId = 0): string {
   return `${API_BASE_URL}/api/v1/documents/${documentId}/events/stream?after_id=${afterId}`;
@@ -103,5 +108,4 @@ export function reviewDocument(
     body: JSON.stringify(command)
   });
 }
-
 

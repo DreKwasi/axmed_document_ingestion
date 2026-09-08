@@ -6,6 +6,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
   deleteDocument as apiDeleteDocument,
   eventStreamUrl,
+  exportDocumentsUrl,
   fetchDocument,
   fetchDocuments,
   fetchEvents,
@@ -15,7 +16,6 @@ import {
   uploadDocuments,
 } from "@/api";
 import type { DocumentResponse, ProcessingEvent } from "@/types";
-import { documentsToCsv } from "@/exportCsv";
 
 import AxmedLogo from "./components/AxmedLogo.vue";
 import ProductDetailDrawer from "./components/ProductDetailDrawer.vue";
@@ -55,13 +55,10 @@ function openIngest() {
 }
 
 function exportAllData() {
-  const csv = documentsToCsv(documents.value);
-  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
   const link = window.document.createElement("a");
-  link.href = url;
+  link.href = exportDocumentsUrl();
   link.download = "axmed-export.csv";
   link.click();
-  URL.revokeObjectURL(url);
 }
 
 function openDocument(document: DocumentResponse & { source_result?: string }) {

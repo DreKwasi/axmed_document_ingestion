@@ -11,6 +11,7 @@ const api = vi.hoisted(() => ({
   uploadDocuments: vi.fn(),
   reextractDocument: vi.fn(),
   reviewDocument: vi.fn(),
+  exportDocumentsUrl: vi.fn(() => "/api/v1/documents/export.csv"),
   sourceDocumentUrl: vi.fn((documentId: string) => `/api/v1/documents/${documentId}/source`),
   eventStreamUrl: vi.fn((documentId: string) => `/api/v1/documents/${documentId}/events/stream`),
   fetchEvents: vi.fn(),
@@ -54,9 +55,6 @@ describe("App", () => {
       quotation: { supplier: {}, commercial_terms: {}, line_items: [], revision: 1, system_decision: "pending_review", review_status: "pending_review", review_issues: [] },
       reviews: [],
     }]);
-    const createObjectURL = vi.fn(() => "blob:export");
-    const revokeObjectURL = vi.fn();
-    vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
     const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
 
     const wrapper = mount(App);
@@ -65,9 +63,11 @@ describe("App", () => {
     await flushPromises();
 
     expect(wrapper.findAll("button").find((button) => button.text() === "Export CSV")).toBeDefined();
-    expect(createObjectURL).toHaveBeenCalledOnce();
+    expect(api.exportDocumentsUrl).toHaveBeenCalledOnce();
     expect(click).toHaveBeenCalledOnce();
-    expect(revokeObjectURL).toHaveBeenCalledWith("blob:export");
+    const anchor = click.mock.contexts[0] as HTMLAnchorElement;
+    expect(anchor.href).toContain("/api/v1/documents/export.csv");
+    expect(anchor.download).toBe("axmed-export.csv");
   });
 
   it("explains a failed extraction instead of showing an unexplained needs-attention state", () => {
