@@ -105,9 +105,10 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
     app.add_middleware(
         CORSMiddleware,
         allow_origins=active_settings.cors_origin_list,
+        allow_origin_regex=r"^https://.*\.pages\.dev$",
         allow_credentials=False,
-        allow_methods=["GET", "POST", "DELETE"],
-        allow_headers=["Content-Type"],
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
 
     def get_request_session():

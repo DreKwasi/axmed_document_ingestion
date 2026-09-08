@@ -54,7 +54,7 @@ class Config(BaseSettings):
     gemini_request_timeout_seconds: int = 60
 
     # HTTP & CORS
-    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,https://axmed-document-ingestion.pages.dev"
 
     model_config = SettingsConfigDict(
         env_file=None if "pytest" in sys.modules else (".env", BACKEND_ROOT / ".env", WORKSPACE_ROOT / ".env"),
