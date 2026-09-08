@@ -171,6 +171,13 @@ function mappingConfidenceExplanation(doc: DocumentResponse): string {
   const issueCount = doc.mapping_confidence?.issue_count ?? 0;
   return `This is the average confidence that extracted values were assigned to the correct schema fields: ${score}%. Mapping issues are counted separately: ${issueCount}.`;
 }
+
+function mappingConfidenceLabel(doc: DocumentResponse): string {
+  if (doc.status === "failed") return "Not applicable";
+  if (doc.mapping_confidence?.score != null) return `${doc.mapping_confidence.score}%`;
+  if (doc.mapping_confidence?.issue_count === 0) return "No issues";
+  return "Pending";
+}
 </script>
 
 <template>
@@ -257,7 +264,7 @@ function mappingConfidenceExplanation(doc: DocumentResponse): string {
                     aria-label="Explain mapping confidence"
                     @click.stop="toggleMappingTooltip(doc.id)"
                   >
-                    {{ doc.mapping_confidence?.score != null ? `${doc.mapping_confidence.score}%` : (doc.mapping_confidence?.issue_count === 0 ? "No issues" : "Pending") }}
+                    {{ mappingConfidenceLabel(doc) }}
                   </button>
                   <span
                     v-if="activeMappingTooltip === doc.id"

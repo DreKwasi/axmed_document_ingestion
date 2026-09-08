@@ -77,3 +77,31 @@ test("opening a processed image source starts one review request", async ({ page
   await expect.poll(() => reviewRequests).toBe(1);
   await page.screenshot({ path: testInfo.outputPath("source-detail.png"), fullPage: true });
 });
+
+test("failed image extractions do not show pending mapping confidence", async ({ page }, testInfo) => {
+  await page.route("**/api/v1/documents", (route) => route.fulfill({
+    json: [{
+      id: "failed-image",
+      filename: "scan-glare.jpg",
+      source_name: "Scan glare quotation",
+      source_system: "image",
+      status: "failed",
+      failure_reason: "The source was too unclear to extract reliably.",
+      quotation: null,
+      reviews: [],
+      image_extraction_attempts: [
+        { approach: "ocr_assisted", status: "failed", result: null, product_count: 0 },
+        { approach: "vision_direct", status: "failed", result: null, product_count: 0 },
+      ],
+    }],
+  }));
+
+  await page.goto("/");
+
+  for (const approach of ["OCR-assisted", "Direct vision"]) {
+    const row = page.getByRole("row").filter({ hasText: approach });
+    await expect(row.getByRole("cell").nth(2)).toHaveText("Not applicable");
+    await expect(row.getByRole("cell").nth(2)).not.toContainText("Pending");
+  }
+  await page.screenshot({ path: testInfo.outputPath("failed-mapping-confidence.png"), fullPage: true });
+});

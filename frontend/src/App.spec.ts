@@ -338,6 +338,27 @@ describe("App", () => {
     expect(rows[0].findAll("td")[2].text()).not.toContain("—");
   });
 
+  it("marks mapping confidence as not applicable when image extraction failed", async () => {
+    api.fetchDocuments.mockResolvedValue([{
+      id: "failed-image", filename: "glare.jpg", source_name: "Glare quotation", status: "failed",
+      source_system: "image", reviews: [], quotation: null,
+      image_extraction_attempts: [
+        { approach: "ocr_assisted", status: "failed", result: null, product_count: 0, failure_reason: "No trustworthy text regions passed." },
+        { approach: "vision_direct", status: "failed", result: null, product_count: 0, failure_reason: "No trustworthy text regions passed." },
+      ],
+    }]);
+
+    const wrapper = mount(App);
+    await flushPromises();
+
+    const rows = wrapper.findAll("tbody tr");
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.findAll("td")[2].text()).toContain("Not applicable");
+      expect(row.findAll("td")[2].text()).not.toContain("Pending");
+    }
+  });
+
   it("opens the selected image approach directly without a comparison interstitial", async () => {
     const baseDoc = {
       id: "image-source", filename: "glare.jpg", source_name: "Glare quotation", status: "pending_review",
