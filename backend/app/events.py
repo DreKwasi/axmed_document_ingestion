@@ -104,9 +104,9 @@ def list_events_after(session: Session, document_id: str, after_id: int = 0) -> 
 def serialize_event(event: ProcessingEventRecord) -> dict[str, Any]:
     metadata = json.loads(event.metadata_json)
     message = metadata.get("message") or _EVENT_MESSAGES.get(event.stage, event.stage.replace("_", " ").capitalize())
-    phase = next(
-        (label for suffix, label in _EVENT_PHASES.items() if event.stage.endswith(f"_{suffix}")),
-        "In progress",
+    terminal_stages = {"image_extractions_ready_for_comparison", "image_extraction_opened_for_review"}
+    phase = "Complete" if event.stage in terminal_stages else next(
+        (label for suffix, label in _EVENT_PHASES.items() if event.stage.endswith(f"_{suffix}")), "In progress"
     )
     return {
         "id": event.id,
