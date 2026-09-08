@@ -148,6 +148,26 @@ function displayLeadTime(supply: LineItem["supply"]): string {
   return supply.lead_time_days != null ? `${supply.lead_time_days} days` : "—";
 }
 
+const displayTransitDuration = computed(() => {
+  const terms = props.document.quotation?.commercial_terms;
+  if (!terms) return "—";
+  if (terms.transit_time_min_days != null && terms.transit_time_max_days != null) {
+    return terms.transit_time_min_days === terms.transit_time_max_days
+      ? `${terms.transit_time_min_days} days`
+      : `${terms.transit_time_min_days}–${terms.transit_time_max_days} days`;
+  }
+  if (terms.transit_time_days != null) {
+    return `${terms.transit_time_days} days`;
+  }
+  if (terms.transit_time_min_days != null) {
+    return `≥ ${terms.transit_time_min_days} days`;
+  }
+  if (terms.transit_time_max_days != null) {
+    return `≤ ${terms.transit_time_max_days} days`;
+  }
+  return "—";
+});
+
 function humanizeFieldPath(path: string): string {
   const labels: Record<string, string> = {
     "product.country_of_origin": "Country of origin",
@@ -485,13 +505,13 @@ function editableValue(item: LineItem, path: string): string {
           <div>
             <span class="text-[10px] font-bold uppercase text-slate-400">Normalized Price</span>
             <p class="font-bold text-emerald-700">
-              {{ lineItem.pricing.currency }} {{ displayPrice(lineItem.pricing.normalized_price.amount, lineItem.pricing.quoted_price.amount) }} / {{ lineItem.pricing.normalized_price.uom || "unit" }}
+              {{ lineItem.pricing.currency }} {{ displayPrice(lineItem.pricing.normalized_price?.amount, lineItem.pricing.quoted_price?.amount) }} / {{ lineItem.pricing.normalized_price?.uom || "unit" }}
             </p>
-            <span v-if="lineItem.pricing.normalized_price.calculation" class="text-[10px] text-slate-400">
+            <span v-if="lineItem.pricing.normalized_price?.calculation" class="text-[10px] text-slate-400">
               Formula: {{ lineItem.pricing.normalized_price.calculation }}
             </span>
-            <span v-if="lineItem.pricing.normalized_price.derived" class="mt-1 block text-[10px] font-semibold text-slate-500">
-              Derived value<span v-if="lineItem.pricing.normalized_price.validation_status"> · Validation {{ lineItem.pricing.normalized_price.validation_status }}</span>
+            <span v-if="lineItem.pricing.normalized_price?.derived" class="mt-1 block text-[10px] font-semibold text-slate-500">
+              Derived value<span v-if="lineItem.pricing.normalized_price?.validation_status"> · Validation {{ lineItem.pricing.normalized_price.validation_status }}</span>
             </span>
           </div>
           <div>
@@ -616,6 +636,12 @@ function editableValue(item: LineItem, path: string): string {
             </p>
           </div>
           <div>
+            <span class="text-[10px] font-bold uppercase text-slate-400">Shipping Transit</span>
+            <p class="font-medium text-slate-800">
+              {{ displayTransitDuration }}
+            </p>
+          </div>
+          <div>
             <span class="text-[10px] font-bold uppercase text-slate-400">Shelf Life</span>
             <p class="font-medium text-slate-800">
               {{ lineItem.supply.shelf_life_months ? `${lineItem.supply.shelf_life_months} months` : "—" }}
@@ -625,14 +651,14 @@ function editableValue(item: LineItem, path: string): string {
             </p>
           </div>
           <div>
-            <span class="text-[10px] font-bold uppercase text-slate-400">Storage Conditions</span>
-            <p class="font-medium text-slate-800">{{ lineItem.supply.storage_conditions || "—" }}</p>
-          </div>
-          <div>
             <span class="text-[10px] font-bold uppercase text-slate-400">Cold Chain</span>
             <p class="font-medium text-slate-800">
               {{ lineItem.supply.cold_chain_required != null ? (lineItem.supply.cold_chain_required ? "Required" : "Not required") : "—" }}
             </p>
+          </div>
+          <div class="sm:col-span-2">
+            <span class="text-[10px] font-bold uppercase text-slate-400">Storage Conditions</span>
+            <p class="font-medium text-slate-800">{{ lineItem.supply.storage_conditions || "—" }}</p>
           </div>
         </div>
       </div>

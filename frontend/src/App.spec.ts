@@ -2,6 +2,7 @@ import { flushPromises, mount } from "@vue/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App.vue";
+import ProductDetailDrawer from "./components/ProductDetailDrawer.vue";
 import SourceDetailHeader from "./components/SourceDetailHeader.vue";
 
 const api = vi.hoisted(() => ({
@@ -167,6 +168,61 @@ describe("App", () => {
     expect(wrapper.text()).toContain("Payment: T/T 30 days from B/L date");
   });
 
+  it("displays shipping transit duration alongside lead time in ProductDetailDrawer", () => {
+    const wrapper = mount(ProductDetailDrawer, {
+      props: {
+        isOpen: true,
+        busy: false,
+        lineIndex: 0,
+        lineItem: {
+          source_key: "01",
+          product: { trade_name: "Amoxicillin 500mg", inn: ["Amoxicillin"], strength: [], dosage_form: "capsule" },
+          packaging: {},
+          quantity: {},
+          pricing: {
+            currency: "USD",
+            quoted_price: { amount: "0.05", uom: "capsule" },
+            normalized_price: { amount: "0.05", uom: "capsule" },
+            price_tiers: [],
+            adjustments: [],
+          },
+          supply: {
+            lead_time_days: 42,
+            shelf_life_months: 24,
+            minimum_remaining_shelf_life_percent: "85",
+            storage_conditions: "Below 25 C, dry",
+          },
+          regulatory: {},
+          evidence: [],
+        },
+        document: {
+          id: "doc-drawer-transit",
+          filename: "offer.pdf",
+          status: "pending_review",
+          quotation: {
+            supplier: { name: "MedSupply Ltd" },
+            commercial_terms: {
+              transit_time_min_days: 26,
+              transit_time_max_days: 32,
+            },
+            line_items: [],
+            revision: 1,
+            system_decision: "pending_review",
+            review_status: "pending_review",
+            review_issues: [],
+          },
+          reviews: [],
+        },
+      },
+    });
+
+    expect(wrapper.text()).toContain("Lead Time");
+    expect(wrapper.text()).toContain("42 days");
+    expect(wrapper.text()).toContain("Shipping Transit");
+    expect(wrapper.text()).toContain("26–32 days");
+    expect(wrapper.text()).toContain("Below 25 C, dry");
+  });
+
   it("lists sources at a high level and opens a product breakdown with quoted quantity", async () => {
     api.fetchDocuments.mockResolvedValue([{
       id: "document-quantity",
@@ -218,7 +274,8 @@ describe("App", () => {
     expect(wrapper.text()).toContain("Source");
     expect(wrapper.text()).not.toContain("File source");
     expect(wrapper.text()).not.toContain("Source name");
-    expect(wrapper.text()).toContain("Download file");
+    expect(wrapper.text()).toContain("andina.pdf");
+    expect(wrapper.findAll("a").filter((link) => link.text() === "andina.pdf" && link.attributes("download") === "andina.pdf")).toHaveLength(1);
     expect(wrapper.text()).toContain("Products");
     expect(wrapper.text()).toContain("1 extracted");
     expect(wrapper.text()).toContain("Quantity extracted from the source table.");
@@ -581,7 +638,7 @@ describe("App", () => {
     expect(api.uploadDocuments).toHaveBeenCalledOnce();
     expect(wrapper.text()).toContain("First");
     expect(wrapper.text()).toContain("Second");
-    expect(wrapper.findAll("a").filter((link) => link.text() === "Download file")).toHaveLength(2);
+    expect(wrapper.findAll("a").filter((link) => ["first.json", "second.json"].includes(link.text()))).toHaveLength(2);
   });
 
   it("displays isolated failures from a multi-file upload cleanly", async () => {
