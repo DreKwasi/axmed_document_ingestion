@@ -1,7 +1,11 @@
 <script setup lang="ts">
+/** Source detail header presenting document metadata, peer switcher, and review actions. */
+
 import { computed } from "vue";
 import type { DocumentResponse } from "@/types";
 import { sourceDocumentUrl } from "@/api";
+
+// --- Section 1: Props & Emits ---
 
 const props = defineProps<{
   document: DocumentResponse;
@@ -16,6 +20,14 @@ const emit = defineEmits<{
   (event: "switchApproach", approach: string): void;
 }>();
 
+// --- Section 2: Presentation & Status Derivations ---
+
+/**
+ * Derives categorical status key ('ready' | 'review' | 'needs_attention' | 'processing').
+ *
+ * @param doc Target document response.
+ * @returns Categorical status key.
+ */
 function statusKey(doc: DocumentResponse): "ready" | "review" | "needs_attention" | "processing" {
   if (doc.quotation?.review_status === "approved") return "ready";
   if (["failed", "rejected"].includes(doc.status) || doc.quotation?.review_status === "rejected") return "needs_attention";
@@ -24,6 +36,7 @@ function statusKey(doc: DocumentResponse): "ready" | "review" | "needs_attention
   return "processing";
 }
 
+/** Human-readable status label */
 const statusLabel = computed(() => {
   if (props.document.status === "failed") return "Extraction failed";
   if (props.document.status === "rejected" || props.document.quotation?.review_status === "rejected") return "Rejected";
@@ -37,6 +50,7 @@ const statusLabel = computed(() => {
   return map[statusKey(props.document)];
 });
 
+/** Formatted title combining supplier, quotation reference, and active reading approach */
 const sourceTitle = computed(() => {
   let title = props.document.source_name;
   if (!title) {
@@ -58,14 +72,17 @@ const sourceTitle = computed(() => {
   return title;
 });
 
+/** Descriptive extraction confidence label */
 const confidence = computed(() => {
   const summary = props.document.extraction_confidence;
   if (!summary) return "Extraction confidence pending";
   return `Extraction confidence ${summary.score}% (${summary.band})`;
 });
 
+/** Non-empty Harmonized System (HS) tariff codes from commercial terms */
 const hsCodes = computed(() => props.document.quotation?.commercial_terms.hs_codes?.filter(Boolean) ?? []);
 
+/** Uppercase format badge (PDF, JSON, EML, IMAGE) */
 const formatBadge = computed(() => {
   const lower = props.document.filename.toLowerCase();
   if (lower.endsWith(".pdf")) return "PDF";
@@ -75,6 +92,7 @@ const formatBadge = computed(() => {
   return props.document.source_system?.toUpperCase() || "FILE";
 });
 
+/** Formatted external system name (e.g. "sap v2.1") if applicable */
 const externalSystem = computed(() => {
   const rawSystem = (props.document.source_system || "").trim();
   const lower = rawSystem.toLowerCase();
@@ -87,6 +105,7 @@ const externalSystem = computed(() => {
     : rawSystem;
 });
 
+/** Whether the document is in an actionable pending_review state */
 const canReview = computed(() => {
   return (
     props.document.status === "pending_review" &&
@@ -94,6 +113,7 @@ const canReview = computed(() => {
   );
 });
 
+/** CSS text color class based on status key */
 const statusTextClass = computed(() => {
   const map = {
     ready: "text-emerald-700",
@@ -104,6 +124,7 @@ const statusTextClass = computed(() => {
   return map[statusKey(props.document)];
 });
 
+/** CSS indicator dot class based on status key */
 const statusDotClass = computed(() => {
   const map = {
     ready: "bg-emerald-600",

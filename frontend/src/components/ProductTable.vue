@@ -1,6 +1,10 @@
 <script setup lang="ts">
+/** Extracted pharmaceutical line item breakdown table. */
+
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import type { LineItem } from "@/types";
+
+// --- Section 1: Props & Emits ---
 
 const props = defineProps<{
   lineItems: LineItem[];
@@ -18,50 +22,10 @@ const emit = defineEmits<{
   (event: "selectLine", index: number): void;
 }>();
 
+// --- Section 2: Tooltip Controls ---
+
 const activeMappingTooltip = ref<number | null>(null);
 const showMappingDefinition = ref(false);
-
-function displayValue(value: string | number | boolean | null | undefined) {
-  if (value == null || value === "") return "—";
-  if (typeof value === "string" && /^\d{4,}$/.test(value)) return Number(value).toLocaleString();
-  return String(value);
-}
-
-function displayPrice(value: string | null | undefined) {
-  if (value == null) return "—";
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric.toLocaleString(undefined, { maximumFractionDigits: 6 }) : value;
-}
-
-function mappingConfidenceForLine(index: number): number | null {
-  const values = props.fieldReviews
-    ?.filter((field) => field.field_path.startsWith(`line_items[${index}]`))
-    .map((field) => field.mapping_confidence_score)
-    .filter((score): score is number => score != null) ?? [];
-  return values.length ? Math.round(values.reduce((sum, score) => sum + score, 0) / values.length) : null;
-}
-
-function mappingConfidenceExplanation(index: number): string {
-  const fields = props.fieldReviews?.filter((field) => field.field_path.startsWith(`line_items[${index}]`)) ?? [];
-  const scores = fields.map((field) => field.mapping_confidence_score).filter((score): score is number => score != null);
-  if (!scores.length) return "No mapped fields are available to assess.";
-  const reasons = [...new Set(fields.map((field) => field.mapping_confidence_reason).filter((reason): reason is string => Boolean(reason)))];
-  const issueCount = mappingIssueCountForLine(index);
-  return `Average of ${scores.length} mapped field score${scores.length === 1 ? "" : "s"}: ${mappingConfidenceForLine(index)}%. ${reasons.join(" ")} Mapping issues are counted separately: ${issueCount}.`;
-}
-
-function confidenceBadgeClass(confidence: number | null): string {
-  if (confidence == null) return "bg-slate-100 text-slate-600 border-slate-200";
-  if (confidence >= 85) return "bg-emerald-50 text-emerald-700 border-emerald-200";
-  if (confidence >= 65) return "bg-amber-50 text-amber-700 border-amber-200";
-  if (confidence < 65) return "bg-rose-50 text-rose-700 border-rose-200";
-  return "bg-slate-100 text-slate-600 border-slate-200";
-}
-
-function mappingIssueCountForLine(index: number): number {
-  const prefix = `line_items[${index}]`;
-  return props.mappingIssues.filter((issue) => issue.field_path.startsWith(prefix)).length;
-}
 
 function closeTooltips() {
   activeMappingTooltip.value = null;
@@ -100,6 +64,50 @@ onBeforeUnmount(() => {
   document.removeEventListener("click", handleDocumentClick);
   document.removeEventListener("keydown", handleDocumentKeydown);
 });
+
+// --- Section 3: Formatters & Confidence Helpers ---
+
+function displayValue(value: string | number | boolean | null | undefined): string {
+  if (value == null || value === "") return "—";
+  if (typeof value === "string" && /^\d{4,}$/.test(value)) return Number(value).toLocaleString();
+  return String(value);
+}
+
+function displayPrice(value: string | null | undefined): string {
+  if (value == null) return "—";
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric.toLocaleString(undefined, { maximumFractionDigits: 6 }) : value;
+}
+
+function mappingConfidenceForLine(index: number): number | null {
+  const values = props.fieldReviews
+    ?.filter((field) => field.field_path.startsWith(`line_items[${index}]`))
+    .map((field) => field.mapping_confidence_score)
+    .filter((score): score is number => score != null) ?? [];
+  return values.length ? Math.round(values.reduce((sum, score) => sum + score, 0) / values.length) : null;
+}
+
+function mappingConfidenceExplanation(index: number): string {
+  const fields = props.fieldReviews?.filter((field) => field.field_path.startsWith(`line_items[${index}]`)) ?? [];
+  const scores = fields.map((field) => field.mapping_confidence_score).filter((score): score is number => score != null);
+  if (!scores.length) return "No mapped fields are available to assess.";
+  const reasons = [...new Set(fields.map((field) => field.mapping_confidence_reason).filter((reason): reason is string => Boolean(reason)))];
+  const issueCount = mappingIssueCountForLine(index);
+  return `Average of ${scores.length} mapped field score${scores.length === 1 ? "" : "s"}: ${mappingConfidenceForLine(index)}%. ${reasons.join(" ")} Mapping issues are counted separately: ${issueCount}.`;
+}
+
+function confidenceBadgeClass(confidence: number | null): string {
+  if (confidence == null) return "bg-slate-100 text-slate-600 border-slate-200";
+  if (confidence >= 85) return "bg-emerald-50 text-emerald-700 border-emerald-200";
+  if (confidence >= 65) return "bg-amber-50 text-amber-700 border-amber-200";
+  if (confidence < 65) return "bg-rose-50 text-rose-700 border-rose-200";
+  return "bg-slate-100 text-slate-600 border-slate-200";
+}
+
+function mappingIssueCountForLine(index: number): number {
+  const prefix = `line_items[${index}]`;
+  return props.mappingIssues.filter((issue) => issue.field_path.startsWith(prefix)).length;
+}
 </script>
 
 <template>

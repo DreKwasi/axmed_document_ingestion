@@ -1,4 +1,6 @@
 <script setup lang="ts">
+/** Root application coordinator managing document intake, inspection, and review decisions. */
+
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
 import {
@@ -21,6 +23,8 @@ import ReviewModal from "./components/ReviewModal.vue";
 import SourceDetailHeader from "./components/SourceDetailHeader.vue";
 import SourceTable from "./components/SourceTable.vue";
 
+// --- Section 1: Reactive State & Selection ---
+
 const documents = ref<DocumentResponse[]>([]);
 const selectedDocumentId = ref<string | null>(null);
 const selectedLineIndex = ref(0);
@@ -31,6 +35,9 @@ const errorMessage = ref("");
 const fileInput = ref<HTMLInputElement | null>(null);
 const extractionActivity = ref<Record<string, ProcessingEvent[]>>({});
 const eventSources = new Map<string, EventSource>();
+const selectedApproach = ref<string | null>(null);
+
+// --- Section 2: Computed Getters ---
 
 const selectedDocument = computed(() =>
   documents.value.find((document) => document.id === selectedDocumentId.value) ?? null
@@ -39,6 +46,8 @@ const selectedDocument = computed(() =>
 const selectedLine = computed(() =>
   selectedDocument.value?.quotation?.line_items[selectedLineIndex.value] ?? null
 );
+
+// --- Section 3: Ingestion & Document Actions ---
 
 function openIngest() {
   fileInput.value?.click();
@@ -53,8 +62,6 @@ function exportAllData() {
   link.click();
   URL.revokeObjectURL(url);
 }
-
-const selectedApproach = ref<string | null>(null);
 
 async function openDocument(document: DocumentResponse & { source_result?: string }) {
   selectedDocumentId.value = document.id;
@@ -104,6 +111,47 @@ async function loadDocuments() {
   documents.value = await fetchDocuments();
 }
 
+async function chooseFile(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const files = Array.from(input.files ?? []);
+  if (!files.length) return;
+  busy.value = true;
+  errorMessage.value = "";
+  try {
+    const uploaded = await uploadDocuments(files);
+    const uploadedIds = new Set(uploaded.map((document) => document.id));
+    documents.value = [...uploaded, ...documents.value.filter((document) => !uploadedIds.has(document.id))];
+    uploaded.forEach((document) => watchDocument(document.id));
+    const isImageUpload = uploaded.some(
+      (doc) => doc.source_system === "image" || /\.(png|jpg|jpeg)$/i.test(doc.filename)
+    );
+    if (uploaded.length === 1 && !isImageUpload) {
+      void openDocument(uploaded[0]);
+    }
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : "Upload failed.";
+  } finally {
+    busy.value = false;
+    input.value = "";
+  }
+}
+
+async function reextract(document: DocumentResponse) {
+  busy.value = true;
+  errorMessage.value = "";
+  try {
+    const updated = await reextractDocument(document.id);
+    replaceDocument(updated);
+    isDrawerOpen.value = false;
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : "Re-extraction failed.";
+  } finally {
+    busy.value = false;
+  }
+}
+
+// --- Section 4: Real-Time Event Streaming (SSE) ---
+
 async function loadActivity(documentId: string) {
   try {
     extractionActivity.value = {
@@ -146,44 +194,28 @@ function watchDocument(documentId: string) {
   eventSources.set(documentId, source);
 }
 
-async function chooseFile(event: Event) {
-  const input = event.target as HTMLInputElement;
-  const files = Array.from(input.files ?? []);
-  if (!files.length) return;
-  busy.value = true;
-  errorMessage.value = "";
-  try {
-    const uploaded = await uploadDocuments(files);
-    const uploadedIds = new Set(uploaded.map((document) => document.id));
-    documents.value = [...uploaded, ...documents.value.filter((document) => !uploadedIds.has(document.id))];
-    uploaded.forEach((document) => watchDocument(document.id));
-    const isImageUpload = uploaded.some(
-      (doc) => doc.source_system === "image" || /\.(png|jpg|jpeg)$/i.test(doc.filename)
-    );
-    if (uploaded.length === 1 && !isImageUpload) {
-      void openDocument(uploaded[0]);
-    }
-  } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : "Upload failed.";
-  } finally {
-    busy.value = false;
-    input.value = "";
-  }
+function currentExtractionEvent(doc: DocumentResponse | null): ProcessingEvent | null {
+  if (!doc) return null;
+  const events = extractionActivity.value[doc.id] ?? [];
+  return events.length ? events[events.length - 1] : null;
 }
 
-async function reextract(document: DocumentResponse) {
-  busy.value = true;
-  errorMessage.value = "";
-  try {
-    const updated = await reextractDocument(document.id);
-    replaceDocument(updated);
-    isDrawerOpen.value = false;
-  } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : "Re-extraction failed.";
-  } finally {
-    busy.value = false;
+function isExtractionOngoing(doc: DocumentResponse | null): boolean {
+  if (!doc) return false;
+  const latest = currentExtractionEvent(doc);
+  if (latest) {
+    const phaseLower = (latest.phase || "").toLowerCase();
+    const stageLower = (latest.stage || "").toLowerCase();
+    if (phaseLower === "complete" || stageLower.endsWith("_completed") || ["image_extractions_ready_for_comparison", "image_extraction_opened_for_review"].includes(stageLower)) return false;
+    if (phaseLower === "needs attention" || stageLower.endsWith("_failed")) return false;
+    return true;
   }
+  if (["failed", "rejected"].includes(doc.status)) return false;
+  if (["processing", "queued", "needs_semantic_extraction"].includes(doc.status)) return true;
+  return false;
 }
+
+// --- Section 5: Human Review & Peer Extractions ---
 
 async function openCandidateForReview(approach: string) {
   const doc = selectedDocument.value;
@@ -283,27 +315,7 @@ async function handleReject(payload: { reason: string; note?: string }) {
   }
 }
 
-
-function currentExtractionEvent(doc: DocumentResponse | null): ProcessingEvent | null {
-  if (!doc) return null;
-  const events = extractionActivity.value[doc.id] ?? [];
-  return events.length ? events[events.length - 1] : null;
-}
-
-function isExtractionOngoing(doc: DocumentResponse | null): boolean {
-  if (!doc) return false;
-  const latest = currentExtractionEvent(doc);
-  if (latest) {
-    const phaseLower = (latest.phase || "").toLowerCase();
-    const stageLower = (latest.stage || "").toLowerCase();
-    if (phaseLower === "complete" || stageLower.endsWith("_completed") || ["image_extractions_ready_for_comparison", "image_extraction_opened_for_review"].includes(stageLower)) return false;
-    if (phaseLower === "needs attention" || stageLower.endsWith("_failed")) return false;
-    return true;
-  }
-  if (["failed", "rejected"].includes(doc.status)) return false;
-  if (["processing", "queued", "needs_semantic_extraction"].includes(doc.status)) return true;
-  return false;
-}
+// --- Section 6: Lifecycle Hooks ---
 
 onMounted(() => loadDocuments().catch(() => undefined));
 onBeforeUnmount(() => eventSources.forEach((source) => source.close()));

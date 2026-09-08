@@ -1,6 +1,10 @@
 <script setup lang="ts">
+/** Product detail drawer for inspecting specs and applying field corrections. */
+
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { DocumentResponse, LineItem } from "@/types";
+
+// --- Section 1: Props & Emits ---
 
 const props = defineProps<{
   isOpen: boolean;
@@ -14,6 +18,8 @@ const emit = defineEmits<{
   (event: "close"): void;
   (event: "saveCorrection", payload: { fieldPath: string; value: unknown; lineIndex: number }): void;
 }>();
+
+// --- Section 2: Editable Fields ---
 
 type EditableField = { path: string; label: string; kind?: "json" | "boolean" };
 
@@ -57,6 +63,8 @@ const editableFields: EditableField[] = [
   { path: "regulatory.regulatory_status", label: "Regulatory · Regulatory status" },
 ];
 
+// --- Section 3: State & Tooltip Controls ---
+
 const selectedField = ref("pricing.pack_price");
 const correctionValue = ref("");
 const showExtractionCalculation = ref(false);
@@ -97,7 +105,6 @@ onBeforeUnmount(() => {
   document.removeEventListener("keydown", handleDocumentKeydown);
 });
 
-// Pre-fill correctionValue when selectedField or lineItem changes
 watch(
   [() => props.lineItem, selectedField, () => props.isOpen],
   () => {
@@ -111,7 +118,9 @@ watch(
   { immediate: true }
 );
 
-function displayValue(value: string | number | boolean | null | undefined) {
+// --- Section 4: Display & Precision Formatters ---
+
+function displayValue(value: string | number | boolean | null | undefined): string {
   if (value == null || value === "") return "—";
   if (typeof value === "string" && /^\d{4,}$/.test(value)) return Number(value).toLocaleString();
   return String(value);
@@ -123,7 +132,7 @@ function decimalPlaces(value: string | null | undefined): number {
   return plain.includes(".") ? plain.split(".")[1].length : 0;
 }
 
-function displayPrice(value: string | null | undefined, precisionSource?: string | null) {
+function displayPrice(value: string | null | undefined, precisionSource?: string | null): string {
   if (value == null) return "—";
   const numeric = Number(value);
   const maximumFractionDigits = precisionSource == null ? 6 : decimalPlaces(precisionSource);
@@ -139,6 +148,27 @@ function displayLeadTime(supply: LineItem["supply"]): string {
   return supply.lead_time_days != null ? `${supply.lead_time_days} days` : "—";
 }
 
+function humanizeFieldPath(path: string): string {
+  const labels: Record<string, string> = {
+    "product.country_of_origin": "Country of origin",
+    "product.trade_name": "Trade name",
+    "product.inn": "Active ingredients",
+    "product.strength": "Strength",
+    "product.dosage_form": "Dosage form",
+    "pricing.quoted_price.amount": "Quoted price",
+    "pricing.pack_price": "Pack price",
+    "quantity.quoted_quantity": "Quoted quantity",
+    "quantity.minimum_order_quantity": "Minimum order quantity",
+  };
+  if (labels[path]) return labels[path];
+  return path
+    .split(".")
+    .map((part) => part.replaceAll("_", " ").replace(/\b\w/g, (character) => character.toUpperCase()))
+    .join(" · ");
+}
+
+// --- Section 5: Mapping & Extraction Confidence ---
+
 const rowMappingConfidence = computed(() => {
   const values = props.document.quotation?.field_reviews
     ?.filter((field) => field.field_path.startsWith(`line_items[${props.lineIndex}]`))
@@ -146,8 +176,10 @@ const rowMappingConfidence = computed(() => {
     .filter((score): score is number => score != null) ?? [];
   return values.length ? Math.round(values.reduce((sum, score) => sum + score, 0) / values.length) : null;
 });
+
 const rowMappingIssueCount = computed(() => (props.document.mapping_issues ?? [])
   .filter((issue) => issue.field_path.startsWith(`line_items[${props.lineIndex}]`)).length);
+
 const rowMappingExplanation = computed(() => {
   const fields = props.document.quotation?.field_reviews
     ?.filter((field) => field.field_path.startsWith(`line_items[${props.lineIndex}]`)) ?? [];
@@ -158,12 +190,14 @@ const rowMappingExplanation = computed(() => {
 });
 
 const extractionFactors = computed(() => props.document.extraction_confidence?.factors ?? []);
+
 const extractionSummary = computed(() => {
   const score = props.document.extraction_confidence?.score;
   if (score == null) return "No extraction result is available to assess.";
   if (score === 100) return "Source content was recovered successfully. No extraction-quality problems were detected.";
   return "Source content was recovered with some uncertainty. See the calculation details for what affected this score.";
 });
+
 const extractionCalculation = computed(() => {
   if (!extractionFactors.value.length) return "No calculation details are available.";
   return extractionFactors.value
@@ -210,24 +244,7 @@ function reviewerMappingReason(reason?: string | null): string {
   return reason;
 }
 
-function humanizeFieldPath(path: string): string {
-  const labels: Record<string, string> = {
-    "product.country_of_origin": "Country of origin",
-    "product.trade_name": "Trade name",
-    "product.inn": "Active ingredients",
-    "product.strength": "Strength",
-    "product.dosage_form": "Dosage form",
-    "pricing.quoted_price.amount": "Quoted price",
-    "pricing.pack_price": "Pack price",
-    "quantity.quoted_quantity": "Quoted quantity",
-    "quantity.minimum_order_quantity": "Minimum order quantity",
-  };
-  if (labels[path]) return labels[path];
-  return path
-    .split(".")
-    .map((part) => part.replaceAll("_", " ").replace(/\b\w/g, (character) => character.toUpperCase()))
-    .join(" · ");
-}
+// --- Section 6: Correction Submission ---
 
 function handleSave() {
   if (!correctionValue.value.trim()) return;
