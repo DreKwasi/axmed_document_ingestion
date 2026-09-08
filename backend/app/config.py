@@ -1,8 +1,4 @@
-"""Centralized application configuration.
-
-Loads .env files once at import time and provides a single, typed config object
-without requiring scattered os.environ.get calls.
-"""
+"""Centralized application configuration."""
 
 import sys
 from functools import lru_cache
@@ -11,11 +7,14 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# --- Section 1: Filesystem Path & Database URL Normalization ---
+
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_ROOT = BACKEND_ROOT.parent
 
 
 def _backend_path(path: Path) -> Path:
+    """Resolve relative path against backend root directory."""
     return path if path.is_absolute() else (BACKEND_ROOT / path).resolve()
 
 
@@ -26,6 +25,9 @@ def _operational_database_url(database_url: str) -> str:
         return database_url
     database_path = Path(database_url.removeprefix(prefix))
     return database_url if database_path.is_absolute() else f"{prefix}{_backend_path(database_path)}"
+
+
+# --- Section 2: Pydantic Configuration Model ---
 
 
 class Config(BaseSettings):
@@ -62,16 +64,22 @@ class Config(BaseSettings):
     )
 
     def model_post_init(self, _context: object) -> None:
+        """Normalize SQLite database URL and upload path after model initialization."""
         self.database_url = _operational_database_url(self.database_url)
         self.upload_dir = _backend_path(self.upload_dir)
 
     @property
     def cors_origin_list(self) -> list[str]:
+        """Parse comma-separated cors_origins string into a list of allowed origins."""
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+
+# --- Section 3: Singleton Accessor ---
 
 
 @lru_cache
 def get_config() -> Config:
+    """Return the cached singleton configuration instance."""
     return Config()
 
 

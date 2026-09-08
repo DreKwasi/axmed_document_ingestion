@@ -1,3 +1,5 @@
+"""FastAPI REST API and background worker dispatcher for Axmed Document Intelligence."""
+
 import asyncio
 import json
 import re
@@ -48,13 +50,19 @@ logger = get_api_logger()
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SAFE_REQUEST_ID = re.compile(r"^[A-Za-z0-9._:-]{1,120}$")
 
+# --- Section 1: Review Command & Patch Schemas ---
+
 
 class ReviewPatch(BaseModel):
+    """Specific field replacement submitted during human review."""
+
     path: str
     value: object | None = None
 
 
 class ReviewCommand(BaseModel):
+    """Payload for approving, rejecting, or correcting an extracted quotation."""
+
     request_id: str = Field(min_length=1, max_length=120)
     expected_revision: int = Field(ge=1)
     note: str | None = Field(default=None, max_length=2_000)
@@ -63,6 +71,7 @@ class ReviewCommand(BaseModel):
 
 
 def _absolute_path(path: Path) -> Path:
+    """Normalize path relative to project root."""
     if path.is_absolute():
         return path
     if path.parts and path.parts[0] == "backend":
@@ -70,7 +79,11 @@ def _absolute_path(path: Path) -> Path:
     return PROJECT_ROOT / path
 
 
+# --- Section 2: App Factory, Lifespan & CORS Setup ---
+
+
 def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtractor | None = None) -> FastAPI:
+    """Create and configure the FastAPI application instance."""
     active_settings = settings or get_config()
     active_settings.upload_dir = _absolute_path(active_settings.upload_dir)
     active_settings.recorded_json_extraction_dir = _absolute_path(active_settings.recorded_json_extraction_dir)
@@ -123,6 +136,8 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
             yield session
 
     SessionDep = Annotated[Session, Depends(get_request_session)]
+
+    # --- Section 3: Background Worker Execution ---
 
     def _record_background_failure(document_id: str, stage: str) -> None:
         with session_factory() as event_session:
@@ -224,7 +239,10 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
 
     @app.get("/health")
     def health() -> dict[str, str]:
+        """Simple liveness and health check endpoint."""
         return {"status": "ok", "service": "axmed-document-intelligence"}
+
+    # --- Section 4: Document Ingestion Endpoints ---
 
     async def _process_upload_file(
         session: Session,
@@ -232,6 +250,7 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
         background_tasks: BackgroundTasks,
         isolate_failures: bool = False,
     ) -> dict[str, Any]:
+        """Process one uploaded file, determine intake pipeline, and dispatch background tasks."""
         data = b""
         try:
             data = await file.read(active_settings.max_upload_bytes + 1)
@@ -308,6 +327,7 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
         session: SessionDep,
         files: list[UploadFile] = File(...),  # noqa: B008
     ):
+        """Upload one or more supplier quotation files (JSON, PDF, EML, PNG/JPEG)."""
         if not files:
             raise HTTPException(status_code=400, detail="At least one file is required.")
         isolate_failures = len(files) > 1
@@ -344,13 +364,17 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
             ) from error
         return documents
 
+    # --- Section 5: Document Retrieval, Download & Deletion ---
+
     @app.get("/api/v1/documents")
     def list_documents(session: SessionDep):
+        """List all ingested documents ordered by creation time descending."""
         documents = session.scalars(select(DocumentRecord).order_by(DocumentRecord.created_at.desc())).all()
         return [serialize_document(session, document) for document in documents]
 
     @app.get("/api/v1/documents/{document_id}")
     def get_document(document_id: str, session: SessionDep):
+        """Retrieve full details, quotation payload, line items, and evidence for a document."""
         document = session.get(DocumentRecord, document_id)
         if document is None:
             raise HTTPException(status_code=404, detail="Document not found.")
@@ -358,6 +382,7 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
 
     @app.delete("/api/v1/documents/{document_id}", status_code=204)
     def delete_uploaded_document(document_id: str, session: SessionDep):
+        """Delete an uploaded document, its quotation records, and stored disk file."""
         try:
             delete_document(session, document_id, active_settings)
         except LookupError as error:
@@ -366,6 +391,7 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
 
     @app.get("/api/v1/documents/{document_id}/source")
     def get_document_source(document_id: str, session: SessionDep):
+        """Download or stream the original uploaded file from storage."""
         document = session.get(DocumentRecord, document_id)
         if document is None:
             raise HTTPException(status_code=404, detail="Document not found.")
@@ -374,8 +400,11 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
             raise HTTPException(status_code=404, detail="Stored source document not found.")
         return FileResponse(source_path, media_type=document.media_type, filename=document.original_filename)
 
+    # --- Section 6: Real-Time Event Bus & SSE Streaming ---
+
     @app.get("/api/v1/documents/{document_id}/events")
     def get_document_events(document_id: str, session: SessionDep, after_id: int = 0):
+        """Fetch historical processing events for a document."""
         if session.get(DocumentRecord, document_id) is None:
             raise HTTPException(status_code=404, detail="Document not found.")
         if after_id < 0:
@@ -389,6 +418,7 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
         session: SessionDep,
         after_id: int = 0,
     ):
+        """Stream real-time processing events via Server-Sent Events (SSE)."""
         if session.get(DocumentRecord, document_id) is None:
             raise HTTPException(status_code=404, detail="Document not found.")
         last_event_id = request.headers.get("Last-Event-ID")
@@ -414,8 +444,11 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
+    # --- Section 7: Human Review Actions, Peer Selection & Re-Extraction ---
+
     @app.post("/api/v1/documents/{document_id}/reextract")
     def reextract_document(document_id: str, session: SessionDep):
+        """Trigger re-extraction of an already ingested JSON document."""
         try:
             document = reextract_json_document(session, document_id, active_settings, extractor)
             return serialize_document(session, document)
@@ -426,6 +459,7 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
 
     @app.post("/api/v1/documents/{document_id}/image-extractions/{approach}/review")
     def open_image_extraction_for_review(document_id: str, approach: str, session: SessionDep):
+        """Promote a chosen peer extraction result (ocr_assisted or vision_direct) for human review."""
         try:
             document = begin_image_extraction_review(session, document_id, approach)
             return serialize_document(session, document)
@@ -441,6 +475,7 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
         command: ReviewCommand,
         session: SessionDep,
     ):
+        """Apply a human review action: 'approve', 'reject', or 'correct' with JSON patches."""
         if action not in {"correct", "approve", "reject"}:
             raise HTTPException(status_code=404, detail="Unknown review action.")
         if action == "correct" and not command.patches:

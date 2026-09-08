@@ -1,3 +1,5 @@
+"""SQLAlchemy ORM models for document intelligence, quotations, and audit trails."""
+
 from datetime import datetime
 from decimal import Decimal
 from uuid import uuid4
@@ -9,10 +11,16 @@ from app.database import Base
 
 
 def new_id() -> str:
+    """Generate a random UUID4 string for primary keys."""
     return str(uuid4())
 
 
+# --- Section 1: Core Document & Quotation Aggregates ---
+
+
 class DocumentRecord(Base):
+    """Uploaded physical file record representing one intake artifact."""
+
     __tablename__ = "documents"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
@@ -34,6 +42,8 @@ class DocumentRecord(Base):
 
 
 class QuotationRecord(Base):
+    """Extracted quotation entity holding the canonical JSON snapshot and review state."""
+
     __tablename__ = "quotations"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
@@ -50,6 +60,9 @@ class QuotationRecord(Base):
     )
 
     document: Mapped[DocumentRecord] = relationship(back_populates="quotation")
+
+
+# --- Section 2: Normalized Relational Line Items & Pharmaceutical Properties ---
 
 
 class QuotationLineItemRecord(Base):
@@ -102,6 +115,8 @@ class QuotationLineItemRecord(Base):
 
 
 class QuotationLineItemInnRecord(Base):
+    """Child record storing individual generic active ingredients (INN) per line."""
+
     __tablename__ = "quotation_line_item_inn"
     __table_args__ = (UniqueConstraint("line_item_id", "position", name="uq_line_item_inn_position"),)
 
@@ -112,6 +127,8 @@ class QuotationLineItemInnRecord(Base):
 
 
 class QuotationLineItemStrengthRecord(Base):
+    """Child record storing potency and concentration components per line item."""
+
     __tablename__ = "quotation_line_item_strengths"
     __table_args__ = (UniqueConstraint("line_item_id", "position", name="uq_line_item_strength_position"),)
 
@@ -126,6 +143,8 @@ class QuotationLineItemStrengthRecord(Base):
 
 
 class QuotationLineItemPriceTierRecord(Base):
+    """Volume tier price bracket attached to a line item."""
+
     __tablename__ = "quotation_line_item_price_tiers"
     __table_args__ = (UniqueConstraint("line_item_id", "position", name="uq_line_item_price_tier_position"),)
 
@@ -140,6 +159,8 @@ class QuotationLineItemPriceTierRecord(Base):
 
 
 class QuotationLineItemAdjustmentRecord(Base):
+    """Commercial adjustment (discount, surcharge, freight) attached to a line item."""
+
     __tablename__ = "quotation_line_item_adjustments"
     __table_args__ = (UniqueConstraint("line_item_id", "position", name="uq_line_item_adjustment_position"),)
 
@@ -153,6 +174,8 @@ class QuotationLineItemAdjustmentRecord(Base):
 
 
 class QuotationLineItemMarketRecord(Base):
+    """Approved destination market entry attached to a line item."""
+
     __tablename__ = "quotation_line_item_markets"
     __table_args__ = (UniqueConstraint("line_item_id", "position", name="uq_line_item_market_position"),)
 
@@ -162,7 +185,12 @@ class QuotationLineItemMarketRecord(Base):
     market: Mapped[str] = mapped_column(String(120))
 
 
+# --- Section 3: Human Review Actions, Revisions & Lifecycle Event Logs ---
+
+
 class ReviewRecord(Base):
+    """Audit log of an explicit human review action (approval, rejection, correction)."""
+
     __tablename__ = "reviews"
     __table_args__ = (UniqueConstraint("document_id", "request_id", name="uq_review_request"),)
 
@@ -179,6 +207,8 @@ class ReviewRecord(Base):
 
 
 class ProcessingEventRecord(Base):
+    """Chronological lifecycle events emitted for real-time SSE progress streaming."""
+
     __tablename__ = "processing_events"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -189,6 +219,8 @@ class ProcessingEventRecord(Base):
 
 
 class DocumentArtifactRecord(Base):
+    """Persisted intermediate document representations (OCR bounding boxes, parsed text)."""
+
     __tablename__ = "document_artifacts"
     __table_args__ = (UniqueConstraint("document_id", "kind", "page_number", name="uq_document_artifact_page"),)
 
@@ -201,7 +233,12 @@ class DocumentArtifactRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+# --- Section 4: Format-Specific Extraction & Model Invocations ---
+
+
 class EmailExtractionRecord(Base):
+    """State record for an asynchronous email extraction background task."""
+
     __tablename__ = "email_extractions"
     __table_args__ = (UniqueConstraint("document_id", name="uq_email_extraction_document"),)
 
@@ -215,6 +252,8 @@ class EmailExtractionRecord(Base):
 
 
 class PdfExtractionRecord(Base):
+    """State record for an asynchronous native PDF extraction background task."""
+
     __tablename__ = "pdf_extractions"
     __table_args__ = (UniqueConstraint("document_id", name="uq_pdf_extraction_document"),)
 
@@ -228,6 +267,8 @@ class PdfExtractionRecord(Base):
 
 
 class OcrJobRecord(Base):
+    """State record for an asynchronous remote OCR service request."""
+
     __tablename__ = "ocr_jobs"
     __table_args__ = (UniqueConstraint("document_id", name="uq_ocr_job_document"),)
 
@@ -241,6 +282,8 @@ class OcrJobRecord(Base):
 
 
 class ImageExtractionAttemptRecord(Base):
+    """Peer extraction attempt record (OCR-assisted vs direct Vision)."""
+
     __tablename__ = "image_extraction_attempts"
     __table_args__ = (UniqueConstraint("document_id", "approach", name="uq_image_extraction_attempt"),)
 
@@ -261,6 +304,8 @@ class ImageExtractionAttemptRecord(Base):
 
 
 class ModelInvocationRecord(Base):
+    """Audit log capturing token telemetry and cost estimates for every model call."""
+
     __tablename__ = "model_invocations"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
@@ -281,7 +326,12 @@ class ModelInvocationRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+# --- Section 5: Field Provenance & Grounded Source Facts ---
+
+
 class FieldEvidenceRecord(Base):
+    """Provenance audit linking a canonical field to its raw source coordinates."""
+
     __tablename__ = "field_evidence"
     __table_args__ = (
         UniqueConstraint("quotation_id", "canonical_field", "source_path", name="uq_field_evidence_source"),
@@ -341,7 +391,12 @@ class ExtractedSourceFactRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+# --- Section 6: Golden Dataset Evaluation Benchmarks ---
+
+
 class EvaluationCaseRecord(Base):
+    """Standardized test fixture case loaded from the golden benchmark dataset."""
+
     __tablename__ = "evaluation_cases"
 
     id: Mapped[str] = mapped_column(String(100), primary_key=True)
@@ -354,6 +409,8 @@ class EvaluationCaseRecord(Base):
 
 
 class EvaluationRunRecord(Base):
+    """An execution instance of the evaluation benchmark runner."""
+
     __tablename__ = "evaluation_runs"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
@@ -367,6 +424,8 @@ class EvaluationRunRecord(Base):
 
 
 class EvaluationResultRecord(Base):
+    """Individual case outcome within an evaluation run."""
+
     __tablename__ = "evaluation_results"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
