@@ -1,7 +1,7 @@
 from decimal import Decimal
 
 from app.extraction.commercial import validate_and_derive
-from app.extraction.contracts import Adjustment, CanonicalQuotation, LineItem, PriceTier
+from app.extraction.contracts import Adjustment, CanonicalQuotation, LineItem, PriceTier, Quantity
 
 
 def issue_codes(quotation: CanonicalQuotation) -> set[str]:
@@ -43,3 +43,12 @@ def test_rules_flag_a_quoted_quantity_below_a_compatible_moq():
     )
 
     assert issue_codes(quotation) == {"below_minimum_order_quantity"}
+
+
+def test_quantity_normalizes_boxes_without_cutting_off_the_word():
+    quantity = Quantity(
+        minimum_order_quantity=Decimal("5000"),
+        minimum_order_quantity_uom="boxes",
+    )
+
+    assert quantity.minimum_order_quantity_uom == "box"

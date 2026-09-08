@@ -15,7 +15,7 @@ def _singularize_uom(value: str | None) -> str | None:
     Examples:
         - "tablets" -> "tablet"
         - "vials" -> "vial"
-        - "boxes" -> "boxe" (safe bounds preserve short symbols like "kg", "g")
+        - "boxes" -> "box"
 
     Args:
         value: Raw UOM string or None.
@@ -26,6 +26,8 @@ def _singularize_uom(value: str | None) -> str | None:
     if value is None:
         return None
     normalized = value.strip()
+    if normalized.casefold() == "boxes":
+        return normalized[:-2]
     if len(normalized) > 3 and normalized.casefold().endswith("s") and not normalized.casefold().endswith("ss"):
         return normalized[:-1]
     return normalized

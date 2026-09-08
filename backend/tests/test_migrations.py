@@ -50,7 +50,7 @@ def test_startup_applies_checked_in_alembic_migration(tmp_path: Path):
             row[1] for row in database.execute("PRAGMA table_info(quotation_field_values)").fetchall()
         }
         review_columns = {row[1] for row in database.execute("PRAGMA table_info(reviews)").fetchall()}
-    assert revision == ("20260907_23",)
+    assert revision == ("20260908_24",)
     assert source_fact_schema is not None
     assert {"approach", "result_json", "failure_reason"}.issubset(image_attempt_columns)
     assert "selected" not in image_attempt_columns
@@ -93,7 +93,7 @@ def test_startup_upgrades_a_pre_alembic_slice_one_database(tmp_path: Path):
         source_facts = database.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'extracted_source_facts'"
         ).fetchone()
-    assert revision == ("20260907_23",)
+    assert revision == ("20260908_24",)
     assert source_facts is not None
 
 
@@ -119,7 +119,7 @@ def test_startup_repairs_an_interrupted_review_learning_migration(tmp_path: Path
         review_learning = database.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'review_learning'"
         ).fetchone()
-    assert revision == ("20260907_23",)
+    assert revision == ("20260908_24",)
     assert review_learning is None
 
 
@@ -179,6 +179,52 @@ def test_empty_extraction_backfill_fails_only_unreviewed_sources(tmp_path: Path)
         "not_reviewable",
     )
     assert approved == ("approved", None, "approved")
+
+
+def test_boxes_uom_repair_updates_payload_and_normalized_projection(tmp_path: Path):
+    database_path = tmp_path / "boxes-uom.db"
+    command.upgrade(alembic_config(database_path), "20260907_23")
+    payload = {
+        "line_items": [{
+            "product": {"inn": [], "strength": []},
+            "packaging": {},
+            "quantity": {"minimum_order_quantity": "5000", "minimum_order_quantity_uom": "boxe"},
+            "pricing": {"quoted_price": {"uom": "boxe"}, "normalized_price": {}, "price_tiers": []},
+            "supply": {}, "regulatory": {}, "evidence": [],
+        }]
+    }
+    with sqlite3.connect(database_path) as database:
+        database.execute(
+            "INSERT INTO documents "
+            "(id, original_filename, stored_filename, media_type, content_sha256, status) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            ("document-boxes", "boxes.json", "boxes.json", "application/json", "hash-boxes", "pending_review"),
+        )
+        database.execute(
+            "INSERT INTO quotations "
+            "(id, document_id, payload_json, schema_version, review_status, revision, system_decision) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("quotation-boxes", "document-boxes", json.dumps(payload), "1.0", "pending_review", 1, "pending_review"),
+        )
+        database.execute(
+            "INSERT INTO quotation_line_items "
+            "(id, quotation_id, position, minimum_order_quantity_uom, quoted_price_uom) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("line-boxes", "quotation-boxes", 0, "boxe", "boxe"),
+        )
+        database.commit()
+
+    command.upgrade(alembic_config(database_path), "head")
+
+    with sqlite3.connect(database_path) as database:
+        payload_after = json.loads(database.execute("SELECT payload_json FROM quotations").fetchone()[0])
+        projection = database.execute(
+            "SELECT minimum_order_quantity_uom, quoted_price_uom FROM quotation_line_items"
+        ).fetchone()
+
+    assert payload_after["line_items"][0]["quantity"]["minimum_order_quantity_uom"] == "box"
+    assert payload_after["line_items"][0]["pricing"]["quoted_price"]["uom"] == "box"
+    assert projection == ("box", "box")
 
 
 def test_normalized_line_item_migration_backfills_existing_quotation(tmp_path: Path):
