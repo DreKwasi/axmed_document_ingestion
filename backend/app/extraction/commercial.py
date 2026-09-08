@@ -1,4 +1,4 @@
-"""PRD commercial validation and derivation."""
+"""PRD commercial validation and deterministic pricing derivation."""
 
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -7,14 +7,19 @@ from decimal import Decimal, InvalidOperation
 
 from app.extraction.contracts import CanonicalQuotation, LineItem, ReviewIssue
 
+# --- Section 1: Rule Engine Context & Evaluator Protocols ---
+
 
 @dataclass(frozen=True)
 class RuleContext:
+    """Evaluation context supplied to deterministic commercial rule handlers."""
+
     quotation: CanonicalQuotation
     line: LineItem | None = None
     line_index: int | None = None
 
     def issue(self, code: str, field: str, message: str) -> ReviewIssue:
+        """Create a targeted ReviewIssue attached to either the document or line item."""
         path = field if self.line_index is None else f"line_items[{self.line_index}].{field}"
         return ReviewIssue(field_path=path, code=code, message=message, severity="error")
 
@@ -24,12 +29,18 @@ RuleEvaluator = Callable[[RuleContext], list[ReviewIssue]]
 
 @dataclass(frozen=True)
 class CommercialRule:
+    """Declared commercial validation rule bound to document or line-item scope."""
+
     codes: tuple[str, ...]
     scope: str
     evaluate: RuleEvaluator
 
 
+# --- Section 2: Document-Level Commercial Rules ---
+
+
 def _quotation_dates(context: RuleContext) -> list[ReviewIssue]:
+    """Validate that quotation issue date is chronologically on or before expiry."""
     quotation = context.quotation
     if not quotation.issue_date or not quotation.valid_until:
         return []
@@ -42,7 +53,16 @@ def _quotation_dates(context: RuleContext) -> list[ReviewIssue]:
     return []
 
 
+# --- Section 3: Pricing & Packaging Derivation (Normalized Unit Prices) ---
+
+
 def _price_and_pack(context: RuleContext) -> list[ReviewIssue]:
+    """Validate prices and derive normalized unit prices.
+
+    When pack_price is provided and units_per_pack is positive, computes:
+        normalized_price = pack_price / units_per_pack
+    If only quoted_price is present, sets quoted price as the normalized amount.
+    """
     assert context.line is not None
     pricing = context.line.pricing
     units = context.line.packaging.units_per_pack
@@ -82,7 +102,11 @@ def _price_and_pack(context: RuleContext) -> list[ReviewIssue]:
     return issues
 
 
+# --- Section 4: Volume & Minimum Order Quantity (MOQ) Checks ---
+
+
 def _minimum_order_quantity(context: RuleContext) -> list[ReviewIssue]:
+    """Validate MOQ positivity and flag orders below the supplier threshold."""
     assert context.line is not None
     quantity = context.line.quantity
     moq = quantity.minimum_order_quantity
@@ -108,7 +132,11 @@ def _minimum_order_quantity(context: RuleContext) -> list[ReviewIssue]:
     return []
 
 
+# --- Section 5: Surcharges, Discounts & Tiered Pricing Integrity ---
+
+
 def _percentage_adjustments(context: RuleContext) -> list[ReviewIssue]:
+    """Ensure percentage adjustments (discounts/surcharges) are bounded between 0% and 100%."""
     assert context.line is not None
     for adjustment in context.line.pricing.adjustments:
         if (
@@ -125,6 +153,7 @@ def _percentage_adjustments(context: RuleContext) -> list[ReviewIssue]:
 
 
 def _price_tiers(context: RuleContext) -> list[ReviewIssue]:
+    """Detect overlapping volume brackets in tiered pricing schedules."""
     assert context.line is not None
     tiers = sorted(context.line.pricing.price_tiers, key=lambda tier: tier.min_quantity or Decimal("0"))
     for previous, current in zip(tiers, tiers[1:], strict=False):
@@ -136,6 +165,8 @@ def _price_tiers(context: RuleContext) -> list[ReviewIssue]:
             return [context.issue("overlapping_price_tier", "pricing.price_tiers", "Price-tier ranges overlap.")]
     return []
 
+
+# --- Section 6: Rule Registry & Pipeline Execution Entry Points ---
 
 RULES = (
     CommercialRule(("invalid_date_range",), "quotation", _quotation_dates),
@@ -149,11 +180,15 @@ RULES = (
 def validate_and_derive(quotation: CanonicalQuotation) -> CanonicalQuotation:
     """Apply deterministic PRD rules to canonical data.
 
-    New canonical fields do not change this module unless they introduce a
-    deterministic calculation or constraint. Supplier field aliases stay in
-    semantic extraction.
-    """
+    Evaluates both quotation-level and line-level commercial rules, updating the
+    quotation's `review_issues` array with actionable errors.
 
+    Args:
+        quotation: The canonical quotation to validate and derive.
+
+    Returns:
+        The updated canonical quotation with derived pricing and populated review issues.
+    """
     rule_codes = {code for rule in RULES for code in rule.codes}
     quotation.review_issues = [issue for issue in quotation.review_issues if issue.code not in rule_codes]
     for rule in RULES:
@@ -166,12 +201,25 @@ def validate_and_derive(quotation: CanonicalQuotation) -> CanonicalQuotation:
 
 
 def apply_commercial_rules(quotation: CanonicalQuotation) -> CanonicalQuotation:
-    """Compatibility name while callers move to the validation seam."""
-
+    """Compatibility alias for validate_and_derive."""
     return validate_and_derive(quotation)
 
 
+# --- Section 7: Human Review Patch Parsing Helpers ---
+
+
 def decimal_patch(value: object) -> Decimal:
+    """Parse and validate arbitrary user-supplied review input into a finite Decimal.
+
+    Args:
+        value: Raw scalar input from user patch payload.
+
+    Returns:
+        Validated Decimal instance.
+
+    Raises:
+        ValueError: If input cannot be parsed into a finite Decimal.
+    """
     try:
         decimal_value = Decimal(str(value))
     except InvalidOperation as error:

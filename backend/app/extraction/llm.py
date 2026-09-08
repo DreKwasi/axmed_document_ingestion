@@ -1,8 +1,4 @@
-"""LangChain and Gemini (gemini-3.1-flash-lite) semantic extraction and reasoning engine.
-
-Provides structured Pydantic extraction across email threads, native PDFs, OCR scans,
-and per-document JSON semantic fact extraction.
-"""
+"""LangChain and Gemini (gemini-3.1-flash-lite) semantic extraction and reasoning engine."""
 
 import base64
 import json
@@ -17,6 +13,8 @@ from pydantic import BaseModel, Field
 from app.extraction.contracts import CanonicalQuotation, Regulatory, Supply
 from app.extraction.json import JsonSemanticExtraction
 
+# --- Section 1: Prompt Version Constants & Intermediate Enrichment Models ---
+
 CANONICAL_QUOTATION_PROMPT_VERSION = "canonical-quotation-v8"
 JSON_SEMANTIC_EXTRACTION_PROMPT_VERSION = "json-semantic-extraction-v1"
 
@@ -30,7 +28,12 @@ class SemanticLineItemEnrichment(BaseModel):
 
 
 class SemanticEnrichment(BaseModel):
+    """Collection of narrative line-item enrichments from footnotes and appendices."""
+
     line_items: list[SemanticLineItemEnrichment] = Field(default_factory=list)
+
+
+# --- Section 2: LangChain Semantic Extractor Core Engine ---
 
 
 class LangChainSemanticExtractor:
@@ -60,7 +63,7 @@ class LangChainSemanticExtractor:
         source_media: bytes | None = None,
         source_media_type: str | None = None,
     ) -> tuple[CanonicalQuotation, dict[str, Any]]:
-        """Extract a structured CanonicalQuotation from sanitized text context."""
+        """Extract a structured CanonicalQuotation from sanitized text or visual media context."""
         started_at = time.perf_counter()
 
         system_prompt = (
@@ -215,7 +218,6 @@ class LangChainSemanticExtractor:
         quotation: CanonicalQuotation,
     ) -> tuple[SemanticEnrichment, dict[str, Any]]:
         """Recover narrative supply/regulatory facts without re-sending table layout."""
-
         started_at = time.perf_counter()
         semantic_pages = context.get("semantic_pages") or context.get("pages", [])
         source_lines = [
@@ -309,12 +311,14 @@ class LangChainSemanticExtractor:
         }
 
 
+# --- Section 3: Semantic Enrichment Merging Logic ---
+
+
 def merge_semantic_enrichment(
     quotation: CanonicalQuotation,
     enrichment: SemanticEnrichment,
 ) -> CanonicalQuotation:
     """Fill omitted narrative facts without overwriting structured/table values."""
-
     enrichment_by_key = {item.source_key: item for item in enrichment.line_items}
     for line in quotation.line_items:
         if not line.source_key or line.source_key not in enrichment_by_key:
@@ -326,6 +330,7 @@ def merge_semantic_enrichment(
 
 
 def _fill_missing_model_values(target: Supply | Regulatory, source: Supply | Regulatory) -> None:
+    """Copy non-empty values from source to target only where target currently has None or empty list."""
     for field_name in type(source).model_fields:
         source_value = getattr(source, field_name)
         target_value = getattr(target, field_name)
@@ -335,9 +340,11 @@ def _fill_missing_model_values(target: Supply | Regulatory, source: Supply | Reg
             setattr(target, field_name, source_value)
 
 
+# --- Section 4: Token Usage & Structured Output Telemetry Parsers ---
+
+
 def _structured_result(result: Any, expected_type: type[BaseModel]) -> tuple[Any, dict[str, Any]]:
     """Return parsed structured output and provider-reported usage without inventing token or cost data."""
-
     parsed = result
     raw = None
     if isinstance(result, dict) and "parsed" in result:
@@ -359,6 +366,7 @@ def _structured_result(result: Any, expected_type: type[BaseModel]) -> tuple[Any
 
 
 def _token_count(value: Any) -> int | None:
+    """Parse positive integer token count or return None."""
     if not isinstance(value, int | float | str):
         return None
     try:

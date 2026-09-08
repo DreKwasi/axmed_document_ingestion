@@ -1,13 +1,28 @@
+"""Canonical quotation contract and domain models for document intelligence."""
+
 import re
 from decimal import Decimal
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+# --- Section 1: Grammatical & Text Normalization Helpers ---
+
 
 def _singularize_uom(value: str | None) -> str | None:
-    """Normalize grammatical plural UOM labels without changing their commercial category."""
+    """Normalize grammatical plural unit-of-measure labels without changing category.
 
+    Examples:
+        - "tablets" -> "tablet"
+        - "vials" -> "vial"
+        - "boxes" -> "boxe" (safe bounds preserve short symbols like "kg", "g")
+
+    Args:
+        value: Raw UOM string or None.
+
+    Returns:
+        Singularized string or None.
+    """
     if value is None:
         return None
     normalized = value.strip()
@@ -17,8 +32,17 @@ def _singularize_uom(value: str | None) -> str | None:
 
 
 def _pack_quantity_from_description(value: str | None) -> tuple[int, str] | None:
-    """Read an explicit ``N units per pack`` phrase without choosing a commercial UOM."""
+    """Extract explicit packaging counts from freeform descriptions.
 
+    Parses patterns such as "100 tablets per box" or "50 vials/carton" into a count
+    and a normalized singular unit label.
+
+    Args:
+        value: Packaging description string or None.
+
+    Returns:
+        Tuple of (units_per_pack, singular_unit_label) or None if no match.
+    """
     if not value:
         return None
     match = re.search(
@@ -35,7 +59,16 @@ def _pack_quantity_from_description(value: str | None) -> tuple[int, str] | None
     return int(match.group("count").replace(",", "")), label
 
 
+# --- Section 2: Product Identity & Active Ingredients (INN) ---
+
+
 class Strength(BaseModel):
+    """Pharmaceutical strength and concentration specification.
+
+    Captures active ingredient potency per administration unit (e.g. 500 mg per 1 tablet,
+    or 5 mg/ml per 10 ml ampoule).
+    """
+
     ingredient: str | None = None
     value: Decimal | None = None
     unit: str | None = None
@@ -45,12 +78,46 @@ class Strength(BaseModel):
     @field_validator("ingredient")
     @classmethod
     def normalize_active_moiety_name(cls, value: str | None) -> str | None:
+        """Strip redundant salt / ester parentheticals from ingredient labels."""
         if value is None:
             return None
         return re.sub(r"\s*\(as\s+[^)]+\)$", "", value.strip(), flags=re.IGNORECASE)
 
 
+class Product(BaseModel):
+    """Core pharmaceutical product identification.
+
+    Distinguishes proprietary trade names from generic International Nonproprietary
+    Names (INN) and captures dosage form, manufacturer, and country of origin.
+    """
+
+    trade_name: str | None = None
+    inn: list[str] = Field(default_factory=list)
+    strength: list[Strength] = Field(default_factory=list)
+    dosage_form: str | None = None
+    manufacturer: str | None = None
+    country_of_origin: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_dosage_form(cls, values: Any) -> Any:
+        """Normalize dashes, whitespace, and case in dosage forms (e.g. 'tablet', 'solution for injection')."""
+        if not isinstance(values, dict) or not isinstance(values.get("dosage_form"), str):
+            return values
+
+        normalized_values = dict(values)
+        normalized_values["dosage_form"] = re.sub(
+            r"\s+", " ", values["dosage_form"].strip().lower().replace("–", "-").replace("—", "-")
+        )
+        return normalized_values
+
+
+# --- Section 3: Supplier Profile & Commercial Terms ---
+
+
 class Supplier(BaseModel):
+    """Commercial supplier entity profile and manufacturing site references."""
+
     name: str | None = None
     supplier_code: str | None = None
     country: str | None = None
@@ -58,6 +125,11 @@ class Supplier(BaseModel):
 
 
 class CommercialTerms(BaseModel):
+    """Document-level trade conditions, Incoterms, and tariff codes.
+
+    Incoterms specify transfer of logistics risk (e.g., FOB, CIF, EXW, DDP).
+    """
+
     currency: str | None = None
     incoterm: str | None = None
     incoterm_named_place: str | None = None
@@ -67,7 +139,12 @@ class CommercialTerms(BaseModel):
     hs_codes: list[str] = Field(default_factory=list)
 
 
+# --- Section 4: Packaging Hierarchies & Quantity Specifications ---
+
+
 class Packaging(BaseModel):
+    """Packaging hierarchy from primary container to shipping carton."""
+
     description: str | None = None
     presentation: str | None = None
     primary_pack: str | None = None
@@ -78,6 +155,7 @@ class Packaging(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def normalize_presentation(cls, values: Any) -> Any:
+        """Normalize packaging presentation strings to lowercase stripped format."""
         if not isinstance(values, dict) or not isinstance(values.get("presentation"), str):
             return values
         normalized = dict(values)
@@ -86,6 +164,7 @@ class Packaging(BaseModel):
 
     @model_validator(mode="after")
     def fill_explicit_pack_quantity(self) -> "Packaging":
+        """Infer pack unit count and label from description when not explicitly provided."""
         parsed = _pack_quantity_from_description(self.description)
         if parsed is not None:
             units, label = parsed
@@ -97,6 +176,8 @@ class Packaging(BaseModel):
 
 
 class Quantity(BaseModel):
+    """Line-item volume terms including quoted quantity and Minimum Order Quantity (MOQ)."""
+
     quoted_quantity: Decimal | None = None
     quoted_quantity_uom: str | None = None
     quantity_basis: str | None = None
@@ -106,20 +187,29 @@ class Quantity(BaseModel):
     @field_validator("quoted_quantity_uom", "minimum_order_quantity_uom")
     @classmethod
     def normalize_uom_number(cls, value: str | None) -> str | None:
+        """Singularize volume units (e.g. 'cartons' -> 'carton')."""
         return _singularize_uom(value)
 
 
+# --- Section 5: Pricing Structures, Price Tiers & Adjustments ---
+
+
 class QuotedPrice(BaseModel):
+    """Base quoted price and unit of measure as stated by supplier."""
+
     amount: Decimal | None = None
     uom: str | None = None
 
     @field_validator("uom")
     @classmethod
     def normalize_uom(cls, value: str | None) -> str | None:
+        """Singularize price unit of measure."""
         return _singularize_uom(value)
 
 
 class PriceTier(BaseModel):
+    """Volume-dependent tiered price bracket."""
+
     min_quantity: Decimal | None = None
     max_quantity: Decimal | None = None
     quantity_uom: str | None = None
@@ -128,6 +218,8 @@ class PriceTier(BaseModel):
 
 
 class Adjustment(BaseModel):
+    """Commercial price adjustments such as discounts, freight surcharges, or tariffs."""
+
     type: str
     value: Decimal | None = None
     value_type: str | None = None
@@ -135,6 +227,8 @@ class Adjustment(BaseModel):
 
 
 class Pricing(BaseModel):
+    """Comprehensive pricing structure, including derived normalized unit prices."""
+
     currency: str | None = None
     quoted_price: QuotedPrice = Field(default_factory=QuotedPrice)
     pack_price: Decimal | None = None
@@ -145,7 +239,12 @@ class Pricing(BaseModel):
     normalized_price: dict[str, Any] = Field(default_factory=dict)
 
 
+# --- Section 6: Supply Chain Logistics & Regulatory Compliance ---
+
+
 class Supply(BaseModel):
+    """Manufacturing lead times, product shelf life, and storage environmental controls."""
+
     lead_time_days: int | None = None
     lead_time_min_days: int | None = None
     lead_time_max_days: int | None = None
@@ -156,6 +255,8 @@ class Supply(BaseModel):
 
 
 class Regulatory(BaseModel):
+    """Market authorization, WHO prequalification, and registration dossiers."""
+
     who_prequalified: bool | None = None
     who_pq_reference: str | None = None
     registered_markets: list[str] = Field(default_factory=list)
@@ -163,28 +264,12 @@ class Regulatory(BaseModel):
     regulatory_status: str | None = None
 
 
-class Product(BaseModel):
-    trade_name: str | None = None
-    inn: list[str] = Field(default_factory=list)
-    strength: list[Strength] = Field(default_factory=list)
-    dosage_form: str | None = None
-    manufacturer: str | None = None
-    country_of_origin: str | None = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def normalize_dosage_form(cls, values: Any) -> Any:
-        if not isinstance(values, dict) or not isinstance(values.get("dosage_form"), str):
-            return values
-
-        normalized_values = dict(values)
-        normalized_values["dosage_form"] = re.sub(
-            r"\s+", " ", values["dosage_form"].strip().lower().replace("–", "-").replace("—", "-")
-        )
-        return normalized_values
+# --- Section 7: Audit Provenance & Quality Review Issues ---
 
 
 class Evidence(BaseModel):
+    """Audit trail record linking an extracted fact to its raw source coordinates."""
+
     canonical_field: str
     source_path: str | None = None
     source_location: str | None = None
@@ -194,13 +279,20 @@ class Evidence(BaseModel):
 
 
 class ReviewIssue(BaseModel):
+    """System-generated commercial or extraction issue requiring human review."""
+
     field_path: str
     code: str
     message: str
     severity: str = "warning"
 
 
+# --- Section 8: Line Items & Aggregate Canonical Quotation Document ---
+
+
 class LineItem(BaseModel):
+    """One individual product entry within a supplier quotation."""
+
     source_key: str | None = None
     product: Product = Field(default_factory=Product)
     packaging: Packaging = Field(default_factory=Packaging)
@@ -210,7 +302,10 @@ class LineItem(BaseModel):
     regulatory: Regulatory = Field(default_factory=Regulatory)
     evidence: list[Evidence] = Field(default_factory=list)
 
+
 class CanonicalQuotation(BaseModel):
+    """Top-level canonical quotation schema aggregating all source facts."""
+
     model_config = ConfigDict(extra="forbid")
 
     schema_version: str = "1.0"

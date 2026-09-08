@@ -7,10 +7,12 @@ from app.extraction.contracts import CanonicalQuotation, Evidence, LineItem
 
 STRONG_MAPPING_METHODS = {"human_corrected", "direct_json"}
 
+# --- Section 1: Data Contracts & Factor Models ---
+
 
 @dataclass(frozen=True)
 class ConfidenceSignals:
-    """Observable source-recovery signals; none describe schema completeness."""
+    """Observable raw input signals harvested from parsers and OCR engines."""
 
     source_type: str | None
     ocr_used: bool = False
@@ -21,6 +23,8 @@ class ConfidenceSignals:
 
 @dataclass(frozen=True)
 class ConfidenceFactor:
+    """Individual weighted contributor to the extraction confidence score."""
+
     key: str
     label: str
     weight: int
@@ -30,6 +34,8 @@ class ConfidenceFactor:
 
 @dataclass(frozen=True)
 class ExtractionConfidence:
+    """Composite extraction confidence score across readability, parser, and OCR."""
+
     score: int
     band: str
     factors: tuple[ConfidenceFactor, ...]
@@ -37,6 +43,8 @@ class ExtractionConfidence:
 
 @dataclass(frozen=True)
 class FieldMappingConfidence:
+    """Confidence evaluation for a single canonical field assignment."""
+
     score: int
     band: str
     reason: str
@@ -44,6 +52,8 @@ class FieldMappingConfidence:
 
 @dataclass(frozen=True)
 class MappingIssue:
+    """Identified ambiguity or mismatch during schema field mapping."""
+
     field_path: str
     section: str
     code: str
@@ -53,6 +63,8 @@ class MappingIssue:
 
 @dataclass(frozen=True)
 class MappingAssessment:
+    """Holistic schema mapping assessment across all populated fields."""
+
     system_decision: str
     score: int | None
     band: str | None
@@ -60,9 +72,23 @@ class MappingAssessment:
     issues: tuple[MappingIssue, ...]
 
 
-def assess_extraction_confidence(signals: ConfidenceSignals) -> ExtractionConfidence | None:
-    """Calculate confidence only when the pipeline produced an assessable result."""
+# --- Section 2: Extraction Quality Assessment Pipeline ---
 
+
+def assess_extraction_confidence(signals: ConfidenceSignals) -> ExtractionConfidence | None:
+    """Calculate extraction confidence strictly from observed recovery evidence.
+
+    Evaluates:
+    - Readability (30% weight): JSON/native PDF/email vs scanned OCR.
+    - Parser quality (25% weight): LiteParse or MIME parser status.
+    - OCR legibility (45% weight): Mean line confidence and legible line share.
+
+    Args:
+        signals: Observability signals from the preprocessing and ingestion stage.
+
+    Returns:
+        ExtractionConfidence object or None if no extraction output exists.
+    """
     if not signals.has_extracted_result:
         return None
 
@@ -112,9 +138,24 @@ def assess_extraction_confidence(signals: ConfidenceSignals) -> ExtractionConfid
     return ExtractionConfidence(score, _band(score), factors)
 
 
-def assess_mapping_confidence(quotation: CanonicalQuotation) -> MappingAssessment:
-    """Assess whether recovered values are attached to the right canonical fields."""
+# --- Section 3: Schema Mapping Confidence Assessment Pipeline ---
 
+
+def assess_mapping_confidence(quotation: CanonicalQuotation) -> MappingAssessment:
+    """Assess whether recovered source values are mapped to appropriate canonical fields.
+
+    Performs:
+    1. Direct evidence matching between quotation attributes and raw provenance.
+    2. Mathematical consistency validation across price, pack, and quantity fields.
+    3. Structural contradiction checks (e.g. mapping quantity labels to price fields).
+    4. Issue synthesis for unresolved or low-confidence assignments.
+
+    Args:
+        quotation: CanonicalQuotation model populated by extraction pipeline.
+
+    Returns:
+        MappingAssessment containing field confidence map, issues, and aggregate score.
+    """
     fields: dict[str, FieldMappingConfidence] = {}
     issues = tuple(quotation.review_issues)
     quotation_evidence = {item.canonical_field: item for item in quotation.evidence}
@@ -162,6 +203,15 @@ def assess_mapping_confidence(quotation: CanonicalQuotation) -> MappingAssessmen
 
 
 def mapping_confidence_for_path(field_path: str, assessment: MappingAssessment) -> FieldMappingConfidence | None:
+    """Look up field mapping confidence for a given dotted path.
+
+    Args:
+        field_path: Dotted canonical path (e.g. 'line_items[0].pricing.quoted_price.amount').
+        assessment: Current document MappingAssessment.
+
+    Returns:
+        FieldMappingConfidence object or None.
+    """
     if ".pricing.normalized_price" in field_path:
         return None
     candidates = (
@@ -179,6 +229,7 @@ def mapping_confidence_for_path(field_path: str, assessment: MappingAssessment) 
 def _classify_mapping(
     field_path: str, evidence: Evidence | None, issues: tuple, validation: str = "unavailable"
 ) -> FieldMappingConfidence:
+    """Classify confidence score and justification for a single mapped field."""
     assert evidence is not None
     matching = [issue for issue in issues if _issue_applies_to_field(issue.field_path, field_path)]
     if validation == "conflicting" or any(
@@ -212,7 +263,11 @@ def _classify_mapping(
     return FieldMappingConfidence(score, _band(score), reason)
 
 
+# --- Section 4: Commercial Value Consistency & Math Cross-Checks ---
+
+
 def _flatten_source_values(value: object, path: str = "") -> list[tuple[str, object]]:
+    """Flatten nested dicts and lists into dotted JSONPath-like key-value pairs."""
     excluded = {"evidence", "review_issues", "review_status", "system_decision", "revision", "schema_version"}
     if isinstance(value, dict):
         result: list[tuple[str, object]] = []
@@ -227,6 +282,7 @@ def _flatten_source_values(value: object, path: str = "") -> list[tuple[str, obj
 
 
 def _matching_evidence(field_path: str, evidence: dict[str, Evidence]) -> Evidence | None:
+    """Find the most specific matching evidence record for a field path."""
     candidates = (
         (path, item)
         for path, item in evidence.items()
@@ -236,6 +292,7 @@ def _matching_evidence(field_path: str, evidence: dict[str, Evidence]) -> Eviden
 
 
 def _commercial_validation(line_item: LineItem) -> dict[str, str]:
+    """Perform mathematical cross-checks between quantity, unit price, and extended price."""
     states: dict[str, str] = {}
     quantity, unit_price, extended_price = (
         line_item.quantity.quoted_quantity,
@@ -269,32 +326,39 @@ def _commercial_validation(line_item: LineItem) -> dict[str, str]:
 
 
 def _approximately_equal(left: Decimal, right: Decimal) -> bool:
+    """Tolerate fractional cent differences due to rounding."""
     return abs(left - right) <= max(Decimal("0.01"), abs(right) * Decimal("0.001"))
 
 
 def _average_score(values: tuple[float, ...], *, default: int) -> int:
+    """Average normalized 0.0-1.0 OCR scores into an integer percentage."""
     normalized = [max(0.0, min(1.0, float(value))) for value in values]
     return round(sum(normalized) / len(normalized) * 100) if normalized else default
 
 
 def _band(score: int) -> str:
+    """Categorize numeric score into High (>=85), Medium (>=65), or Low (<65)."""
     return "High" if score >= 85 else "Medium" if score >= 65 else "Low"
 
 
+# --- Section 5: Path Parsing, Category Conflict & Labeling Utilities ---
+
+
 def _issue_applies_to_field(issue_path: str, field_path: str) -> bool:
+    """Check if a review issue applies directly or to a parent/child of a field path."""
     return (
         issue_path == field_path or issue_path.startswith(f"{field_path}.") or field_path.startswith(f"{issue_path}.")
     )
 
 
 def _is_mapping_issue(severity: str, code: str) -> bool:
+    """Determine whether an issue code signals mapping ambiguity rather than missing data."""
     del severity
     return any(token in code.casefold() for token in ("conflict", "ambiguous", "mapping", "misassigned"))
 
 
 def _source_path_contradicts_field(source_path: str | None, field_path: str) -> bool:
     """Reject category mismatches such as a source quantity mapped as a price."""
-
     if not source_path:
         return False
     categories = {
@@ -315,6 +379,7 @@ def _source_path_contradicts_field(source_path: str | None, field_path: str) -> 
 
 
 def _section_for_path(path: str) -> str:
+    """Derive functional UI section name from a canonical field path."""
     if ".pricing." in path:
         return "pricing"
     if ".quantity." in path or ".packaging." in path:
@@ -329,4 +394,5 @@ def _section_for_path(path: str) -> str:
 
 
 def _field_label(path: str) -> str:
+    """Convert dotted field identifier into human-readable field label."""
     return path.rsplit(".", 1)[-1].replace("_", " ").replace("[", " ").replace("]", "").strip()
