@@ -364,7 +364,7 @@ erDiagram
 - **State Progression**:
   $$\text{received} \longrightarrow \text{processing} \longrightarrow \text{pending\_review} \longrightarrow \text{approved} \text{ or } \text{rejected}$$
 - **Inline Corrections**: Reviewers can edit any extracted field in the `ProductDetailDrawer`. Saving a correction automatically recalculates commercial math and audits before/after states.
-- **CSV Export**: Emits terminal processing results as one user-facing row per extracted product, or one summary row for a terminal productless source. It excludes active processing records and internal identifiers/state labels, while retaining file format, failure context, confidence explanations, consolidated mapping issues, and review decisions.
+- **CSV Export**: `GET /api/v1/documents/export.csv` reads the persisted backend projection and emits terminal results as one user-facing row per extracted product, or one summary row for a terminal productless source. Completed image attempts become distinct OCR-assisted and Direct vision sources. The frontend only downloads this response. Active processing records and internal identifiers/state labels are excluded, while file format, failure context, confidence explanations, consolidated mapping issues, and review decisions remain.
 
 ---
 
