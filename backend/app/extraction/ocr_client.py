@@ -1,4 +1,8 @@
-"""HTTP adapter for the Axmed-owned, versioned OCR service contract."""
+"""HTTP adapter for the Axmed-owned, versioned OCR service contract.
+
+Dispatches base64-encoded document payloads to the Modal-hosted PaddleOCR endpoint
+and validates the returned JSON against the versioned OcrResult schema.
+"""
 
 import base64
 import json
@@ -17,6 +21,24 @@ def request_ocr(
     deadline_ms: int,
     token: str | None,
 ) -> OcrResult:
+    """Submit a document to the OCR endpoint with timeout and idempotency headers.
+
+    Args:
+        url: Modal OCR microservice endpoint URL.
+        data: Raw document binary bytes (PDF or image).
+        media_type: MIME type (e.g. 'application/pdf', 'image/png').
+        selected_original_pages: Tuple of 1-based page indices to process.
+        idempotency_key: Unique request identifier preventing duplicate processing.
+        deadline_ms: Execution timeout budget in milliseconds.
+        token: Optional Bearer token for service authentication.
+
+    Returns:
+        Validated OcrResult Pydantic model instance.
+
+    Raises:
+        urllib.error.URLError: If HTTP transport fails or times out.
+        pydantic.ValidationError: If service response does not match OcrResult schema.
+    """
     body = json.dumps(
         {
             "schema_version": "1.0",

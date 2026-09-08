@@ -1,9 +1,4 @@
-"""Per-document JSON profiling, semantic extraction, and source validation.
-
-This module deliberately does not identify or reuse supplier schemas.  A JSON
-upload is a source document whose facts may, independently, be normalized into
-the canonical quotation when that interpretation is supported.
-"""
+"""Per-document JSON profiling, semantic extraction, and source validation."""
 
 from __future__ import annotations
 
@@ -19,9 +14,22 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.extraction.contracts import CanonicalQuotation
 
+# --- Section 1: Source Fact Models & Extractor Protocols ---
+
 
 class JsonSourceFact(BaseModel):
-    """A quotation-relevant value recovered from one JSON source document."""
+    """A quotation-relevant value recovered from one JSON source document.
+
+    Attributes:
+        label: Human-readable identifier for the fact (e.g., 'Unit Price', 'Product').
+        value: Recovered scalar or collection value.
+        source_path: Rooted JSONPath pointer where this fact resides (e.g., '$.items[0].price').
+        extraction_method: Method used ('direct_json' or 'semantic_json').
+        confidence: Decimal certainty score between 0.00 and 1.00.
+        confidence_reason: Explanation of evidence backing the confidence score.
+        canonical_field: Target field in the canonical quotation schema, if mapped.
+        normalization_status: 'mapped' or 'unmapped'.
+    """
 
     label: str
     value: Any
@@ -35,13 +43,14 @@ class JsonSourceFact(BaseModel):
     @field_validator("source_path")
     @classmethod
     def require_json_path(cls, value: str) -> str:
+        """Enforce standard root-prefixed JSONPath notation."""
         if not value.startswith("$"):
             raise ValueError("source_path must be a JSONPath beginning with '$'.")
         return value
 
 
 class JsonSemanticExtraction(BaseModel):
-    """The model result for one source only; it is never a reusable mapping."""
+    """The model result for one source document only; never a reusable mapping."""
 
     quotation: CanonicalQuotation = Field(default_factory=CanonicalQuotation)
     source_facts: list[JsonSourceFact] = Field(default_factory=list)
@@ -49,6 +58,8 @@ class JsonSemanticExtraction(BaseModel):
 
 @dataclass(frozen=True)
 class JsonExtractionProposal:
+    """Extraction proposal packaged with execution telemetry and cost metrics."""
+
     extraction: JsonSemanticExtraction
     provider: str
     model: str | None
@@ -60,6 +71,8 @@ class JsonExtractionProposal:
 
 
 class JsonSemanticExtractor(Protocol):
+    """Protocol for pluggable JSON semantic extraction strategies."""
+
     def extract(
         self,
         payload: dict[str, Any],
@@ -67,16 +80,33 @@ class JsonSemanticExtractor(Protocol):
         *,
         source_document: str,
         invalid_source_paths: list[str] | None = None,
-    ) -> JsonExtractionProposal | None: ...
+    ) -> JsonExtractionProposal | None:
+        """Extract quotation facts from an arbitrary JSON payload."""
+        ...
+
+
+# --- Section 2: Structural Profiling & Collection Inventory ---
 
 
 def profile_json(payload: Any) -> dict[str, Any]:
-    """Create a lossless structural inventory without assigning source meaning."""
+    """Create a lossless structural inventory without assigning source meaning.
 
+    Traverses the JSON tree to build:
+    1. `paths`: List of all paths with type descriptions and key summaries.
+    2. `candidate_collections`: Array paths containing uniform object dictionaries
+       (identifying potential quotation line-item tables).
+
+    Args:
+        payload: Parsed JSON root object or array.
+
+    Returns:
+        Dictionary with 'paths' and 'candidate_collections' metadata.
+    """
     paths: list[dict[str, Any]] = []
     collections: list[dict[str, Any]] = []
 
     def walk(value: Any, path: str) -> None:
+        # Traverse dictionary objects and record key lists
         if isinstance(value, dict):
             paths.append({"path": path, "type": "object", "keys": sorted(map(str, value.keys()))})
             for key, child in value.items():
@@ -84,6 +114,8 @@ def profile_json(payload: Any) -> dict[str, Any]:
                 child_path = f"{path}.{key}" if str(key).replace("_", "").isalnum() else f"{path}['{escaped}']"
                 walk(child, child_path)
             return
+
+        # Traverse arrays and check if elements are candidate uniform object tables
         if isinstance(value, list):
             element_keys = sorted(
                 {str(key) for item in value if isinstance(item, dict) for key in item.keys()}
@@ -95,6 +127,8 @@ def profile_json(payload: Any) -> dict[str, Any]:
             for index, child in enumerate(value):
                 walk(child, f"{path}[{index}]")
             return
+
+        # Terminal primitive leaf node
         paths.append({"path": path, "type": _json_type(value), "sample": value})
 
     walk(payload, "$")
@@ -102,6 +136,7 @@ def profile_json(payload: Any) -> dict[str, Any]:
 
 
 def _json_type(value: Any) -> str:
+    """Classify a Python primitive into standard JSON type names."""
     if value is None:
         return "null"
     if isinstance(value, bool):
@@ -111,14 +146,23 @@ def _json_type(value: Any) -> str:
     return "string"
 
 
+# --- Section 3: Deterministic JSONPath Navigation & Resolution ---
+
+_MISSING = object()
+
+
 def resolve_json_path(payload: Any, path: str) -> Any:
     """Resolve the JSONPath subset emitted by the extraction contract.
 
-    It supports object fields and numeric array indexes. A missing path returns
-    ``None``; a present JSON null is represented by the private sentinel so the
-    caller can distinguish the two conditions.
-    """
+    Supports:
+    - Root paths: '$'
+    - Dot notation: '$.supplier.name'
+    - Array indices: '$.items[0].price'
+    - Bracketed quoted keys: '$[\'quoted-key\']'
 
+    Returns:
+        The matched value from the payload, or private sentinel `_MISSING` if not found.
+    """
     if path == "$":
         return payload
     if not path.startswith("$"):
@@ -140,10 +184,12 @@ def resolve_json_path(payload: Any, path: str) -> Any:
             if close == -1:
                 return _MISSING
             token = path[index + 1 : close]
+            # Numeric array index (e.g. [0])
             if token.isdigit():
                 if not isinstance(current, list) or int(token) >= len(current):
                     return _MISSING
                 current = current[int(token)]
+            # Quoted dictionary key (e.g. ['complex-key'])
             elif len(token) >= 2 and token[0] == token[-1] == "'":
                 key = token[1:-1].replace("\\'", "'").replace("\\\\", "\\")
                 if not isinstance(current, dict) or key not in current:
@@ -157,7 +203,7 @@ def resolve_json_path(payload: Any, path: str) -> Any:
     return current
 
 
-_MISSING = object()
+# --- Section 4: Grounded Source Fact Validation & Equivalence Checks ---
 
 
 def validate_source_facts(
@@ -165,10 +211,18 @@ def validate_source_facts(
 ) -> tuple[list[JsonSourceFact], list[str]]:
     """Keep grounded facts and identify claims that should be retried.
 
-    Direct JSON facts must exactly reproduce their source value. Semantic facts
-    may interpret narrative text, but still require a real source context.
-    """
+    Validates that:
+    1. The declared JSONPath actually resolves within the source document.
+    2. Direct JSON facts exactly match the source values (numeric/string equality).
+    3. Normalization statuses ('mapped' vs 'unmapped') are synchronized.
 
+    Args:
+        payload: Original JSON payload.
+        facts: Candidate extracted source facts.
+
+    Returns:
+        Tuple of (valid_facts, invalid_source_paths).
+    """
     valid: list[JsonSourceFact] = []
     invalid_paths: list[str] = []
     for fact in facts:
@@ -185,6 +239,7 @@ def validate_source_facts(
 
 
 def _same_json_value(source: Any, extracted: Any) -> bool:
+    """Compare JSON values tolerating numeric representation differences (e.g. float vs Decimal)."""
     if isinstance(source, bool) or isinstance(extracted, bool):
         return source is extracted
     if isinstance(source, int | float) and isinstance(extracted, int | float | Decimal | str):
@@ -193,6 +248,9 @@ def _same_json_value(source: Any, extracted: Any) -> bool:
         except Exception:  # pragma: no cover - defensive at a provider boundary.
             return False
     return source == extracted
+
+
+# --- Section 5: Extractor Implementations ---
 
 
 class RecordedJsonSemanticExtractor:
@@ -280,6 +338,8 @@ class LangChainJsonSemanticExtractor:
 
 
 class ChainedJsonSemanticExtractor:
+    """Composite extractor evaluating a prioritized fallback chain of extractors."""
+
     def __init__(self, extractors: list[JsonSemanticExtractor]):
         self.extractors = extractors
 
