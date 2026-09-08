@@ -9,5 +9,5 @@ test("a reviewer uploads multiple documents through the same ingest action", asy
   await page.locator('input[type="file"]').setInputFiles([sanovaFixture, sanovaFixture]);
 
   await expect(page.getByRole("table")).toBeVisible();
-  await expect(page.getByText("Download file", { exact: false })).toHaveCount(2);
+  await expect(page.getByText("sanova_offer_export_2026-08-03.json", { exact: false })).toHaveCount(2);
 });

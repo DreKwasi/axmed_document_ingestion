@@ -42,7 +42,7 @@ describe("App", () => {
     expect(wrapper.text()).not.toContain("Supplier intelligence");
     expect(wrapper.find("nav").exists()).toBe(false);
     const ingestButton = wrapper.findAll("button").find((button) => button.text() === "Ingest source");
-    expect(ingestButton?.classes()).toContain("bg-[#123b37]");
+    expect(ingestButton?.classes()).toContain("bg-[#261c7a]");
     expect(ingestButton?.classes()).toContain("text-white");
     expect(ingestButton?.element.closest("header")).toBeNull();
     expect(api.fetchDocuments).toHaveBeenCalledOnce();

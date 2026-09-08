@@ -17,6 +17,7 @@ import {
 import type { DocumentResponse, ProcessingEvent } from "@/types";
 import { documentsToCsv } from "@/exportCsv";
 
+import AxmedLogo from "./components/AxmedLogo.vue";
 import ProductDetailDrawer from "./components/ProductDetailDrawer.vue";
 import ProductTable from "./components/ProductTable.vue";
 import ReviewModal from "./components/ReviewModal.vue";
@@ -324,14 +325,14 @@ onBeforeUnmount(() => eventSources.forEach((source) => source.close()));
 <template>
   <div class="min-h-screen bg-slate-50 text-slate-800 font-sans antialiased">
     <!-- Clean Minimal Header -->
-    <header class="border-b border-slate-200 bg-white sticky top-0 z-30">
+    <header class="border-b border-rule bg-surface sticky top-0 z-30 shadow-xs">
       <div class="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
         <div class="flex items-center gap-3">
-          <span class="text-base font-black tracking-widest text-emerald-900 uppercase">
-            AXMED
-          </span>
-          <span class="h-4 w-px bg-slate-200"></span>
-          <span class="text-xs font-semibold text-slate-500">Document Intelligence</span>
+          <a href="#" class="flex items-center text-[#261c7a] hover:opacity-90 transition" @click.prevent="closeDocument">
+            <AxmedLogo class="h-8 w-auto" />
+          </a>
+          <span class="h-4 w-px bg-rule"></span>
+          <span class="text-xs font-semibold text-ink-3">Document Intelligence</span>
         </div>
 
         <!-- Hidden input for file ingestion -->
@@ -378,7 +379,7 @@ onBeforeUnmount(() => eventSources.forEach((source) => source.close()));
             </button>
             <button
               type="button"
-              class="flex-1 rounded-xl bg-[#123b37] px-4 py-2.5 text-xs font-bold text-white shadow-xs hover:bg-emerald-950 transition focus:outline-none sm:flex-none disabled:opacity-50"
+              class="flex-1 rounded-xl bg-[#261c7a] px-4 py-2.5 text-xs font-bold text-white shadow-xs hover:bg-[#1e155c] active:bg-[#150f42] transition focus:outline-none sm:flex-none disabled:opacity-50 cursor-pointer"
               :disabled="busy"
               @click="openIngest"
             >
