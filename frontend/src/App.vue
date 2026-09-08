@@ -64,21 +64,12 @@ function exportAllData() {
   URL.revokeObjectURL(url);
 }
 
-async function openDocument(document: DocumentResponse & { source_result?: string }) {
+function openDocument(document: DocumentResponse & { source_result?: string }) {
   selectedDocumentId.value = document.id;
   selectedApproach.value = document.source_result ?? null;
   selectedLineIndex.value = 0;
   isDrawerOpen.value = false;
   void loadActivity(document.id);
-
-  if (
-    document.source_result &&
-    document.image_extraction_attempts?.some(
-      (a) => a.approach === document.source_result && a.status === "completed"
-    )
-  ) {
-    await openCandidateForReview(document.source_result);
-  }
 }
 
 function closeDocument() {

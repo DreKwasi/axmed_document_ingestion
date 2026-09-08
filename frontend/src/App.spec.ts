@@ -371,6 +371,7 @@ describe("App", () => {
     await rows[0].trigger("click");
     await flushPromises();
 
+    expect(api.openImageExtractionForReview).toHaveBeenCalledOnce();
     expect(api.openImageExtractionForReview).toHaveBeenCalledWith("image-source", "ocr_assisted");
     expect(wrapper.text()).not.toContain("Compare image extractions");
     expect(wrapper.text()).toContain("Dolostop 500");
