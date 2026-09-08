@@ -6,12 +6,14 @@ import { sourceDocumentUrl } from "@/api";
 const props = defineProps<{
   document: DocumentResponse;
   busy: boolean;
+  selectedApproach?: string | null;
 }>();
 
 const emit = defineEmits<{
   (event: "back"): void;
   (event: "openReview"): void;
   (event: "reextract"): void;
+  (event: "switchApproach", approach: string): void;
 }>();
 
 function statusKey(doc: DocumentResponse): "ready" | "review" | "needs_attention" | "processing" {
@@ -24,9 +26,6 @@ function statusKey(doc: DocumentResponse): "ready" | "review" | "needs_attention
 
 const statusLabel = computed(() => {
   if (props.document.status === "failed") return "Extraction failed";
-  if (props.document.status === "pending_review" && !props.document.quotation && props.document.image_extraction_attempts?.length) {
-    return "Compare extraction results";
-  }
   if (props.document.status === "rejected" || props.document.quotation?.review_status === "rejected") return "Rejected";
   if (props.document.status === "pending_review" && props.document.quotation?.has_corrections) return "Pending review after correction";
   const map = {
@@ -39,13 +38,24 @@ const statusLabel = computed(() => {
 });
 
 const sourceTitle = computed(() => {
-  if (props.document.source_name) return props.document.source_name;
-  const supplier = props.document.quotation?.supplier.name;
-  const ref = props.document.quotation?.quotation_reference;
-  if (supplier && ref) return `${supplier} · ${ref}`;
-  if (supplier) return `${supplier} quotation`;
-  const filename = props.document.filename.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ").trim();
-  return filename.replace(/\b\w/g, (c) => c.toUpperCase()) || "Untitled source";
+  let title = props.document.source_name;
+  if (!title) {
+    const supplier = props.document.quotation?.supplier.name;
+    const ref = props.document.quotation?.quotation_reference;
+    if (supplier && ref) title = `${supplier} · ${ref}`;
+    else if (supplier) title = `${supplier} quotation`;
+    else {
+      const filename = props.document.filename.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ").trim();
+      title = filename.replace(/\b\w/g, (c) => c.toUpperCase()) || "Untitled source";
+    }
+  }
+  if (props.selectedApproach && props.document.image_extraction_attempts?.length) {
+    const suffix = props.selectedApproach === "ocr_assisted" ? "OCR-assisted" : "Direct vision";
+    if (!title.includes(suffix)) {
+      title = `${title} — ${suffix}`;
+    }
+  }
+  return title;
 });
 
 const confidence = computed(() => {
@@ -63,6 +73,18 @@ const formatBadge = computed(() => {
   if (lower.endsWith(".eml")) return "EML";
   if (lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "IMAGE";
   return props.document.source_system?.toUpperCase() || "FILE";
+});
+
+const externalSystem = computed(() => {
+  const rawSystem = (props.document.source_system || "").trim();
+  const lower = rawSystem.toLowerCase();
+  const format = formatBadge.value.toLowerCase();
+  if (!rawSystem || ["pdf", "image", "eml", "email", "file", "unknown", format].includes(lower)) {
+    return null;
+  }
+  return props.document.schema_version
+    ? `${rawSystem} v${props.document.schema_version}`
+    : rawSystem;
 });
 
 const canReview = computed(() => {
@@ -132,6 +154,29 @@ const statusDotClass = computed(() => {
             {{ sourceTitle }}
           </h1>
 
+          <!-- Peer Reading Switcher (for image documents) -->
+          <div
+            v-if="document.image_extraction_attempts && document.image_extraction_attempts.length > 1"
+            class="mt-2 inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-slate-50 p-1 text-xs"
+          >
+            <span class="px-2 font-medium text-slate-500 text-[11px]">Reading:</span>
+            <button
+              v-for="attempt in document.image_extraction_attempts"
+              :key="attempt.approach"
+              type="button"
+              class="rounded-lg px-2.5 py-1 font-semibold transition"
+              :class="
+                (selectedApproach || document.image_extraction_attempts[0]?.approach) === attempt.approach
+                  ? 'bg-white text-emerald-900 shadow-2xs font-bold border border-slate-200/80'
+                  : 'text-slate-600 hover:text-slate-900'
+              "
+              :disabled="busy"
+              @click="emit('switchApproach', attempt.approach)"
+            >
+              {{ attempt.approach === "ocr_assisted" ? "OCR-assisted" : "Direct vision" }}
+            </button>
+          </div>
+
           <!-- Informational Metadata Line (Clean text & status dot, NOT buttons) -->
           <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-slate-600">
             <!-- Format Tag -->
@@ -141,6 +186,18 @@ const statusDotClass = computed(() => {
 
             <!-- Filename -->
             <span class="font-mono text-slate-500 text-[11px]">{{ document.filename }}</span>
+
+            <template v-if="externalSystem">
+              <span class="text-slate-300">·</span>
+              <span class="font-medium text-slate-600 text-[11px]">{{ externalSystem }}</span>
+            </template>
+
+            <template v-if="document.parsed_summary?.page_count">
+              <span class="text-slate-300">·</span>
+              <span class="text-slate-500 text-[11px]">
+                {{ document.parsed_summary.page_count }} {{ document.parsed_summary.page_count === 1 ? 'page' : 'pages' }}
+              </span>
+            </template>
 
             <span class="text-slate-300">·</span>
 
@@ -186,20 +243,9 @@ const statusDotClass = computed(() => {
         </div>
       </div>
 
-      <!-- Schema and Extraction Metadata Strip -->
+      <!-- Metadata Strip -->
       <div class="mt-5 border-t border-slate-100 pt-4">
-        <div class="grid grid-cols-2 gap-3 md:grid-cols-5 text-xs">
-          <div class="rounded-xl bg-slate-50 p-3 border border-slate-100">
-            <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Source Schema / System</p>
-            <p class="mt-1 font-semibold text-slate-800">
-              {{ document.source_system || "Standard" }}
-              <span v-if="document.schema_version" class="text-slate-500 text-[11px]">v{{ document.schema_version }}</span>
-              <span v-if="document.parsed_summary?.page_count" class="text-slate-500 text-[11px]">
-                · {{ document.parsed_summary.page_count }} pages
-              </span>
-            </p>
-          </div>
-
+        <div class="grid grid-cols-2 gap-3 md:grid-cols-4 text-xs">
           <div class="rounded-xl bg-slate-50 p-3 border border-slate-100">
             <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Supplier</p>
             <p class="mt-1 font-semibold text-slate-800 truncate" :title="document.quotation?.supplier.name ?? '—'">
@@ -213,15 +259,15 @@ const statusDotClass = computed(() => {
           <div class="rounded-xl bg-slate-50 p-3 border border-slate-100">
             <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Delivery Terms</p>
             <p class="mt-1 font-semibold text-slate-800">
-              {{ document.quotation?.commercial_terms.currency || "USD" }}
-              <span v-if="document.quotation?.commercial_terms.incoterm" class="text-slate-600">
+              {{ document.quotation?.commercial_terms?.currency || "USD" }}
+              <span v-if="document.quotation?.commercial_terms?.incoterm" class="text-slate-600">
                 · {{ document.quotation.commercial_terms.incoterm }}
               </span>
-              <span v-if="document.quotation?.commercial_terms.incoterm_named_place" class="text-slate-500 text-[11px]">
+              <span v-if="document.quotation?.commercial_terms?.incoterm_named_place" class="text-slate-500 text-[11px]">
                 ({{ document.quotation.commercial_terms.incoterm_named_place }})
               </span>
             </p>
-            <p v-if="document.quotation?.commercial_terms.incoterm_country" class="mt-1 text-[11px] text-slate-500">
+            <p v-if="document.quotation?.commercial_terms?.incoterm_country" class="mt-1 text-[11px] text-slate-500">
               Delivery country: {{ document.quotation.commercial_terms.incoterm_country }}
             </p>
             <p v-if="hsCodes.length" class="mt-1 text-[11px] text-slate-500">

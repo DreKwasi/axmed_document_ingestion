@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import type { DocumentResponse } from "@/types";
 import { sourceDocumentUrl } from "@/api";
 
@@ -9,16 +9,45 @@ const props = defineProps<{
 }>();
 
 const sourceRows = computed(() => props.documents.flatMap((document) => {
+  const isImage = document.source_system === "image" || /\.(png|jpg|jpeg)$/i.test(document.filename);
   const attempts = document.image_extraction_attempts ?? [];
-  if (attempts.length < 2) return [document];
-  return attempts.map((attempt) => ({
-    ...document,
-    source_result: attempt.approach,
-    source_name: `${sourceName(document)} — ${attempt.approach === "ocr_assisted" ? "OCR-assisted" : "Direct vision"}`,
-    extraction_confidence: attempt.extraction_confidence,
-    mapping_confidence: attempt.mapping_confidence,
-    product_counts: { extracted: attempt.product_count, failed: attempt.status === "failed" ? 1 : 0 },
-  }));
+  if (isImage) {
+    if (attempts.length >= 2) {
+      return attempts.map((attempt) => ({
+        ...document,
+        source_result: attempt.approach,
+        source_name: `${sourceName(document)} — ${attempt.approach === "ocr_assisted" ? "OCR-assisted" : "Direct vision"}`,
+        extraction_confidence: attempt.extraction_confidence ?? document.extraction_confidence,
+        mapping_confidence: attempt.mapping_confidence,
+        product_counts: { extracted: attempt.product_count, failed: attempt.status === "failed" ? 1 : 0 },
+      }));
+    }
+    const ocrAttempt = attempts.find((a) => a.approach === "ocr_assisted");
+    const visionAttempt = attempts.find((a) => a.approach === "vision_direct");
+    return [
+      {
+        ...document,
+        source_result: "ocr_assisted",
+        source_name: `${sourceName(document)} — OCR-assisted`,
+        extraction_confidence: ocrAttempt?.extraction_confidence ?? document.extraction_confidence,
+        mapping_confidence: ocrAttempt?.mapping_confidence,
+        product_counts: ocrAttempt
+          ? { extracted: ocrAttempt.product_count, failed: ocrAttempt.status === "failed" ? 1 : 0 }
+          : { extracted: 0, failed: 0 },
+      },
+      {
+        ...document,
+        source_result: "vision_direct",
+        source_name: `${sourceName(document)} — Direct vision`,
+        extraction_confidence: visionAttempt?.extraction_confidence ?? document.extraction_confidence,
+        mapping_confidence: visionAttempt?.mapping_confidence,
+        product_counts: visionAttempt
+          ? { extracted: visionAttempt.product_count, failed: visionAttempt.status === "failed" ? 1 : 0 }
+          : { extracted: 0, failed: 0 },
+      },
+    ];
+  }
+  return [document];
 }));
 
 const emit = defineEmits<{
@@ -102,10 +131,36 @@ function mappingConfidenceExplanation(doc: DocumentResponse): string {
   return `This is the average confidence that extracted values were assigned to the correct schema fields: ${score}%. Mapping issues are counted separately: ${issueCount}.`;
 }
 
+function closeTooltips() {
+  activeMappingTooltip.value = null;
+}
+
 function toggleMappingTooltip(documentId: string) {
   activeMappingTooltip.value = activeMappingTooltip.value === documentId ? null : documentId;
 }
 
+function handleDocumentClick(event: MouseEvent) {
+  const target = event.target as Element | null;
+  if (!target) return;
+  if (target.closest?.("[data-tooltip-container]")) return;
+  closeTooltips();
+}
+
+function handleDocumentKeydown(event: KeyboardEvent) {
+  if (event.key === "Escape") {
+    closeTooltips();
+  }
+}
+
+onMounted(() => {
+  document.addEventListener("click", handleDocumentClick);
+  document.addEventListener("keydown", handleDocumentKeydown);
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener("click", handleDocumentClick);
+  document.removeEventListener("keydown", handleDocumentKeydown);
+});
 </script>
 
 <template>
@@ -138,7 +193,7 @@ function toggleMappingTooltip(documentId: string) {
               v-for="doc in sourceRows"
               :key="`${doc.id}:${doc.source_result ?? 'source'}`"
               class="group cursor-pointer transition hover:bg-slate-50/80"
-              @click="emit('select', doc)"
+              @click="closeTooltips(); emit('select', doc)"
             >
               <!-- Source Name, File, Download -->
               <td class="px-6 py-4 align-top">
@@ -183,7 +238,7 @@ function toggleMappingTooltip(documentId: string) {
               </td>
 
               <td class="px-4 py-4 align-top font-semibold">
-                <span class="relative inline-flex">
+                <span class="relative inline-flex" data-tooltip-container>
                   <button
                     type="button"
                     :class="confidenceClass(doc.mapping_confidence?.band)"
