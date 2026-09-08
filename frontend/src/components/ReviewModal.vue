@@ -69,22 +69,22 @@ function onReject() {
 <template>
   <div
     v-if="isOpen"
-    class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-xs transition-opacity"
+    class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-3 sm:p-4 backdrop-blur-xs transition-opacity"
     role="dialog"
     aria-modal="true"
     aria-labelledby="review-modal-title"
   >
     <div
-      class="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl transition-all"
+      class="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-2xl border border-rule bg-surface p-4 sm:p-6 shadow-2xl transition-all"
     >
-      <div class="flex items-start justify-between border-b border-slate-100 pb-4">
+      <div class="flex items-start justify-between border-b border-rule pb-3 sm:pb-4">
         <div>
-          <h2 id="review-modal-title" class="text-xl font-bold text-slate-900">Review Source Decision</h2>
-          <p class="mt-1 text-xs text-slate-500">Every completed extraction requires a human decision.</p>
+          <h2 id="review-modal-title" class="text-lg sm:text-xl font-bold text-ink">Review Source Decision</h2>
+          <p class="mt-1 text-xs text-ink-3">Every completed extraction requires a human decision.</p>
         </div>
         <button
           type="button"
-          class="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition"
+          class="rounded-lg p-1.5 text-ink-3 hover:bg-surface-alt hover:text-ink transition cursor-pointer"
           aria-label="Close dialog"
           @click="emit('close')"
         >
@@ -92,36 +92,36 @@ function onReject() {
         </button>
       </div>
 
-      <div class="mt-4 rounded-xl bg-slate-50 p-3.5 text-xs text-slate-600 space-y-1 border border-slate-100">
-        <p><span class="font-semibold text-slate-700">Source:</span> {{ sourceTitle }}</p>
-        <p><span class="font-semibold text-slate-700">File:</span> {{ document.filename }}</p>
+      <div class="mt-4 rounded-xl bg-surface-alt p-3.5 text-xs text-ink-2 space-y-1 border border-rule">
+        <p><span class="font-semibold text-ink">Source:</span> {{ sourceTitle }}</p>
+        <p><span class="font-semibold text-ink">File:</span> {{ document.filename }}</p>
         <p v-if="document.quotation">
-          <span class="font-semibold text-slate-700">Products:</span> {{ document.quotation.line_items.length }} extracted
+          <span class="font-semibold text-ink">Products:</span> {{ document.quotation.line_items.length }} extracted
         </p>
       </div>
 
       <div class="mt-4">
-        <label for="review-note" class="block text-xs font-semibold text-slate-700 mb-1.5">
-          Review Note <span class="text-slate-400 font-normal">(optional)</span>
+        <label for="review-note" class="block text-xs font-semibold text-ink mb-1.5">
+          Review Note <span class="text-ink-3 font-normal">(optional)</span>
         </label>
         <textarea
           id="review-note"
           v-model="note"
           rows="3"
-          class="w-full rounded-xl border border-slate-300 p-3 text-sm text-slate-800 focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 focus:outline-none transition placeholder:text-slate-400"
+          class="w-full rounded-xl border border-rule-dark p-3 text-sm text-ink focus:border-axmed-primary focus:ring-1 focus:ring-axmed-primary focus:outline-none transition placeholder:text-ink-3 bg-surface"
           :aria-label="`Review note for ${document.filename}`"
           placeholder="Add a reason or context for this approval or rejection..."
         ></textarea>
       </div>
 
       <div class="mt-4">
-        <label for="rejection-reason" class="block text-xs font-semibold text-slate-700 mb-1.5">
-          Rejection reason <span class="text-rose-600">(required to reject)</span>
+        <label for="rejection-reason" class="block text-xs font-semibold text-ink mb-1.5">
+          Rejection reason <span class="text-down">(required to reject)</span>
         </label>
         <select
           id="rejection-reason"
           v-model="rejectionReason"
-          class="w-full rounded-xl border border-slate-300 bg-white p-3 text-sm text-slate-800 focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 focus:outline-none"
+          class="w-full rounded-xl border border-rule-dark bg-surface p-3 text-sm text-ink focus:border-axmed-primary focus:ring-1 focus:ring-axmed-primary focus:outline-none"
         >
           <option value="incorrect_extraction">Incorrect extraction</option>
           <option value="unreadable_source">Unreadable source</option>
@@ -132,14 +132,14 @@ function onReject() {
         </select>
       </div>
 
-      <div v-if="hasBlockingIssue" class="mt-3 rounded-lg bg-rose-50 border border-rose-200 p-3 text-xs text-rose-700">
+      <div v-if="hasBlockingIssue" class="mt-3 rounded-lg bg-down-bg border border-down/30 p-3 text-xs text-down">
         <span class="font-bold">Cannot approve:</span> Resolve error-level validation issues before approval.
       </div>
 
-      <div class="mt-6 flex items-center justify-end gap-3 border-t border-slate-100 pt-4">
+      <div class="mt-6 flex items-center justify-end gap-3 border-t border-rule pt-4">
         <button
           type="button"
-          class="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 transition focus:outline-none"
+          class="rounded-xl border border-rule-dark px-4 py-2.5 text-sm font-medium text-ink hover:bg-surface-alt transition focus:outline-none cursor-pointer"
           :disabled="busy"
           @click="emit('close')"
         >
@@ -147,7 +147,7 @@ function onReject() {
         </button>
         <button
           type="button"
-          class="rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm font-semibold text-rose-700 hover:bg-rose-100 transition focus:outline-none disabled:opacity-50"
+          class="rounded-xl border border-[#fecdca] bg-down-bg px-4 py-2.5 text-sm font-semibold text-down hover:bg-[#fee4e2] transition focus:outline-none disabled:opacity-50 cursor-pointer"
           :disabled="busy"
           @click="onReject"
         >
@@ -155,7 +155,7 @@ function onReject() {
         </button>
         <button
           type="button"
-          class="rounded-xl bg-emerald-700 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-800 transition focus:outline-none disabled:opacity-50"
+          class="rounded-xl bg-[#261c7a] px-5 py-2.5 text-sm font-semibold text-white shadow-xs hover:bg-[#1e155c] active:bg-[#150f42] transition focus:outline-none disabled:opacity-50 cursor-pointer"
           :disabled="busy || hasBlockingIssue"
           @click="onApprove"
         >
