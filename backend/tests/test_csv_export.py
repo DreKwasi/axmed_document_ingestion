@@ -72,3 +72,37 @@ def test_database_export_flattens_peer_image_attempts_as_distinct_sources(client
     assert {row["product"] for row in exported} == {"OCR product", "Vision product"}
     assert len({row["extraction_confidence"] for row in exported}) == 1
     assert exported[0]["extraction_confidence"] != ""
+
+
+def test_database_export_includes_failed_image_summary_and_excludes_active_attempt(client_settings):
+    client, settings = client_settings
+    image = (PROJECT_ROOT / "backend/evals/fixtures/ocr/scan_03_glare_partial_andina_p1.jpg").read_bytes()
+    document = client.post(
+        "/api/v1/documents", files={"files": ("glare.jpg", image, "image/jpeg")}
+    ).json()[0]
+    engine = create_sqlite_engine(settings.database_url)
+    factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+
+    with factory() as session:
+        stored = session.get(DocumentRecord, document["id"])
+        assert stored is not None
+        stored.status = "failed"
+        session.add_all([
+            ImageExtractionAttemptRecord(
+                document_id=document["id"],
+                approach="ocr_assisted",
+                status="failed",
+                failure_reason="No trustworthy text regions passed the OCR gate.",
+            ),
+            ImageExtractionAttemptRecord(
+                document_id=document["id"], approach="vision_direct", status="processing"
+            ),
+        ])
+        session.commit()
+
+    exported = rows(client.get("/api/v1/documents/export.csv"))
+
+    assert len(exported) == 1
+    assert exported[0]["source"] == "Glare — OCR-assisted"
+    assert exported[0]["product"] == ""
+    assert exported[0]["failure_reason"] == "No trustworthy text regions passed the OCR gate."

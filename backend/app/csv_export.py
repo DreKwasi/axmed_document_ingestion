@@ -236,6 +236,8 @@ def _source_results(document: dict[str, Any]) -> list[dict[str, Any]]:
             "mapping_confidence": attempt.get("mapping_confidence"),
             "mapping_issues": _attempt_mapping_issues(result),
             "quotation": result,
+            # Reviews apply to the promoted document result, not indiscriminately to both peers.
+            "reviews": [],
         })
     return results
 

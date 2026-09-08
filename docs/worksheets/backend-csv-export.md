@@ -39,7 +39,7 @@
 - Red/green: frontend component test first observed the obsolete Blob serializer, then passed against the backend URL.
 - `bin/agent-validate targeted`: 24 frontend tests and 97 backend tests passed; lint, Ruff, and mypy passed.
 - Focused Playwright download journey: 1 passed against the running API and frontend.
-- `bin/agent-validate full`: production build, 24 component tests, 5 Playwright journeys, 97 backend tests, and 5 evaluation tests passed; recorded evaluation run completed.
+- `bin/agent-validate full`: production build, 24 component tests, 5 Playwright journeys, 98 backend tests, and 5 evaluation tests passed; recorded evaluation run completed.
 
 ## Review findings and resolutions
 
@@ -48,6 +48,8 @@
 - Quality: regression coverage distinguishes ordinary documents from image peers and verifies the browser download seam.
 - Security/performance: the endpoint exposes only the established serialized user-facing document model, excludes active records, and performs one ordered document query; no raw upload or provider payload is returned.
 - UX: the filename remains `axmed-export.csv`, while source labels now correspond to the rows shown on Home.
+- Final two-axis review found that document reviews could be repeated on both peer image rows; attempt projections now omit those ambiguous reviews. Added coverage for a failed productless attempt and exclusion of an active sibling attempt.
+- Review observations about persisted confidence recomputation and typed projection models are broader persistence-model improvements: the current API serializer already derives those public values from stored extraction evidence, and changing that storage contract is outside this flattening fix.
 
 ## Docs updated
 
@@ -62,4 +64,4 @@
 
 ## Final commit and tag
 
-- Associated commits will be tagged `worksheet/backend-csv-export`.
+- Associated commits are tagged `worksheet/backend-csv-export`.
