@@ -13,6 +13,7 @@ import {
   uploadDocuments,
 } from "@/api";
 import type { DocumentResponse, ProcessingEvent } from "@/types";
+import { documentsToCsv } from "@/exportCsv";
 
 import ProductDetailDrawer from "./components/ProductDetailDrawer.vue";
 import ProductTable from "./components/ProductTable.vue";
@@ -41,6 +42,16 @@ const selectedLine = computed(() =>
 
 function openIngest() {
   fileInput.value?.click();
+}
+
+function exportAllData() {
+  const csv = documentsToCsv(documents.value);
+  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+  const link = window.document.createElement("a");
+  link.href = url;
+  link.download = "axmed-export.csv";
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 function openDocument(document: DocumentResponse) {
@@ -305,14 +316,24 @@ onBeforeUnmount(() => eventSources.forEach((source) => source.close()));
               Review uploaded supplier sources and open any source for its product breakdown.
             </p>
           </div>
-          <button
-            type="button"
-            class="w-full shrink-0 rounded-xl bg-[#123b37] px-4 py-2.5 text-xs font-bold text-white shadow-xs hover:bg-emerald-950 transition focus:outline-none sm:w-auto disabled:opacity-50"
-            :disabled="busy"
-            @click="openIngest"
-          >
-            {{ busy ? "Ingesting…" : "Ingest source" }}
-          </button>
+          <div class="flex w-full shrink-0 gap-2 sm:w-auto">
+            <button
+              type="button"
+              class="flex-1 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-xs font-bold text-slate-700 shadow-xs hover:bg-slate-50 transition focus:outline-none disabled:opacity-50 sm:flex-none"
+              :disabled="!documents.length"
+              @click="exportAllData"
+            >
+              Export CSV
+            </button>
+            <button
+              type="button"
+              class="flex-1 rounded-xl bg-[#123b37] px-4 py-2.5 text-xs font-bold text-white shadow-xs hover:bg-emerald-950 transition focus:outline-none sm:flex-none disabled:opacity-50"
+              :disabled="busy"
+              @click="openIngest"
+            >
+              {{ busy ? "Ingesting…" : "Ingest source" }}
+            </button>
+          </div>
         </section>
 
         <!-- Uploaded Sources Table -->

@@ -46,6 +46,28 @@ describe("App", () => {
     expect(api.fetchDocuments).toHaveBeenCalledOnce();
   });
 
+  it("exports the loaded source and product data as a CSV", async () => {
+    api.fetchDocuments.mockResolvedValue([{
+      id: "export-source", filename: "offer.json", status: "pending_review", source_system: "json",
+      quotation: { supplier: {}, commercial_terms: {}, line_items: [], revision: 1, system_decision: "pending_review", review_status: "pending_review", review_issues: [] },
+      reviews: [],
+    }]);
+    const createObjectURL = vi.fn(() => "blob:export");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+
+    const wrapper = mount(App);
+    await flushPromises();
+    await wrapper.get("button").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.findAll("button").find((button) => button.text() === "Export CSV")).toBeDefined();
+    expect(createObjectURL).toHaveBeenCalledOnce();
+    expect(click).toHaveBeenCalledOnce();
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:export");
+  });
+
   it("explains a failed extraction instead of showing an unexplained needs-attention state", () => {
     const wrapper = mount(SourceDetailHeader, {
       props: {
