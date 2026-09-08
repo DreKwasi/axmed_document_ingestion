@@ -56,12 +56,9 @@ def test_native_pdf_parser_rejects_non_pdf_content():
         parse_native_pdf(b'{"not": "a PDF"}')
 
 
-def test_native_pdf_parser_fails_fast_when_runtime_cli_is_missing(tmp_path, monkeypatch):
-    monkeypatch.setattr("app.extraction.pdf_parser.BACKEND_ROOT", tmp_path)
-    monkeypatch.setattr("app.extraction.pdf_parser.shutil.which", lambda _command: None)
-
-    with pytest.raises(PdfParseError, match="CLI is not installed"):
-        parse_native_pdf(b"%PDF-placeholder")
+def test_native_pdf_parser_fails_fast_when_pdf_content_is_corrupt():
+    with pytest.raises(PdfParseError, match="LiteParse could not read the uploaded PDF"):
+        parse_native_pdf(b"%PDF-corrupt-payload")
 
 
 def test_pdf_upload_persists_page_quality_metadata_and_never_exposes_native_text(client):

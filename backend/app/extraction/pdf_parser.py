@@ -1,25 +1,10 @@
 """LiteParse-backed PDF parser boundary with explicit page-level quality signals."""
 
-import shutil
+import dataclasses
 from dataclasses import dataclass
-from pathlib import Path
 
 from liteparse import LiteParse
 from liteparse.types import ParseError
-
-BACKEND_ROOT = Path(__file__).resolve().parents[2]
-
-
-def _liteparse_cli_path() -> str:
-    """Resolve the build-installed CLI without allowing a runtime npx download."""
-
-    installed_cli = BACKEND_ROOT / "node_modules" / ".bin" / "liteparse"
-    if installed_cli.is_file():
-        return str(installed_cli)
-    path_cli = shutil.which("liteparse")
-    if path_cli:
-        return path_cli
-    raise PdfParseError("The LiteParse CLI is not installed in the API runtime.")
 
 
 class PdfParseError(ValueError):
@@ -62,18 +47,18 @@ def parse_native_pdf(data: bytes) -> ParsedPdf:
 
     if not data.startswith(b"%PDF-"):
         raise PdfParseError("The uploaded content does not have a PDF signature.")
-    cli_path = _liteparse_cli_path()
     try:
-        result = LiteParse(cli_path=cli_path, install_if_not_available=False).parse(data, ocr_enabled=False, timeout=60)
+        parser = LiteParse(ocr_enabled=False, quiet=True)
+        result = parser.parse(data)
         pages = tuple(
             ParsedPdfPage(
-                page_number=page.pageNum,
+                page_number=page.page_num,
                 text=page.text.strip(),
                 native_text_characters=len(page.text),
                 quality=_quality(page.text),
                 width=page.width,
                 height=page.height,
-                raw_representation=page_data,
+                raw_representation={"page": page.page_num, **dataclasses.asdict(page)},
                 text_items=tuple(
                     {
                         "text": item.text,
@@ -83,12 +68,12 @@ def parse_native_pdf(data: bytes) -> ParsedPdf:
                         "height": item.height,
                         "confidence": item.confidence,
                     }
-                    for item in page.textItems
+                    for item in page.text_items
                 ),
             )
-            for page, page_data in zip(result.pages, (result.json or {}).get("pages", []), strict=False)
+            for page in result.pages
         )
-    except (ParseError, TimeoutError, OSError, ValueError) as error:
+    except (ParseError, TimeoutError, OSError, ValueError, RuntimeError) as error:
         raise PdfParseError("LiteParse could not read the uploaded PDF.") from error
     if not pages:
         raise PdfParseError("The uploaded PDF has no pages.")
