@@ -48,7 +48,7 @@ def test_clean_machine_readable_json_has_high_extraction_confidence():
 
     assert result.score == 100
     assert result.band == "High"
-    assert [factor.weight for factor in result.factors] == [20, 30, 25, 15, 10]
+    assert [factor.weight for factor in result.factors] == [20, 15, 15, 15, 35]
 
 
 def test_clean_native_pdf_has_no_format_penalty():
@@ -57,8 +57,7 @@ def test_clean_native_pdf_has_no_format_penalty():
     )
 
     assert result.score == 100
-    assert result.factors[0].reason == "The source format was accepted for extraction."
-    assert result.factors[1].reason == "The PDF supplied usable native text."
+    assert result.factors[0].reason == "The PDF supplied usable native text."
 
 
 def test_no_extraction_result_has_no_confidence_to_report():
@@ -80,6 +79,39 @@ def test_ocr_and_poor_parser_reduce_extraction_confidence_without_changing_mappi
     assert extraction.band == "Low"
     assert mapping.band in {"High", "Medium"}
     assert not mapping.issues
+
+
+def test_disagreeing_image_readings_materially_reduce_extraction_confidence():
+    result = assess_extraction_confidence(
+        ConfidenceSignals(
+            source_type="image",
+            ocr_used=True,
+            parser_quality="mixed",
+            evidence_scores=(0.70,),
+            ocr_scores=(0.604,),
+            cross_check_scores=(1 / 6,),
+        )
+    )
+
+    assert result.score <= 55
+    assert result.band == "Low"
+    assert any(factor.key == "cross_check" and factor.score == 17 for factor in result.factors)
+
+
+def test_agreeing_image_readings_preserve_confidence():
+    result = assess_extraction_confidence(
+        ConfidenceSignals(
+            source_type="image",
+            ocr_used=True,
+            parser_quality="mixed",
+            evidence_scores=(0.98,),
+            ocr_scores=(0.981,),
+            cross_check_scores=(1.0,),
+        )
+    )
+
+    assert result.score >= 70
+    assert any(factor.key == "cross_check" and factor.score == 100 for factor in result.factors)
 
 
 def test_conflicting_price_is_one_actionable_mapping_issue():

@@ -17,6 +17,7 @@ class ConfidenceSignals:
     parser_quality: str | None = None
     evidence_scores: tuple[float, ...] = ()
     ocr_scores: tuple[float, ...] = ()
+    cross_check_scores: tuple[float, ...] = ()
     has_extracted_result: bool = True
 
 
@@ -68,10 +69,6 @@ def assess_extraction_confidence(signals: ConfidenceSignals) -> ExtractionConfid
         return None
 
     source_type = (signals.source_type or "unknown").casefold()
-    # The file type itself is not evidence of a recovery problem. Deductions must
-    # come from observable readability, parser, OCR, or evidence signals below.
-    format_score = 100
-    format_reason = "The source format was accepted for extraction."
     if source_type == "json":
         readability_score, readability_reason = 100, "Structured JSON is directly machine-readable."
     elif source_type == "email":
@@ -108,12 +105,18 @@ def assess_extraction_confidence(signals: ConfidenceSignals) -> ExtractionConfid
         if signals.evidence_scores
         else "No numeric source-evidence score was available."
     )
+    cross_check_score = _average_score(signals.cross_check_scores, default=100)
+    cross_check_reason = (
+        f"Independent extraction results agreed at {cross_check_score}%."
+        if signals.cross_check_scores
+        else "No independent extraction disagreement was recorded."
+    )
     factors = (
-        ConfidenceFactor("format", "Source format", 20, format_score, format_reason),
-        ConfidenceFactor("readability", "Machine readability", 30, readability_score, readability_reason),
-        ConfidenceFactor("parser_quality", "Parser quality", 25, parser_score, parser_reason),
+        ConfidenceFactor("readability", "Machine readability", 20, readability_score, readability_reason),
+        ConfidenceFactor("parser_quality", "Parser quality", 15, parser_score, parser_reason),
         ConfidenceFactor("evidence_quality", "Recovered evidence", 15, evidence_score, evidence_reason),
-        ConfidenceFactor("ocr_quality", "OCR quality", 10, ocr_score, ocr_reason),
+        ConfidenceFactor("ocr_quality", "OCR quality", 15, ocr_score, ocr_reason),
+        ConfidenceFactor("cross_check", "Independent extraction agreement", 35, cross_check_score, cross_check_reason),
     )
     score = round(sum(factor.weight * factor.score for factor in factors) / 100)
     return ExtractionConfidence(score, _band(score), factors)

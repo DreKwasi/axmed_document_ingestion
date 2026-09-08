@@ -1431,12 +1431,26 @@ def serialize_document(session: Session, document: DocumentRecord) -> dict[str, 
             .order_by(ExtractedSourceFactRecord.created_at, ExtractedSourceFactRecord.id)
         )
     )
+    image_attempts = list(
+        session.scalars(
+            select(ImageExtractionAttemptRecord)
+            .where(ImageExtractionAttemptRecord.document_id == document.id)
+            .order_by(ImageExtractionAttemptRecord.approach)
+        )
+    )
+    attempt_product_counts = [
+        len(json.loads(attempt.result_json).get("line_items", []))
+        for attempt in image_attempts
+        if attempt.result_json
+    ]
+    cross_check_scores = _product_count_agreement(attempt_product_counts)
     extraction_confidence = assess_extraction_confidence(
         _extraction_confidence_signals(
             session,
             document,
             field_values,
             has_extracted_result=bool((stored_quotation_payload or {}).get("line_items")),
+            cross_check_scores=cross_check_scores,
         )
     )
     return {
@@ -1532,23 +1546,7 @@ def serialize_document(session: Session, document: DocumentRecord) -> dict[str, 
         "pdf_extraction": _serialize_pdf_extraction(session, document.id),
         "ocr": _serialize_ocr_job(session, document.id),
         "image_extraction_attempts": [
-            {
-                "approach": attempt.approach,
-                "status": attempt.status,
-                "result": json.loads(attempt.result_json) if attempt.result_json else None,
-                "product_count": len(json.loads(attempt.result_json).get("line_items", []))
-                if attempt.result_json
-                else 0,
-                "failure_reason": attempt.failure_reason,
-                "provider": attempt.provider,
-                "model": attempt.model,
-                "duration_ms": attempt.duration_ms,
-            }
-            for attempt in session.scalars(
-                select(ImageExtractionAttemptRecord)
-                .where(ImageExtractionAttemptRecord.document_id == document.id)
-                .order_by(ImageExtractionAttemptRecord.approach)
-            )
+            _serialize_image_attempt(session, document, attempt, cross_check_scores) for attempt in image_attempts
         ],
     }
 
@@ -1575,6 +1573,7 @@ def _extraction_confidence_signals(
     field_values: list[QuotationFieldValueRecord],
     *,
     has_extracted_result: bool,
+    cross_check_scores: tuple[float, ...] = (),
 ) -> ConfidenceSignals:
     """Build source-recovery signals from persisted parser, OCR, and evidence records."""
 
@@ -1629,8 +1628,80 @@ def _extraction_confidence_signals(
         parser_quality=parser_quality,
         evidence_scores=evidence_scores,
         ocr_scores=ocr_scores,
+        cross_check_scores=cross_check_scores,
         has_extracted_result=has_extracted_result,
     )
+
+
+def _product_count_agreement(product_counts: list[int]) -> tuple[float, ...]:
+    if len(product_counts) < 2:
+        return ()
+    largest = max(product_counts)
+    return (min(product_counts) / largest if largest else 1.0,)
+
+
+def _serialize_image_attempt(
+    session: Session,
+    document: DocumentRecord,
+    attempt: ImageExtractionAttemptRecord,
+    cross_check_scores: tuple[float, ...],
+) -> dict[str, Any]:
+    result = json.loads(attempt.result_json) if attempt.result_json else None
+    quotation = CanonicalQuotation.model_validate(result) if result else None
+    mapping = assess_mapping_confidence(quotation) if quotation else None
+    evidence_scores = () if quotation is None else tuple(
+        float(evidence.confidence)
+        for item in quotation.line_items
+        for evidence in item.evidence
+        if evidence.confidence > 0
+    )
+    base_signals = _extraction_confidence_signals(
+        session,
+        document,
+        [],
+        has_extracted_result=bool((result or {}).get("line_items")),
+        cross_check_scores=cross_check_scores,
+    )
+    extraction = assess_extraction_confidence(
+        ConfidenceSignals(
+            source_type=base_signals.source_type,
+            ocr_used=attempt.approach == "ocr_assisted",
+            parser_quality=base_signals.parser_quality,
+            evidence_scores=evidence_scores,
+            ocr_scores=base_signals.ocr_scores if attempt.approach == "ocr_assisted" else (),
+            cross_check_scores=cross_check_scores,
+            has_extracted_result=base_signals.has_extracted_result,
+        )
+    )
+    return {
+        "approach": attempt.approach,
+        "status": attempt.status,
+        "result": result,
+        "product_count": len((result or {}).get("line_items", [])),
+        "failure_reason": attempt.failure_reason,
+        "provider": attempt.provider,
+        "model": attempt.model,
+        "duration_ms": attempt.duration_ms,
+        "extraction_confidence": None if extraction is None else {
+            "score": extraction.score,
+            "band": extraction.band,
+            "factors": [
+                {
+                    "key": factor.key,
+                    "label": factor.label,
+                    "weight": factor.weight,
+                    "score": factor.score,
+                    "reason": factor.reason,
+                }
+                for factor in extraction.factors
+            ],
+        },
+        "mapping_confidence": None if mapping is None else {
+            "score": mapping.score,
+            "band": mapping.band,
+            "issue_count": len(mapping.issues),
+        },
+    }
 
 
 def _confidence_values(value: Any) -> list[float]:
