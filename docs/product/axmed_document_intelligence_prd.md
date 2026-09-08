@@ -1329,6 +1329,8 @@ The API returns each factor, weight, score, and plain-language reason. Glare, bl
 
 Confidence exists only for an assessable extraction result: at least one extracted product must be available for review. A source that fails with zero products returns `extraction_confidence: null` and `mapping_confidence: null`; it must display as failed, never as a low-percentage extraction.
 
+OCR quality has a second role as a hard safety gate before semantic extraction. The default line-confidence floor is 0.80 and at least 60% of detected lines must clear it. If the source fails that gate, no OCR-assisted or vision model extraction runs and the reviewer is told that nothing trustworthy could be extracted. If it passes, only accepted OCR text and accepted image regions may be supplied to the two semantic extraction paths. Thresholds are configurable and must be evaluated against degraded fixtures.
+
 ## 45.2 Mapping confidence: did the recovered value land in the correct schema field?
 
 Mapping confidence is calculated per canonical leaf and summarized for each product and source. It combines direct JSON-path grounding, row/cell or source-location association, provenance quality, deterministic reconciliation, and explicit conflicts. A clear `MOQ: 5,000 boxes` can therefore have high extraction confidence while its mapping to `quoted_quantity` has low mapping confidence.
