@@ -78,3 +78,7 @@
 ## 2026-09-08 — Upload failure observability
 
 - Application-level exception logging at externally exercised boundaries is essential: platform HTTP logs can report a 500 without retaining the Python traceback needed to diagnose it.
+
+## 2026-09-08 — Non-verbose code structure and clean section headers
+
+- Multi-line ASCII banner borders and duplicate table-of-contents lists in module docstrings add unnecessary verbosity without improving discoverability. Concise single-line headers (`# --- Section X: ... ---` and `// --- Section X: ... ---`) paired with focused 1-2 sentence docstrings establish clear architectural boundaries across backend and frontend code while keeping files crisp and readable.
