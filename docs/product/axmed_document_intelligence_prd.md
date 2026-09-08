@@ -1321,14 +1321,11 @@ Extraction confidence is a visible 0–100 score with a `High`, `Medium`, or `Lo
 
 | Factor | Weight | Examples |
 |---|---:|---|
-| Source format | 20% | machine-readable JSON scores above unstructured media |
 | Machine readability | 30% | native PDF text and clean email score above OCR-dependent media |
 | Parser quality | 25% | clean parse, mixed fallback, poor parse, or failed parse |
-| Grounded evidence quality | 15% | evidence recovered from the source, not model self-assessment |
-| OCR quality | 15% | OCR line confidence when OCR was used; neutral when it was not |
-| Independent extraction agreement | 35% | Agreement between OCR-assisted and direct-vision readings for images |
+| Text legibility | 45% | average OCR confidence plus the share of clearly legible text lines; neutral when OCR is not needed |
 
-The remaining weights are machine readability (20%), parser quality (15%), and grounded source evidence (15%). The API returns each factor, weight, score, and plain-language reason. Glare, blur, cropping, damaged scans, OCR use, weak OCR lines, parser warnings, and disagreement between the two image readings reduce extraction confidence. Canonical schema ambiguity never does. Each uploaded image exposes its OCR-assisted and direct-vision reading as a separate source result with its own score.
+The API returns each factor, weight, score, and plain-language reason. Glare, blur, cropping, damaged scans, OCR use, weak OCR lines, and parser warnings reduce extraction confidence. Product count, model self-assessment, OCR/vision agreement, and canonical schema ambiguity never affect it. Each uploaded image exposes its OCR-assisted and direct-vision reading as a separate source result; both share the same source-condition score because they read the same image.
 
 Confidence exists only for an assessable extraction result: at least one extracted product must be available for review. A source that fails with zero products returns `extraction_confidence: null` and `mapping_confidence: null`; it must display as failed, never as a low-percentage extraction.
 
@@ -1336,7 +1333,7 @@ Confidence exists only for an assessable extraction result: at least one extract
 
 Mapping confidence is calculated per canonical leaf and summarized for each product and source. It combines direct JSON-path grounding, row/cell or source-location association, provenance quality, deterministic reconciliation, and explicit conflicts. A clear `MOQ: 5,000 boxes` can therefore have high extraction confidence while its mapping to `quoted_quantity` has low mapping confidence.
 
-The API returns a deduplicated `mapping_issues` list containing only actionable field-level concerns. Each issue identifies its canonical field, product-detail section, code, severity, and message. A low OCR score does not create dozens of mapping issues by itself.
+The API returns a deduplicated `mapping_issues` list containing field-level mapping concerns. Every mapped field below 100% produces one issue identifying its canonical field, product-detail section, code, severity, and message; therefore a sub-100 mapping score never displays alongside `No issues found`. A low OCR score does not create mapping issues by itself.
 
 ## 45.3 Missing and derived values
 
