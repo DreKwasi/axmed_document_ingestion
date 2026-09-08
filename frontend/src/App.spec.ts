@@ -179,6 +179,29 @@ describe("App", () => {
     expect(wrapper.find("th").text()).not.toContain("Source");
   });
 
+  it("shows OCR and vision image readings as separate source results", async () => {
+    api.fetchDocuments.mockResolvedValue([{
+      id: "image-source", filename: "glare.jpg", source_name: "Glare quotation", status: "pending_review",
+      source_system: "image", reviews: [], quotation: null,
+      image_extraction_attempts: [
+        { approach: "ocr_assisted", status: "completed", result: { supplier: {}, line_items: [] }, product_count: 1,
+          extraction_confidence: { score: 49, band: "Low", factors: [] }, mapping_confidence: { score: null, band: null, issue_count: 0 } },
+        { approach: "vision_direct", status: "completed", result: { supplier: {}, line_items: [] }, product_count: 6,
+          extraction_confidence: { score: 61, band: "Low", factors: [] }, mapping_confidence: { score: null, band: null, issue_count: 0 } },
+      ],
+    }]);
+
+    const wrapper = mount(App);
+    await flushPromises();
+
+    const rows = wrapper.findAll("tbody tr");
+    expect(rows).toHaveLength(2);
+    expect(rows[0].text()).toContain("OCR-assisted");
+    expect(rows[1].text()).toContain("Direct vision");
+    expect(rows[0].findAll("td")[2].text()).toContain("No issues");
+    expect(rows[0].findAll("td")[2].text()).not.toContain("—");
+  });
+
   it("confirms and deletes an uploaded source from the table", async () => {
     api.fetchDocuments.mockResolvedValue([{
       id: "delete-me",

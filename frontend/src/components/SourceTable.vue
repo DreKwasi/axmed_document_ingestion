@@ -1,12 +1,25 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import type { DocumentResponse } from "@/types";
 import { sourceDocumentUrl } from "@/api";
 
-defineProps<{
+const props = defineProps<{
   documents: DocumentResponse[];
   busy: boolean;
 }>();
+
+const sourceRows = computed(() => props.documents.flatMap((document) => {
+  const attempts = document.image_extraction_attempts ?? [];
+  if (attempts.length < 2) return [document];
+  return attempts.map((attempt) => ({
+    ...document,
+    source_result: attempt.approach,
+    source_name: `${sourceName(document)} — ${attempt.approach === "ocr_assisted" ? "OCR-assisted" : "Direct vision"}`,
+    extraction_confidence: attempt.extraction_confidence,
+    mapping_confidence: attempt.mapping_confidence,
+    product_counts: { extracted: attempt.product_count, failed: attempt.status === "failed" ? 1 : 0 },
+  }));
+}));
 
 const emit = defineEmits<{
   (event: "select", document: DocumentResponse): void;
@@ -103,7 +116,7 @@ function toggleMappingTooltip(documentId: string) {
         <div>
           <h2 class="text-base font-bold text-slate-900">Uploaded sources</h2>
           <p class="mt-0.5 text-xs text-slate-500">
-            {{ documents.length }} total documents · Click any row to view extracted products and schema.
+            {{ documents.length }} total documents · {{ sourceRows.length }} extraction results · Click any row to view extracted products and schema.
           </p>
         </div>
       </div>
@@ -122,8 +135,8 @@ function toggleMappingTooltip(documentId: string) {
           </thead>
           <tbody class="divide-y divide-slate-100">
             <tr
-              v-for="doc in documents"
-              :key="doc.id"
+              v-for="doc in sourceRows"
+              :key="`${doc.id}:${doc.source_result ?? 'source'}`"
               class="group cursor-pointer transition hover:bg-slate-50/80"
               @click="emit('select', doc)"
             >
@@ -180,7 +193,7 @@ function toggleMappingTooltip(documentId: string) {
                     aria-label="Explain mapping confidence"
                     @click.stop="toggleMappingTooltip(doc.id)"
                   >
-                    {{ doc.mapping_confidence?.score != null ? `${doc.mapping_confidence.score}%` : "—" }}
+                    {{ doc.mapping_confidence?.score != null ? `${doc.mapping_confidence.score}%` : (doc.mapping_confidence?.issue_count === 0 ? "No issues" : "Pending") }}
                   </button>
                   <span
                     v-if="activeMappingTooltip === doc.id"

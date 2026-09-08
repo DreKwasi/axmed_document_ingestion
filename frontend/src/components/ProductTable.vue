@@ -171,7 +171,7 @@ function toggleMappingTooltip(index: number) {
                   aria-label="Explain mapping confidence"
                   @click.stop="toggleMappingTooltip(index)"
                 >
-                  {{ mappingConfidenceForLine(index) != null ? `${mappingConfidenceForLine(index)}%` : "—" }}
+                  {{ mappingConfidenceForLine(index) != null ? `${mappingConfidenceForLine(index)}%` : (mappingIssueCountForLine(index) === 0 ? "No issues" : "Needs review") }}
                 </button>
                 <span
                   v-if="activeMappingTooltip === index"

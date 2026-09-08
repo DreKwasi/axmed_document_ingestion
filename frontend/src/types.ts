@@ -73,6 +73,8 @@ export type ImageExtractionAttempt = {
   provider?: string | null;
   model?: string | null;
   duration_ms?: number | null;
+  extraction_confidence?: DocumentResponse["extraction_confidence"];
+  mapping_confidence?: DocumentResponse["mapping_confidence"];
 };
 
 export type DocumentResponse = {
@@ -126,6 +128,7 @@ export type DocumentResponse = {
   }>;
   ocr?: { id: string; status: string; selected_pages: number[] } | null;
   image_extraction_attempts?: ImageExtractionAttempt[];
+  source_result?: "ocr_assisted" | "vision_direct" | string;
 };
 
 export type ProcessingEvent = {
