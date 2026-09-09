@@ -22,3 +22,6 @@ test-results/
 .DS_Store
 tmp/
 scripts/
+
+# Local git hooks (developer-specific, not versioned)
+.githooks/
