@@ -17,6 +17,7 @@ const emit = defineEmits<{
   (event: "delete", document: DocumentResponse): void;
   (event: "preview", document: DocumentResponse): void;
   (event: "export"): void;
+  (event: "openHowItWorks"): void;
 }>();
 
 // --- Section 2: Peer Image Extraction Row Expansion ---
@@ -239,6 +240,13 @@ function mappingConfidenceLabel(doc: DocumentResponse): string {
             @click="emit('export')"
           >
             Export CSV
+          </button>
+          <button
+            type="button"
+            class="rounded-lg border border-rule-dark bg-white px-3.5 py-2 text-xs font-semibold text-ink-2 transition hover:bg-surface-alt cursor-pointer shadow-2xs"
+            @click="emit('openHowItWorks')"
+          >
+            How it works
           </button>
           <button
             type="button"

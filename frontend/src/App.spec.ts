@@ -353,11 +353,12 @@ describe("App", () => {
             strength: [],
             dosage_form: "tablet",
           },
-          quantity: { quoted_quantity: 5000, quoted_quantity_uom: "packs" },
+          quantity: { quoted_quantity: "5000", quoted_quantity_uom: "packs" },
           packaging: {},
           pricing: {
             currency: "USD",
             quoted_price: { amount: "12.50", uom: "pack" },
+            normalized_price: {},
             price_tiers: [],
             adjustments: [],
           },
@@ -1507,5 +1508,76 @@ describe("App", () => {
     expect(wrapper.text()).toContain("Material unusable");
     expect(wrapper.text()).not.toContain("This image extraction result has no products to review.");
     expect(api.openImageExtractionForReview).not.toHaveBeenCalled();
+  });
+
+  it("opens and closes the How It Works pipeline and confidence guide modal from header, home table, and detail view", async () => {
+    api.fetchDocuments.mockResolvedValue([{
+      id: "doc-guide",
+      filename: "quotation.pdf",
+      source_name: "Quotation guide",
+      status: "pending_review",
+      source_system: "pdf",
+      quotation: {
+        supplier: {},
+        commercial_terms: {},
+        line_items: [{ product: { trade_name: "Amox", inn: ["amoxicillin"] }, quantity: {}, pricing: { quoted_price: {} }, packaging: {}, supply: {}, regulatory: {} }],
+        revision: 1,
+        system_decision: "pending_review",
+        review_status: "pending_review",
+        review_issues: []
+      },
+      reviews: [],
+    }]);
+
+    const wrapper = mount(App);
+    await flushPromises();
+
+    expect(wrapper.text()).not.toContain("How It Works: Pipeline & Confidence Engine");
+
+    // 1. Open from Home table button
+    const homeGuideBtn = wrapper.findAll("button").find((btn) => btn.text() === "How it works");
+    expect(homeGuideBtn).toBeDefined();
+    await homeGuideBtn?.trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("How It Works: Pipeline & Confidence Engine");
+
+    // Close
+    let closeBtn = wrapper.findAll("button").find((btn) => btn.text().includes("Got it, close guide"));
+    await closeBtn?.trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("How It Works: Pipeline & Confidence Engine");
+
+    // Open document to navigate to Source Detail page
+    await wrapper.get("button.group").trigger("click");
+    await flushPromises();
+
+    // 2. Open from Detail page header button
+    const detailGuideBtn = wrapper.findAll("button").find((btn) => btn.text().includes("How it works"));
+    expect(detailGuideBtn).toBeDefined();
+    await detailGuideBtn?.trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("How It Works: Pipeline & Confidence Engine");
+
+    // Switch to scoring tab
+    const scoringTab = wrapper.findAll("button").find((btn) => btn.text().includes("Confidence Calculations"));
+    await scoringTab?.trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("The 5-Tier Deterministic Provenance Hierarchy");
+    expect(wrapper.text()).toContain("Tier 1");
+    expect(wrapper.text()).toContain("Tier 3");
+    expect(wrapper.text()).toContain("82% (Medium)");
+    expect(wrapper.text()).toContain("Commercial Math Bonus (+5%)");
+
+    // Close
+    closeBtn = wrapper.findAll("button").find((btn) => btn.text().includes("Got it, close guide"));
+    await closeBtn?.trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("How It Works: Pipeline & Confidence Engine");
+
+    // 3. Open from global top header
+    const headerGuideBtn = wrapper.get("#how-it-works-btn");
+    await headerGuideBtn.trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("How It Works: Pipeline & Confidence Engine");
   });
 });

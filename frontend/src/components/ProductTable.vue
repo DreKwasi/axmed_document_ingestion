@@ -20,6 +20,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (event: "selectLine", index: number): void;
+  (event: "openHowItWorks"): void;
 }>();
 
 // --- Section 2: Tooltip Controls ---
@@ -150,6 +151,13 @@ function mappingIssueCountForLine(index: number): number {
                 <span class="font-semibold text-ink">How mapping confidence is built</span>
                 <span class="mt-1 block">We score each mapped field based on whether the source value is attached to the correct schema field, has reliable source provenance, matches the expected value category, and agrees with related values. The product score is the average of those field scores.</span>
                 <span class="mt-1 block">Mapping issues are counted separately and do not represent missing fields.</span>
+                <button
+                  type="button"
+                  class="mt-2.5 inline-flex items-center gap-1 text-[11px] font-semibold text-axmed-primary hover:underline cursor-pointer"
+                  @click="showMappingDefinition = false; emit('openHowItWorks')"
+                >
+                  View pipeline flowchart & scoring guide →
+                </button>
               </span>
             </th>
             <th class="px-4 py-3.5 text-right"></th>
@@ -169,7 +177,7 @@ function mappingIssueCountForLine(index: number): number {
                 {{ item.product.trade_name || "Unnamed product" }}
               </span>
               <span class="mt-0.5 block text-ink-3 text-[11px]">
-                {{ item.product.inn.join(" · ") || "INN not specified" }}
+                {{ item.product.inn?.join(" · ") || "INN not specified" }}
               </span>
             </td>
 

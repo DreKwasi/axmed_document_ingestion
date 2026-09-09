@@ -19,6 +19,8 @@ import {
 import type { DocumentResponse, ProcessingEvent } from "@/types";
 
 import AxmedLogo from "./components/AxmedLogo.vue";
+import HowItWorksModal from "./components/HowItWorksModal.vue";
+import PipelinePageView from "./components/PipelinePageView.vue";
 import ProductDetailDrawer from "./components/ProductDetailDrawer.vue";
 import ProductTable from "./components/ProductTable.vue";
 import ReviewModal from "./components/ReviewModal.vue";
@@ -47,6 +49,8 @@ const extractionActivity = ref<Record<string, ProcessingEvent[]>>({});
 const eventSources = new Map<string, EventSource>();
 const selectedApproach = ref<string | null>(null);
 const previewDocument = ref<DocumentResponse | null>(null);
+const isHowItWorksOpen = ref(false);
+const currentView = ref<"documents" | "pipeline">("documents");
 
 const toast = ref<ToastNotification>({
   show: false,
@@ -130,8 +134,39 @@ function closeDocument(historyMode: HistoryMode = "push") {
   if (historyMode !== "none") writeSourceUrl(null, historyMode);
 }
 
+function openPipelinePage(historyMode: HistoryMode = "push") {
+  currentView.value = "pipeline";
+  isHowItWorksOpen.value = false;
+  if (historyMode !== "none") {
+    const url = new URL(window.location.href);
+    url.searchParams.set("view", "pipeline");
+    url.searchParams.delete("source");
+    url.searchParams.delete("approach");
+    window.history[`${historyMode}State`]({}, "", `${url.pathname}${url.search}${url.hash}`);
+  }
+}
+
+function closePipelinePage(historyMode: HistoryMode = "push") {
+  currentView.value = "documents";
+  if (historyMode !== "none") {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("view");
+    window.history[`${historyMode}State`]({}, "", `${url.pathname}${url.search}${url.hash}`);
+  }
+}
+
+function navigateHome() {
+  closePipelinePage();
+  closeDocument();
+}
+
 function restoreViewFromUrl() {
   const params = new URLSearchParams(window.location.search);
+  if (params.get("view") === "pipeline") {
+    openPipelinePage("none");
+    return;
+  }
+  currentView.value = "documents";
   const documentId = params.get("source");
   const document = documents.value.find((item) => item.id === documentId);
   if (!document) {
@@ -468,11 +503,38 @@ onBeforeUnmount(() => {
     <header class="border-b border-rule bg-surface sticky top-0 z-30 shadow-xs">
       <div class="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
         <div class="flex items-center gap-3">
-          <a href="#" class="flex items-center text-[#261c7a] hover:opacity-90 transition" @click.prevent="closeDocument()">
+          <a href="#" class="flex items-center text-[#261c7a] hover:opacity-90 transition" @click.prevent="navigateHome()">
             <AxmedLogo class="h-8 w-auto" />
           </a>
           <span class="h-4 w-px bg-rule"></span>
           <span class="text-xs font-semibold text-ink-3">Document Intelligence</span>
+        </div>
+
+        <div class="flex items-center gap-3">
+          <a
+            id="pipeline-architecture-btn"
+            href="#"
+            role="button"
+            class="inline-flex items-center gap-1.5 rounded-lg border border-rule bg-white px-3 py-1.5 text-xs font-semibold transition cursor-pointer shadow-2xs"
+            :class="currentView === 'pipeline' ? 'border-[#261c7a] bg-[#261c7a]/10 text-[#261c7a]' : 'text-ink-2 hover:bg-surface-alt hover:text-ink'"
+            @click.prevent="openPipelinePage()"
+          >
+            <span>Pipeline Architecture</span>
+            <span class="hidden sm:inline-block rounded bg-sky-100 px-1.5 py-0.2 text-[9px] font-bold text-sky-700">Interactive</span>
+          </a>
+
+          <a
+            id="how-it-works-btn"
+            href="#"
+            role="button"
+            class="inline-flex items-center gap-1.5 rounded-lg border border-rule bg-white px-3 py-1.5 text-xs font-semibold text-ink-2 hover:bg-surface-alt hover:text-ink transition cursor-pointer shadow-2xs"
+            @click.prevent="isHowItWorksOpen = true"
+          >
+            <svg class="h-3.5 w-3.5 text-axmed-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            How it works
+          </a>
         </div>
 
         <!-- Hidden input for file ingestion -->
@@ -498,8 +560,16 @@ onBeforeUnmount(() => {
         {{ errorMessage }}
       </p>
 
+      <!-- VIEW 3: DEDICATED PIPELINE & ARCHITECTURE PAGE -->
+      <div v-if="currentView === 'pipeline'">
+        <PipelinePageView
+          @back="closePipelinePage"
+          @close="closePipelinePage"
+        />
+      </div>
+
       <!-- VIEW 1: HOME PAGE (No source selected) -->
-      <div v-if="!selectedDocument">
+      <div v-else-if="!selectedDocument">
         <!-- Uploaded Sources Table -->
         <SourceTable
           :documents="documents"
@@ -509,6 +579,7 @@ onBeforeUnmount(() => {
           @delete="removeDocument"
           @preview="openSourcePreview"
           @export="exportAllData"
+          @open-how-it-works="isHowItWorksOpen = true"
         />
       </div>
 
@@ -524,6 +595,7 @@ onBeforeUnmount(() => {
           @open-review="isReviewModalOpen = true"
           @reextract="reextract(selectedDocument)"
           @preview="openSourcePreview(selectedDocument)"
+          @open-how-it-works="isHowItWorksOpen = true"
         />
 
         <section
@@ -605,6 +677,7 @@ onBeforeUnmount(() => {
             :field-reviews="selectedDocument.quotation.field_reviews"
             :selected-index="selectedLineIndex"
             @select-line="(idx) => { selectedLineIndex = idx; isDrawerOpen = true; }"
+            @open-how-it-works="isHowItWorksOpen = true"
           />
         </section>
 
@@ -646,6 +719,12 @@ onBeforeUnmount(() => {
       :document="previewDocument"
       :source-url="previewDocument ? sourceDocumentUrl(previewDocument.id) : ''"
       @close="previewDocument = null"
+    />
+
+    <HowItWorksModal
+      :open="isHowItWorksOpen"
+      @close="isHowItWorksOpen = false"
+      @open-page="openPipelinePage()"
     />
   </div>
 </template>
