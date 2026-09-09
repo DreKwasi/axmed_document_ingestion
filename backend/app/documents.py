@@ -1889,7 +1889,9 @@ def _serialize_image_attempt(
     base_signals = _extraction_confidence_signals(
         session,
         document,
-        has_extracted_result=bool((result or {}).get("line_items")),
+        # Image attempts are created only after OCR has completed. Extraction
+        # confidence describes that source recovery, not semantic product yield.
+        has_extracted_result=True,
     )
     extraction = assess_extraction_confidence(
         ConfidenceSignals(

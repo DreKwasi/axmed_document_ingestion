@@ -4,6 +4,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import sessionmaker
 
+from app.csv_export import documents_to_csv
 from app.database import create_sqlite_engine
 from app.extraction.contracts import CanonicalQuotation, LineItem, Product
 from app.models import DocumentRecord, ImageExtractionAttemptRecord
@@ -56,11 +57,11 @@ def test_database_export_flattens_peer_image_attempts_as_distinct_sources(client
         assert stored is not None
         stored.status = "pending_review"
         for approach, product_name in (
-            ("ocr_assisted", "OCR product"),
+            ("ocr_assisted", None),
             ("vision_direct", "Vision product"),
         ):
             result = CanonicalQuotation(
-                line_items=[LineItem(product=Product(trade_name=product_name))]
+                line_items=[] if product_name is None else [LineItem(product=Product(trade_name=product_name))]
             ).model_dump_json()
             session.add(ImageExtractionAttemptRecord(
                 document_id=document["id"], approach=approach, status="completed", result_json=result
@@ -73,7 +74,7 @@ def test_database_export_flattens_peer_image_attempts_as_distinct_sources(client
         "Glare — OCR-assisted",
         "Glare — Direct vision",
     ]
-    assert {row["product"] for row in exported} == {"OCR product", "Vision product"}
+    assert {row["product"] for row in exported} == {"", "Vision product"}
     assert len({row["extraction_confidence"] for row in exported}) == 1
     assert exported[0]["extraction_confidence"] != ""
 
@@ -111,3 +112,28 @@ def test_database_export_includes_failed_image_summary_and_excludes_active_attem
     assert exported[0]["review_status"] == "Extraction failed"
     assert exported[0]["product"] == ""
     assert exported[0]["failure_reason"] == "No trustworthy text regions passed the OCR gate."
+
+
+def test_csv_preserves_confidence_for_a_zero_product_image_attempt():
+    exported = list(csv.DictReader(io.StringIO(documents_to_csv([
+        {
+            "filename": "glare.jpg",
+            "source_name": "Glare",
+            "status": "pending_review",
+            "extraction_confidence": {"score": 100, "factors": []},
+            "image_extraction_attempts": [
+                {
+                    "approach": "ocr_assisted",
+                    "status": "completed",
+                    "product_count": 0,
+                    "result": {"line_items": []},
+                    "extraction_confidence": {"score": 100, "factors": []},
+                }
+            ],
+        }
+    ]))))
+
+    assert len(exported) == 1
+    assert exported[0]["source"] == "Glare — OCR-assisted"
+    assert exported[0]["extraction_confidence"] == "100"
+    assert exported[0]["extraction_confidence_explanation"] == ""
