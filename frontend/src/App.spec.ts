@@ -94,6 +94,32 @@ describe("App", () => {
     expect(wrapper.text()).not.toContain("Needs attention");
   });
 
+  it("preserves rejected as the source detail status", () => {
+    const wrapper = mount(SourceDetailHeader, {
+      props: {
+        busy: false,
+        document: {
+          id: "rejected-source",
+          filename: "andina.pdf",
+          status: "rejected",
+          quotation: {
+            supplier: { name: "Farmaceutica Andina S.A.S." },
+            commercial_terms: {},
+            line_items: [],
+            revision: 2,
+            system_decision: "rejected",
+            review_status: "rejected",
+            review_issues: [],
+          },
+          reviews: [{ action: "rejected", prior_revision: 1, resulting_revision: 2, rejection_reason: "incorrect_extraction", patches: [] }],
+        },
+      },
+    });
+
+    expect(wrapper.text()).toContain("Rejected");
+    expect(wrapper.text()).not.toContain("Needs review");
+  });
+
   it("displays page count in the metadata line and omits redundant source system card for PDFs", () => {
     const wrapper = mount(SourceDetailHeader, {
       props: {
@@ -1017,6 +1043,8 @@ describe("App", () => {
     );
     expect(wrapper.text()).toContain("Source Rejected");
     expect(wrapper.text()).toContain("Rejected");
+    expect(wrapper.text()).toContain("Uploaded sources");
+    expect(wrapper.text()).not.toContain("Back to sources");
   });
 
   it("displays confidence and identifies low-confidence extracted fields as review issues", async () => {

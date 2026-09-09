@@ -378,6 +378,7 @@ async function handleReject(payload: { reason: string; note?: string }) {
     );
     isReviewModalOpen.value = false;
     showToast("Source Rejected", `Quotation marked as rejected (${payload.reason}).`, "info");
+    closeDocument();
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : "Rejection failed.";
   } finally {

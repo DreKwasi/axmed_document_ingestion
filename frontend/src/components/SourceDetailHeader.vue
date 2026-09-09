@@ -42,10 +42,10 @@ function isRejected(doc: DocumentResponse): boolean {
  * @param doc Target document response.
  * @returns Categorical status key.
  */
-function statusKey(doc: DocumentResponse): "approved" | "preapproved" | "review" | "failed" | "processing" {
+function statusKey(doc: DocumentResponse): "approved" | "preapproved" | "review" | "rejected" | "failed" | "processing" {
   if (isApproved(doc)) return "approved";
   if (doc.status === "failed") return "failed";
-  if (isRejected(doc)) return "review";
+  if (isRejected(doc)) return "rejected";
   if (doc.status === "pending_review") {
     return doc.mapping_confidence?.score != null && doc.mapping_confidence.issue_count === 0
       ? "preapproved"
@@ -57,12 +57,13 @@ function statusKey(doc: DocumentResponse): "approved" | "preapproved" | "review"
 /** Human-readable status label */
 const statusLabel = computed(() => {
   if (props.document.status === "failed") return "Extraction failed";
-  if (isRejected(props.document)) return "Needs review";
+  if (isRejected(props.document)) return "Rejected";
   if (isApproved(props.document)) return "Approved";
   const map = {
     approved: "Approved",
     preapproved: "Pre-approved",
     review: "Needs review",
+    rejected: "Rejected",
     failed: "Extraction failed",
     processing: "Processing",
   };
@@ -159,6 +160,7 @@ const statusTextClass = computed(() => {
     approved: "text-emerald-800",
     preapproved: "text-sky-800",
     review: "text-amber-900",
+    rejected: "text-rose-800",
     failed: "text-rose-800",
     processing: "text-ink-3",
   };
@@ -171,6 +173,7 @@ const statusDotClass = computed(() => {
     approved: "bg-emerald-600",
     preapproved: "bg-sky-600",
     review: "bg-amber-500",
+    rejected: "bg-rose-600",
     failed: "bg-rose-600",
     processing: "bg-ink-3 animate-pulse",
   };

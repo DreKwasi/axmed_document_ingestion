@@ -64,7 +64,7 @@ const allSourceRows = computed(() => props.documents.flatMap((document) => {
   return [document];
 }));
 
-type StatusFilter = "all" | "preapproved" | "review" | "approved" | "failed" | "processing";
+type StatusFilter = "all" | "preapproved" | "review" | "approved" | "rejected" | "failed" | "processing";
 
 const statusFilter = ref<StatusFilter>("all");
 const sourceRows = computed(() => (
@@ -142,10 +142,10 @@ function isRejected(doc: DocumentResponse): boolean {
   return doc.status === "rejected" || doc.quotation?.review_status === "rejected";
 }
 
-function statusKey(doc: DocumentResponse): "approved" | "preapproved" | "review" | "failed" | "processing" {
+function statusKey(doc: DocumentResponse): "approved" | "preapproved" | "review" | "rejected" | "failed" | "processing" {
   if (isApproved(doc)) return "approved";
   if (doc.status === "failed") return "failed";
-  if (isRejected(doc)) return "review";
+  if (isRejected(doc)) return "rejected";
   if (doc.status === "pending_review") {
     return doc.mapping_confidence?.score != null && doc.mapping_confidence.issue_count === 0
       ? "preapproved"
@@ -156,12 +156,13 @@ function statusKey(doc: DocumentResponse): "approved" | "preapproved" | "review"
 
 function statusLabel(doc: DocumentResponse): string {
   if (doc.status === "failed") return "Extraction failed";
-  if (isRejected(doc)) return "Needs review";
+  if (isRejected(doc)) return "Rejected";
   if (isApproved(doc)) return "Approved";
   const map = {
     approved: "Approved",
     preapproved: "Pre-approved",
     review: "Needs review",
+    rejected: "Rejected",
     failed: "Extraction failed",
     processing: "Processing",
   };
@@ -173,6 +174,7 @@ function statusClasses(doc: DocumentResponse): string {
     approved: "bg-emerald-50 text-emerald-800 border-emerald-300",
     preapproved: "bg-sky-50 text-sky-800 border-sky-300",
     review: "bg-amber-50 text-amber-900 border-amber-300",
+    rejected: "bg-rose-50 text-rose-800 border-rose-300",
     failed: "bg-rose-50 text-rose-800 border-rose-300",
     processing: "bg-surface-alt text-ink-3 border-rule",
   };
@@ -229,6 +231,7 @@ function mappingConfidenceLabel(doc: DocumentResponse): string {
             <option value="preapproved">Pre-approved</option>
             <option value="review">Needs review</option>
             <option value="approved">Approved</option>
+            <option value="rejected">Rejected</option>
             <option value="failed">Extraction failed</option>
             <option value="processing">Processing</option>
           </select>
