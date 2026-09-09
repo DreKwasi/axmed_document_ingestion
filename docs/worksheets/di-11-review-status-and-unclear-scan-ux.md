@@ -30,6 +30,8 @@
 - [x] Persist source-detail selection and active image reading in the URL, restoring it on refresh and browser navigation.
 - [x] Revert the synthetic mapping-confidence fallback and its generated provenance warnings at the user's request.
 - [x] Standardize all frontend dropdowns with a shared control style and custom chevron.
+- [x] Preserve Rejected as a distinct table/filter state and return Home after a successful persisted rejection.
+- [x] Derive a base pack price from a quoted unit price only when its UOM matches the packaging unit and units-per-pack is positive.
 - [x] Use the document mapping score for product rows whose field-level assessment is absent or incomplete, without changing JSON extraction.
 - [x] Inherit document-level currency into line-item pricing when a line has no explicit override, with a defensive frontend fallback.
 - [x] Soften source-row typography and contrast with medium-weight titles, quieter filenames, and restrained file-type labels.
