@@ -1,4 +1,5 @@
 import sys
+import threading
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -89,12 +90,16 @@ def test_unexpected_upload_failure_is_logged_and_returns_correlated_cors_respons
     assert "supplier-private-name" not in observed["message"]
 
 
-def test_multi_file_upload_schedules_each_pdf_with_api_background_processing(tmp_path, monkeypatch):
+def test_multi_file_upload_submits_each_pdf_to_a_concurrent_background_worker(tmp_path, monkeypatch):
     observed: list[tuple[str, str]] = []
     log_messages: list[str] = []
+    both_started = threading.Barrier(2)
+    both_finished = threading.Event()
 
     def capture_extraction(_session, extraction_id, _settings):
         observed.append(("pdf", extraction_id))
+        both_started.wait(timeout=2)
+        both_finished.set()
 
     monkeypatch.setattr("app.api.consume_pdf_extraction", capture_extraction)
     monkeypatch.setattr(
@@ -119,12 +124,13 @@ def test_multi_file_upload_schedules_each_pdf_with_api_background_processing(tmp
                 ("files", ("second.pdf", pdf, "application/pdf")),
             ],
         )
+        assert both_finished.wait(timeout=2), "both PDF worker bodies should start without serial waiting"
 
     assert response.status_code == 201, response.text
     assert len(response.json()) == 2
     assert len(observed) == 2
     assert observed[0][1] != observed[1][1]
-    assert sum("Scheduling background task: PDF extraction" in message for message in log_messages) == 2
+    assert sum("Submitting concurrent job: PDF extraction" in message for message in log_messages) == 2
     assert sum("Background task STARTED: PDF extraction" in message for message in log_messages) == 2
     assert sum("Background task COMPLETED: PDF extraction" in message for message in log_messages) == 2
 

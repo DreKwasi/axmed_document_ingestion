@@ -9,6 +9,14 @@ from app.config import Config
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
+@pytest.fixture(autouse=True)
+def disable_live_model_provider_credentials(monkeypatch: pytest.MonkeyPatch):
+    """Keep the deterministic test suite offline despite developer shell credentials."""
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+
 @pytest.fixture
 def client(tmp_path: Path):
     settings = Config(
