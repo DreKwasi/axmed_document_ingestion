@@ -1,10 +1,9 @@
 """Tests for LangChain + Gemini 3.1 Flash Lite semantic reasoning across all extraction sources."""
 
-import base64
 import json
 from decimal import Decimal
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
@@ -25,14 +24,8 @@ from app.extraction.contracts import (
     Supply,
 )
 from app.extraction.email_processing import consume_email_extraction
-from app.extraction.json import JsonSemanticExtraction, JsonSourceFact
-from app.extraction.llm import (
-    JsonFactAudit,
-    LangChainSemanticExtractor,
-    SemanticEnrichment,
-    SemanticLineItemEnrichment,
-    merge_semantic_enrichment,
-)
+from app.extraction.llm import extract_semantics
+from app.extraction.semantic_agent import SemanticExtractionResult
 from app.models import (
     DocumentRecord,
     EmailExtractionRecord,
@@ -44,6 +37,48 @@ from app.models import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 EMAIL_FIXTURE = PROJECT_ROOT / "backend/evals/fixtures/documents/RE_RFQ-2026-0244_Novara_quotation.eml"
+
+
+def semantic_agent_result(quotation: CanonicalQuotation, duration_ms: int = 100) -> SemanticExtractionResult:
+    return SemanticExtractionResult(
+        quotation=quotation,
+        source_facts=(),
+        unresolved_issues=(),
+        validation_count=1,
+        model_call_count=2,
+        termination_reason="validated",
+        telemetry=({"duration_ms": duration_ms, "model": "gemini-3.1-flash-lite"},),
+    )
+
+
+def test_semantic_extractor_configures_langchain_fallback_models_in_priority_order():
+    configured: dict[str, object] = {}
+
+    def stub_investigation(model, _request, *, provider_name, fallback_models, **_kwargs):
+        configured["primary"] = model
+        configured["provider_name"] = provider_name
+        configured["fallback_models"] = fallback_models
+        quotation = CanonicalQuotation(line_items=[LineItem(product=Product(trade_name="Fallback"))])
+        return semantic_agent_result(quotation)
+
+    direct = object()
+    openrouter_gemini = object()
+    openrouter_oss = object()
+    with patch("app.extraction.llm.ChatGoogleGenerativeAI", return_value=direct):
+        with patch("app.extraction.llm.ChatOpenRouter", side_effect=[openrouter_gemini, openrouter_oss]):
+            with patch("app.extraction.llm.run_semantic_investigation", side_effect=stub_investigation):
+                result = extract_semantics(
+                    Config(gemini_api_key="direct-key", openrouter_api_key="openrouter-key"),
+                    {"pages": []},
+                    source_type="pdf",
+                )
+
+    assert result.quotation.line_items[0].product.trade_name == "Fallback"
+    assert configured == {
+        "primary": direct,
+        "provider_name": "google-gemini",
+        "fallback_models": (openrouter_gemini, openrouter_oss),
+    }
 
 
 def test_product_dosage_form_preserves_the_complete_source_phrase():
@@ -77,178 +112,6 @@ def test_packaging_reads_explicit_quantity_without_relabeling_the_source_basis()
     assert unchanged.packaging.unit_label == "box"
 
     assert Strength(ingredient="Clavulanic acid (as potassium clavulanate)").ingredient == "Clavulanic acid"
-
-
-def test_semantic_enrichment_fills_missing_note_facts_without_replacing_table_values():
-    quotation = CanonicalQuotation(
-        line_items=[
-            LineItem(
-                source_key="06",
-                product=Product(trade_name="Salbudina 2/5"),
-                supply=Supply(shelf_life_months=None),
-            )
-        ]
-    )
-    enrichment = SemanticEnrichment(
-        line_items=[
-            SemanticLineItemEnrichment(
-                source_key="06",
-                supply=Supply(shelf_life_months=24, minimum_remaining_shelf_life_percent=Decimal("80")),
-                regulatory={
-                    "registration_reference": "FDA/GH/VAR/2026/0442",
-                    "regulatory_status": "under assessment",
-                },
-            )
-        ]
-    )
-
-    merged = merge_semantic_enrichment(quotation, enrichment)
-
-    assert merged.line_items[0].supply.shelf_life_months == 24
-    assert merged.line_items[0].supply.minimum_remaining_shelf_life_percent == Decimal("80")
-    assert merged.line_items[0].regulatory.registration_reference == "FDA/GH/VAR/2026/0442"
-
-    existing_table_value = CanonicalQuotation(
-        line_items=[LineItem(source_key="06", supply=Supply(shelf_life_months=36))]
-    )
-    unchanged = merge_semantic_enrichment(existing_table_value, enrichment)
-    assert unchanged.line_items[0].supply.shelf_life_months == 36
-
-
-def test_langchain_email_extraction_resolves_corrections_and_supersession():
-    extractor = LangChainSemanticExtractor(api_key="test-fake-key", model="gemini-3.1-flash-lite")
-
-    mock_quotation = CanonicalQuotation(
-        document_type="email_offer",
-        quotation_reference="NOV-2026-001",
-        supplier=Supplier(name="Novara Farma"),
-        line_items=[
-            LineItem(
-                product=Product(trade_name="Azimax 250"),
-                pricing=Pricing(
-                    currency="EUR",
-                    quoted_price=QuotedPrice(amount=Decimal("0.134"), uom="tablet"),
-                ),
-            )
-        ],
-    )
-
-    mock_llm_chain = MagicMock()
-    mock_llm_chain.invoke.return_value = mock_quotation
-    extractor._llm = MagicMock()
-    extractor._llm.with_structured_output.return_value = mock_llm_chain
-
-    context = {
-        "subject": "RE: RFQ-2026-0244 - Novara Farma Quotation",
-        "body_text": (
-            "Initial price: Azimax 250 is EUR 0.128 per tablet.\nCorrection: Azimax 250 is EUR 0.134 per tablet."
-        ),
-    }
-    quotation, telemetry = extractor.extract_canonical_quotation(context, source_type="email")
-
-    assert quotation.supplier.name == "Novara Farma"
-    assert quotation.line_items[0].pricing.quoted_price.amount == Decimal("0.134")
-    assert telemetry["provider"] == "google-gemini"
-    assert telemetry["model"] == "gemini-3.1-flash-lite"
-    assert telemetry["source_type"] == "email"
-    system_prompt = mock_llm_chain.invoke.call_args.args[0][0].content
-    assert "quotation_reference" in system_prompt
-    assert "rfq_reference" in system_prompt
-    assert "supplier.country" in system_prompt
-    assert "product.country_of_origin" in system_prompt
-    assert "all items or products are manufactured" in system_prompt
-    assert "incoterm_country" in system_prompt
-    assert "notes, footnotes, appendices, and shipping/regulatory sections" in system_prompt
-    assert "shelf_life_months" in system_prompt
-    assert "80 percent as 80, not 0.80" in system_prompt
-    assert "extraction_method `llm_extraction`, never `manual`" in system_prompt
-
-
-def test_langchain_ocr_extraction_sends_original_image_with_transcription_aid():
-    extractor = LangChainSemanticExtractor(api_key="test-fake-key", model="gemini-3.1-flash-lite")
-    mock_quotation = CanonicalQuotation(
-        line_items=[LineItem(product=Product(trade_name="Visual product"))]
-    )
-    mock_llm_chain = MagicMock()
-    mock_llm_chain.invoke.return_value = mock_quotation
-    extractor._llm = MagicMock()
-    extractor._llm.with_structured_output.return_value = mock_llm_chain
-
-    extractor.extract_canonical_quotation(
-        {"pages": [{"page_number": 1, "text": "Product Price\nOxytocin USD 0.128"}]},
-        source_type="ocr",
-        source_media=b"original-image",
-        source_media_type="image/png",
-    )
-
-    messages = mock_llm_chain.invoke.call_args.args[0]
-    assert "transcription aid" in messages[0].content
-    assert "bounding box" not in messages[0].content.lower()
-    assert messages[1].content[0]["type"] == "text"
-    assert messages[1].content[1] == {
-        "type": "image",
-        "base64": base64.b64encode(b"original-image").decode("ascii"),
-        "mime_type": "image/png",
-    }
-
-
-def test_langchain_json_extraction_returns_source_grounded_facts():
-    extractor = LangChainSemanticExtractor(api_key="test-fake-key", model="gemini-3.1-flash-lite")
-
-    result = JsonSemanticExtraction(
-        quotation={"quotation_reference": "Q-123", "supplier": {"name": "Acme"}},
-        source_facts=[
-            JsonSourceFact(
-                label="Quotation reference",
-                value="Q-123",
-                source_path="$.ref",
-                canonical_field="quotation_reference",
-            )
-        ],
-    )
-
-    mock_llm_chain = MagicMock()
-    mock_llm_chain.invoke.return_value = result
-    audit_chain = MagicMock()
-    audit_chain.invoke.return_value = JsonFactAudit(
-        source_facts=[
-            JsonSourceFact(
-                label="Supplier",
-                value="Acme",
-                source_path="$.vendor",
-                canonical_field="supplier.name",
-            )
-        ]
-    )
-    extractor._llm = MagicMock()
-    extractor._llm.with_structured_output.side_effect = [mock_llm_chain, audit_chain]
-
-    extraction, telemetry = extractor.extract_json_quotation(
-        {"ref": "Q-123", "vendor": "Acme", "cur": "USD"},
-        {"paths": [], "candidate_collections": []},
-        source_document="source.json",
-        invalid_source_paths=[],
-    )
-
-    assert telemetry["provider"] == "google-gemini"
-    assert extraction.quotation.quotation_reference == "Q-123"
-    assert [fact.source_path for fact in extraction.source_facts] == ["$.ref", "$.vendor"]
-
-    system_prompt = mock_llm_chain.invoke.call_args.args[0][0].content
-    assert "Canonical field dictionary" in system_prompt
-    assert "pack_description" in system_prompt
-    assert "price_per_uom" in system_prompt
-    assert "minimum_order_quantity_packs" in system_prompt
-    assert "Pair combination strengths with INNs in source order" in system_prompt
-    assert "Final completeness lookup" in system_prompt
-    assert "inspect every source leaf" in system_prompt
-
-    audit_prompt = audit_chain.invoke.call_args.args[0][0].content
-    assert "Return only source facts omitted by the primary extraction" in audit_prompt
-    assert "$.ref" in audit_chain.invoke.call_args.args[0][1].content
-    assert '"populated_canonical_fields_without_source_fact": [\n    "supplier.name"' in (
-        audit_chain.invoke.call_args.args[0][1].content
-    )
 
 
 def test_email_worker_executes_langchain_when_gemini_configured(tmp_path):
@@ -293,8 +156,8 @@ def test_email_worker_executes_langchain_when_gemini_configured(tmp_path):
         ],
     )
 
-    with patch("app.extraction.llm.LangChainSemanticExtractor.extract_canonical_quotation") as mock_extract:
-        mock_extract.return_value = (mock_quotation, {"duration_ms": 120, "model": "gemini-3.1-flash-lite"})
+    with patch("app.extraction.llm.extract_semantics") as mock_extract:
+        mock_extract.return_value = semantic_agent_result(mock_quotation, 120)
         with session_factory() as session:
             consume_email_extraction(session, extraction_id, settings)
 
@@ -365,14 +228,10 @@ def test_pdf_worker_executes_langchain_when_gemini_configured(tmp_path):
         ],
     )
 
-    with patch("app.extraction.llm.LangChainSemanticExtractor.extract_canonical_quotation") as mock_extract:
-        mock_extract.return_value = (mock_quotation, {"duration_ms": 145, "model": "gemini-3.1-flash-lite"})
-        with patch(
-            "app.extraction.llm.LangChainSemanticExtractor.enrich_line_items_from_semantic_sections"
-        ) as mock_enrich:
-            mock_enrich.return_value = (SemanticEnrichment(), {"duration_ms": 20})
-            with session_factory() as session:
-                consume_pdf_extraction(session, extraction_id, settings)
+    with patch("app.extraction.llm.extract_semantics") as mock_extract:
+        mock_extract.return_value = semantic_agent_result(mock_quotation, 145)
+        with session_factory() as session:
+            consume_pdf_extraction(session, extraction_id, settings)
 
     with session_factory() as session:
         doc = session.get(DocumentRecord, doc.id)
@@ -486,15 +345,15 @@ def test_ocr_worker_executes_langchain_when_gemini_configured(tmp_path):
     )
 
     with patch("app.extraction.image_processing.request_ocr", return_value=mock_ocr_result):
-        with patch("app.extraction.llm.LangChainSemanticExtractor.extract_canonical_quotation") as mock_ex:
+        with patch("app.extraction.image_processing.extract_semantics") as mock_ex:
             mock_ex.side_effect = [
-                (ocr_quotation, {"duration_ms": 110, "model": "gemini-3.1-flash-lite"}),
-                (vision_quotation, {"duration_ms": 120, "model": "gemini-3.1-flash-lite"}),
+                semantic_agent_result(ocr_quotation, 110),
+                semantic_agent_result(vision_quotation, 120),
             ]
             with session_factory() as session:
                 consume_ocr(session, job_id, settings)
 
-    ocr_context = mock_ex.call_args_list[0].args[0]
+    ocr_context = mock_ex.call_args_list[0].args[1]
     assert ocr_context == {
         "pages": [{"page_number": 1, "text": "Quotation 123 Price 5.00 USD"}]
     }
@@ -502,7 +361,7 @@ def test_ocr_worker_executes_langchain_when_gemini_configured(tmp_path):
     assert "confidence" not in json.dumps(ocr_context)
     assert mock_ex.call_args_list[0].kwargs["source_type"] == "ocr"
     assert mock_ex.call_args_list[0].kwargs["source_media"] is None
-    assert mock_ex.call_args_list[1].args[0] == {
+    assert mock_ex.call_args_list[1].args[1] == {
         "source": {"kind": "ocr_trusted_image_regions", "media_type": "image/png"}
     }
     assert mock_ex.call_args_list[1].kwargs["source_type"] == "image_vision"
@@ -577,7 +436,7 @@ def test_ocr_worker_executes_langchain_when_gemini_configured(tmp_path):
     low_result = mock_ocr_result.model_copy(deep=True)
     low_result.pages[0].lines[0].confidence = 0.35
     with patch("app.extraction.image_processing.request_ocr", return_value=low_result):
-        with patch("app.extraction.llm.LangChainSemanticExtractor.extract_canonical_quotation") as blocked_extractor:
+        with patch("app.extraction.image_processing.extract_semantics") as blocked_extractor:
             with session_factory() as session:
                 consume_ocr(session, low_job_id, settings)
     blocked_extractor.assert_not_called()
@@ -600,7 +459,8 @@ def test_langchain_offline_fallback_when_unconfigured(tmp_path):
     settings = Config(
         database_url=db_url,
         upload_dir=tmp_path / "uploads",
-        gemini_api_key=None,  # No key configured
+        gemini_api_key=None,
+        openrouter_api_key=None,  # No semantic provider configured
     )
 
     engine = create_sqlite_engine(db_url)
