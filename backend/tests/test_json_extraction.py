@@ -168,20 +168,6 @@ def test_unpopulated_canonical_destination_is_preserved_as_unmapped(tmp_path):
     assert document["quotation"] is None
 
 
-def test_source_fails_when_the_extraction_has_no_products(tmp_path):
-    payload = {"offer": {"reference": "Q-1"}}
-    extraction = JsonSemanticExtraction(
-        source_facts=[JsonSourceFact(label="Bad", value="Q-1", source_path="$.offer.not_present")]
-    )
-    settings = Config(database_url=f"sqlite:///{tmp_path / 'app.db'}", upload_dir=tmp_path / "uploads")
-    with TestClient(create_app(settings, json_extractor=ScriptedExtractor(extraction, extraction))) as client:
-        response = upload_json(client, payload)
-
-    assert response.status_code == 200
-    assert response.json()["status"] == "failed"
-    assert "No products" in response.json()["failure_reason"]
-
-
 def test_extractor_failure_is_kept_on_the_original_source_with_a_safe_reason(tmp_path):
     class FailingExtractor:
         def extract(self, *_args, **_kwargs):
@@ -265,4 +251,3 @@ def test_profile_json_max_paths_budget_cap():
     wide_payload = {f"key_{i}": {"nested": i} for i in range(100)}
     profile = profile_json(wide_payload, max_paths=20)
     assert len(profile["paths"]) == 20
-

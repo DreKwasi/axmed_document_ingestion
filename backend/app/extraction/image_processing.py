@@ -13,8 +13,8 @@ from sqlalchemy.orm import Session
 
 from app.config import Config
 from app.events import record_event
-from app.extraction.confidence import ConfidenceSignals, assess_extraction_confidence
 from app.extraction.commercial import apply_commercial_rules
+from app.extraction.confidence import ConfidenceSignals, assess_extraction_confidence
 from app.extraction.contracts import CanonicalQuotation
 from app.extraction.llm import (
     CANONICAL_QUOTATION_PROMPT_VERSION,

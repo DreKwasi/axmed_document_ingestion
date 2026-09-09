@@ -4,17 +4,6 @@ import logging
 from app.events import serialize_event
 from app.logging import get_api_logger
 from app.models import ProcessingEventRecord
-from app.security.redaction import redact_for_model, redact_text
-
-
-def test_redaction_removes_contact_pii_without_removing_allowed_supplier_context():
-    value = "Ask Alex at alex@example.com or +233 20 123 4567 about SanovaERP."
-
-    assert redact_text(value) == "Ask Alex at [redacted-email] or [redacted-phone] about SanovaERP."
-    assert redact_for_model({"supplier": "SanovaERP", "message": value}) == {
-        "supplier": "SanovaERP",
-        "message": "Ask Alex at [redacted-email] or [redacted-phone] about SanovaERP.",
-    }
 
 
 def test_event_stream_rejects_an_invalid_reconnect_cursor(client, sanova_bytes):

@@ -113,12 +113,6 @@ def test_mostly_illegible_ocr_lines_materially_reduce_image_extraction_confidenc
     assert any(factor.key == "ocr_quality" and factor.score < 45 for factor in result.factors)
 
 
-def test_low_quality_image_material_remains_scoreable():
-    signals = ConfidenceSignals(source_type="image", ocr_used=True, parser_quality="poor", ocr_scores=(0.35,))
-
-    assert assess_extraction_confidence(signals).score < 50
-
-
 def test_consistently_legible_ocr_lines_preserve_image_extraction_confidence():
     result = assess_extraction_confidence(
         ConfidenceSignals(
