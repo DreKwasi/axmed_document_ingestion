@@ -42,6 +42,7 @@ class Config(BaseSettings):
     golden_dataset_path: Path = Path("backend/evals/golden_dataset.json")
     event_poll_interval_ms: int = 250
     background_processing_enabled: bool = True
+    background_processing_max_workers: int = Field(default=4, ge=1, le=16)
 
     # OCR Service (hardcoded default endpoint)
     ocr_service_url: str | None = "https://andrewsboateng137--axmed-paddle-ocr.modal.run/ocr"
@@ -54,6 +55,9 @@ class Config(BaseSettings):
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-3.1-flash-lite"
     gemini_request_timeout_seconds: int = 60
+    openrouter_api_key: str | None = None
+    openrouter_gemini_model: str = "google/gemini-3.1-flash-lite"
+    openrouter_final_fallback_model: str = "openai/gpt-oss-120b"
 
     # HTTP & CORS
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,https://axmed-document-ingestion.pages.dev"
@@ -72,6 +76,12 @@ class Config(BaseSettings):
     def cors_origin_list(self) -> list[str]:
         """Parse comma-separated cors_origins string into a list of allowed origins."""
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def semantic_extraction_configured(self) -> bool:
+        """Whether at least one supported semantic-model provider is configured."""
+
+        return bool(self.gemini_api_key or self.openrouter_api_key)
 
 
 # --- Section 3: Singleton Accessor ---
