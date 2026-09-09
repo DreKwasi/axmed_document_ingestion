@@ -8,9 +8,9 @@ from sqlalchemy.orm import sessionmaker
 from app.config import Config
 from app.database import create_sqlite_engine
 from app.extraction.contracts import CanonicalQuotation
-from app.extraction.llm import SemanticEnrichment
 from app.extraction.pdf_parser import ParsedPdf, ParsedPdfPage, PdfParseError, parse_native_pdf
 from app.extraction.pdf_processing import consume_pdf_extraction
+from app.extraction.semantic_agent import SemanticExtractionResult
 from app.models import (
     ModelInvocationRecord,
     PdfExtractionRecord,
@@ -124,28 +124,26 @@ def test_pdf_worker_uses_redacted_page_context_and_persists_reviewable_quotation
     factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
     submitted: list[dict] = []
 
-    class FakeExtractor:
-        def __init__(self, **_kwargs):
-            pass
+    def fake_extract(_settings, context, *, source_type, **_kwargs):
+        assert source_type == "pdf"
+        submitted.append(context)
+        return SemanticExtractionResult(
+            quotation=CanonicalQuotation.model_validate(
+                {
+                    "document_type": "supplier_quotation",
+                    "supplier": {"name": "Farmaceutica Andina S.A.S."},
+                    "line_items": [{"product": {"trade_name": "Amoxicillin"}}],
+                }
+            ),
+            source_facts=(),
+            unresolved_issues=(),
+            validation_count=1,
+            model_call_count=1,
+            termination_reason="validated",
+            telemetry=({"duration_ms": 1, "model": "test-model"},),
+        )
 
-        def extract_canonical_quotation(self, context, *, source_type):
-            assert source_type == "pdf"
-            submitted.append(context)
-            return (
-                CanonicalQuotation.model_validate(
-                    {
-                        "document_type": "supplier_quotation",
-                        "supplier": {"name": "Farmaceutica Andina S.A.S."},
-                        "line_items": [{"product": {"trade_name": "Amoxicillin"}}],
-                    }
-                ),
-                {"duration_ms": 1},
-            )
-
-        def enrich_line_items_from_semantic_sections(self, context, quotation):
-            return SemanticEnrichment(), {"duration_ms": 1}
-
-    monkeypatch.setattr("app.extraction.llm.LangChainSemanticExtractor", FakeExtractor)
+    monkeypatch.setattr("app.extraction.llm.extract_semantics", fake_extract)
     with factory() as session:
         consume_pdf_extraction(
             session,

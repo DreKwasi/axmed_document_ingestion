@@ -14,6 +14,7 @@ from app.evaluations import (
 from app.extraction.contracts import CanonicalQuotation
 from app.extraction.json import RecordedJsonSemanticExtractor
 from app.extraction.ocr_contract import OcrLine, OcrPage, OcrResult
+from app.extraction.semantic_agent import SemanticExtractionResult
 from app.models import EvaluationCaseRecord, EvaluationResultRecord
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -120,21 +121,16 @@ def test_live_pdf_evaluation_counts_the_selected_cases_and_persists_a_failure(tm
         )
     )
 
-    class FakeExtractor:
-        def __init__(self, *_: object):
-            pass
-
-        def extract_canonical_quotation(self, *_: object, **__: object):
-            return CanonicalQuotation(), {
-                "duration_ms": 1,
-                "provider": "test-provider",
-                "model": "test-model",
-                "prompt_version": "test-prompt-v1",
-            }
+    def fake_extract(*_: object, **__: object):
+        return SemanticExtractionResult(
+                quotation=CanonicalQuotation(), source_facts=(), unresolved_issues=(), validation_count=1,
+                model_call_count=1, termination_reason="validated",
+                telemetry=({"duration_ms": 1, "provider": "test-provider", "model": "test-model"},),
+        )
 
     import app.extraction.llm as extractor_module
 
-    monkeypatch.setattr(extractor_module, "LangChainSemanticExtractor", FakeExtractor)
+    monkeypatch.setattr(extractor_module, "extract_semantics", fake_extract)
     engine = create_sqlite_engine(configured_settings.database_url)
     session_factory = sessionmaker(engine)
     settings = configured_settings.model_copy(update={"gemini_api_key": "test-key"})
@@ -160,7 +156,7 @@ def test_live_pdf_evaluation_counts_the_selected_cases_and_persists_a_failure(tm
         assert run.results[0].case_id == "single-live-case"
         assert run.results[0].status == "failed"
         assert json.loads(run.results[0].scores_json)["model"] == "test-model"
-        assert json.loads(run.results[0].scores_json)["prompt_version"] == "test-prompt-v1"
+        assert json.loads(run.results[0].scores_json)["prompt_version"] == "semantic-agent-v1"
 
 
 def test_live_ocr_evaluation_scores_anchor_evidence_without_a_model(tmp_path, client_settings, monkeypatch):
@@ -254,17 +250,17 @@ def test_live_email_evaluation_persists_final_correction_fidelity(tmp_path, clie
         )
     )
 
-    class FakeExtractor:
-        def __init__(self, *_: object):
-            pass
+    def fake_extract(*_: object, **__: object):
+        return SemanticExtractionResult(
+                quotation=CanonicalQuotation(
+                    rfq_reference="RFQ-1",
+                    line_items=[{"pricing": {"quoted_price": {"amount": "0.134"}}}],
+                ),
+                source_facts=(), unresolved_issues=(), validation_count=1, model_call_count=1,
+                termination_reason="validated", telemetry=({"duration_ms": 1, "model": "test-model"},),
+        )
 
-        def extract_canonical_quotation(self, *_: object, **__: object):
-            return CanonicalQuotation(
-                rfq_reference="RFQ-1",
-                line_items=[{"pricing": {"quoted_price": {"amount": "0.134"}}}],
-            ), {"duration_ms": 1, "model": "test-model"}
-
-    monkeypatch.setattr("app.extraction.llm.LangChainSemanticExtractor", FakeExtractor)
+    monkeypatch.setattr("app.extraction.llm.extract_semantics", fake_extract)
     engine = create_sqlite_engine(configured_settings.database_url)
     session_factory = sessionmaker(engine)
     settings = configured_settings.model_copy(update={"gemini_api_key": "test-key"})

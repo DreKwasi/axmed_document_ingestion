@@ -52,15 +52,13 @@ def test_email_worker_uses_redacted_context_and_persists_reviewable_quotation(cl
     factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
     submitted: list[dict] = []
 
-    class FakeExtractor:
-        def __init__(self, **_kwargs):
-            pass
+    def fake_extract(_settings, context, *, source_type, **_kwargs):
+        assert source_type == "email"
+        submitted.append(context)
+        from app.extraction.semantic_agent import SemanticExtractionResult
 
-        def extract_canonical_quotation(self, context, *, source_type):
-            assert source_type == "email"
-            submitted.append(context)
-            return (
-                CanonicalQuotation.model_validate(
+        return SemanticExtractionResult(
+                quotation=CanonicalQuotation.model_validate(
                     {
                         "document_type": "email_offer",
                         "supplier": {"name": "Novara"},
@@ -81,10 +79,15 @@ def test_email_worker_uses_redacted_context_and_persists_reviewable_quotation(cl
                         ],
                     }
                 ),
-                {"duration_ms": 1},
-            )
+                source_facts=(),
+                unresolved_issues=(),
+                validation_count=1,
+                model_call_count=1,
+                termination_reason="validated",
+                telemetry=({"duration_ms": 1, "model": "test-model"},),
+        )
 
-    monkeypatch.setattr("app.extraction.llm.LangChainSemanticExtractor", FakeExtractor)
+    monkeypatch.setattr("app.extraction.llm.extract_semantics", fake_extract)
     with factory() as session:
         consume_email_extraction(
             session,

@@ -1,4 +1,5 @@
 import json
+import time
 from decimal import Decimal
 
 from fastapi.testclient import TestClient
@@ -29,10 +30,24 @@ class ScriptedExtractor:
 
 
 def upload_json(client, payload, filename="source.json"):
-    return client.post(
+    uploaded = client.post(
         "/api/v1/documents",
         files={"files": (filename, json.dumps(payload).encode(), "application/json")},
     )
+    assert uploaded.status_code == 201
+    assert uploaded.json()[0]["status"] == "pending_extraction"
+    return wait_for_json_extraction(client, uploaded.json()[0]["id"])
+
+
+def wait_for_json_extraction(client, document_id):
+    """Wait only for the independent JSON worker, not the HTTP response lifecycle."""
+
+    for _ in range(200):
+        response = client.get(f"/api/v1/documents/{document_id}")
+        if response.json()["status"] not in {"pending_extraction", "semantic_extraction_running"}:
+            return response
+        time.sleep(0.01)
+    raise AssertionError("JSON extraction did not reach a terminal state within two seconds.")
 
 
 def test_nested_flat_and_mixed_sources_are_extracted_without_cross_document_memory(tmp_path):
@@ -61,8 +76,8 @@ def test_nested_flat_and_mixed_sources_are_extracted_without_cross_document_memo
     with TestClient(create_app(settings, json_extractor=extractor)) as client:
         responses = [upload_json(client, payload) for payload in (nested, flat, mixed)]
 
-    assert [response.status_code for response in responses] == [201, 201, 201]
-    assert [response.json()[0]["status"] for response in responses] == ["pending_review"] * 3
+    assert [response.status_code for response in responses] == [200, 200, 200]
+    assert [response.json()["status"] for response in responses] == ["pending_review"] * 3
     assert extractor.calls == [None, None, None]
 
 
@@ -82,8 +97,8 @@ def test_unmapped_fact_is_preserved_but_a_source_without_products_fails_graceful
     with TestClient(create_app(settings, json_extractor=ScriptedExtractor(extraction))) as client:
         response = upload_json(client, payload)
 
-    assert response.status_code == 201
-    document = response.json()[0]
+    assert response.status_code == 200
+    document = response.json()
     assert document["status"] == "failed"
     assert document["failure_reason"] == "No products could be extracted from this source."
     assert document["quotation"] is None
@@ -116,7 +131,7 @@ def test_invalid_claim_is_retried_without_losing_another_valid_fact(tmp_path):
     extractor = ScriptedExtractor(first, second)
     settings = Config(database_url=f"sqlite:///{tmp_path / 'app.db'}", upload_dir=tmp_path / "uploads")
     with TestClient(create_app(settings, json_extractor=extractor)) as client:
-        document = upload_json(client, payload).json()[0]
+        document = upload_json(client, payload).json()
 
     assert document["status"] == "failed"
     assert document["quotation"] is None
@@ -141,7 +156,7 @@ def test_unpopulated_canonical_destination_is_preserved_as_unmapped(tmp_path):
     )
     settings = Config(database_url=f"sqlite:///{tmp_path / 'app.db'}", upload_dir=tmp_path / "uploads")
     with TestClient(create_app(settings, json_extractor=ScriptedExtractor(extraction))) as client:
-        document = upload_json(client, payload).json()[0]
+        document = upload_json(client, payload).json()
 
     fact = document["extracted_source_facts"][0]
     assert fact["normalization_status"] == "unmapped"
@@ -160,9 +175,9 @@ def test_source_fails_only_when_no_grounded_quotation_fact_can_be_recovered(tmp_
     with TestClient(create_app(settings, json_extractor=ScriptedExtractor(extraction, extraction))) as client:
         response = upload_json(client, payload)
 
-    assert response.status_code == 201
-    assert response.json()[0]["status"] == "failed"
-    assert "source-grounded" in response.json()[0]["failure_reason"]
+    assert response.status_code == 200
+    assert response.json()["status"] == "failed"
+    assert "source-grounded" in response.json()["failure_reason"]
 
 
 def test_extractor_failure_is_kept_on_the_original_source_with_a_safe_reason(tmp_path):
@@ -174,21 +189,27 @@ def test_extractor_failure_is_kept_on_the_original_source_with_a_safe_reason(tmp
     with TestClient(create_app(settings, json_extractor=FailingExtractor())) as client:
         response = upload_json(client, {"offer": {"reference": "Q-1"}})
 
-    assert response.status_code == 201
-    assert response.json()[0]["status"] == "failed"
-    assert response.json()[0]["failure_reason"] == (
+    assert response.status_code == 200
+    assert response.json()["status"] == "failed"
+    assert response.json()["failure_reason"] == (
         "JSON extraction could not complete. Try extracting this source again."
     )
 
 
-def test_json_can_be_explicitly_reextracted_without_any_mapping_confirmation(client, sanova_bytes):
-    uploaded = client.post(
-        "/api/v1/documents",
-        files={"files": ("sanova.json", sanova_bytes, "application/json")},
-    ).json()[0]
+def test_json_can_be_explicitly_reextracted_without_any_mapping_confirmation(tmp_path, sanova_bytes):
+    settings = Config(database_url=f"sqlite:///{tmp_path / 'app.db'}", upload_dir=tmp_path / "uploads")
+    with TestClient(create_app(settings)) as client:
+        uploaded = client.post(
+            "/api/v1/documents",
+            files={"files": ("sanova.json", sanova_bytes, "application/json")},
+        ).json()[0]
 
-    rerun = client.post(f"/api/v1/documents/{uploaded['id']}/reextract")
+        wait_for_json_extraction(client, uploaded["id"])
 
-    assert rerun.status_code == 200
-    assert rerun.json()["status"] == "pending_review"
-    assert client.post(f"/api/v1/documents/{uploaded['id']}/mapping/confirm").status_code == 404
+        rerun = client.post(f"/api/v1/documents/{uploaded['id']}/reextract")
+
+        assert rerun.status_code == 200
+        assert rerun.json()["status"] == "pending_extraction"
+        refreshed = wait_for_json_extraction(client, uploaded["id"])
+        assert refreshed.json()["status"] == "pending_review"
+        assert client.post(f"/api/v1/documents/{uploaded['id']}/mapping/confirm").status_code == 404
