@@ -1,27 +1,22 @@
-"""LangChain semantic extraction with direct Gemini and OpenRouter failover."""
+"""Google Gemini setup for application-controlled semantic extraction."""
 
 import logging
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import Any
 
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_openrouter import ChatOpenRouter
-from pydantic import SecretStr
+from langchain.chat_models import init_chat_model
 
 from app.config import Config
-from app.extraction.semantic_agent import (
-    SemanticCandidate,
+from app.extraction.semantic import (
     SemanticExtractionRequest,
-    SemanticIssue,
-    inspect_semantic_candidate,
-    run_semantic_investigation,
+    run_semantic_extraction,
 )
 
 logger = logging.getLogger("app.extraction.llm")
 
 # --- Section 1: Prompt Version Constants & Intermediate Enrichment Models ---
 
-CANONICAL_QUOTATION_PROMPT_VERSION = "semantic-agent-v1"
+CANONICAL_QUOTATION_PROMPT_VERSION = "semantic-orchestration-v1"
 JSON_CANONICAL_FIELD_DICTIONARY = {
     "quotation_reference": "Supplier quotation, quote, offer, proposal, or proforma reference/ID/number.",
     "rfq_reference": "Buyer RFQ, enquiry, tender, requisition, or request reference/ID/number.",
@@ -94,98 +89,7 @@ JSON_CANONICAL_FIELD_DICTIONARY = {
 }
 
 
-# --- Section 2: Candidate Inspection & Telemetry Helpers ---
-
-
-_MISSING = object()
-
-
-def _canonical_field_value(quotation: Any, field_path: str) -> Any:
-    """Resolve a canonical dotted/indexed field path against a quotation dump."""
-
-    current: Any = quotation.model_dump(mode="json")
-    for segment in field_path.split("."):
-        field_name, separator, index_text = segment.partition("[")
-        if not isinstance(current, dict) or field_name not in current:
-            return _MISSING
-        current = current[field_name]
-        if not separator:
-            continue
-        if not index_text.endswith("]") or not index_text[:-1].isdigit() or not isinstance(current, list):
-            return _MISSING
-        index = int(index_text[:-1])
-        if index >= len(current):
-            return _MISSING
-        current = current[index]
-    return current
-
-
-def _equivalent_value(candidate_value: Any, source_value: Any) -> bool:
-    """Compare direct JSON fact values without accepting a semantic transformation."""
-
-    if isinstance(candidate_value, bool) or isinstance(source_value, bool):
-        return candidate_value is source_value
-    if isinstance(candidate_value, (int, float, str)) and isinstance(source_value, (int, float, str)):
-        try:
-            return Decimal(str(candidate_value)) == Decimal(str(source_value))
-        except InvalidOperation:
-            return candidate_value == source_value
-    return candidate_value == source_value
-
-
-def inspect_candidate(candidate: SemanticCandidate, request: SemanticExtractionRequest) -> tuple[SemanticIssue, ...]:
-    """Apply the shared deterministic checks and JSON-specific grounding checks."""
-
-    issues = list(inspect_semantic_candidate(candidate, request))
-    if request.source_type != "json":
-        return tuple(issues)
-
-    from app.extraction.json import JsonSourceFact, validate_source_facts
-
-    facts = [JsonSourceFact.model_validate(fact) for fact in candidate.source_facts]
-    valid_facts, invalid_paths = validate_source_facts(request.context["source_json"], facts)
-    issues.extend(
-        SemanticIssue(
-            category="provenance",
-            severity="error",
-            code="invalid_source_claim",
-            field_path=path,
-            message="The claimed JSONPath does not resolve to the supplied source value.",
-            affected_fields=[path],
-        )
-        for path in invalid_paths
-    )
-    for fact in valid_facts:
-        if not fact.canonical_field or fact.extraction_method != "direct_json":
-            continue
-        candidate_value = _canonical_field_value(candidate.quotation, fact.canonical_field)
-        if candidate_value is _MISSING:
-            issues.append(
-                SemanticIssue(
-                    category="candidate_consistency",
-                    severity="error",
-                    code="mapped_source_fact_has_no_candidate_field",
-                    field_path=fact.canonical_field,
-                    message="A grounded source fact maps to a canonical field that the candidate did not populate.",
-                    affected_fields=[fact.canonical_field],
-                    evidence_targets=[f"json:{fact.source_path}"],
-                )
-            )
-        elif not _equivalent_value(candidate_value, fact.value):
-            issues.append(
-                SemanticIssue(
-                    category="candidate_consistency",
-                    severity="error",
-                    code="mapped_source_fact_value_mismatch",
-                    field_path=fact.canonical_field,
-                    message="The populated canonical field differs from its grounded source fact.",
-                    affected_fields=[fact.canonical_field],
-                    evidence_targets=[f"json:{fact.source_path}"],
-                )
-            )
-    return tuple(issues)
-
-
+# --- Section 2: Telemetry Helpers ---
 def _sum_optional_counts(*values: int | None) -> int | None:
     """Sum provider token counts while preserving an entirely unavailable measurement."""
     present = [value for value in values if value is not None]
@@ -198,8 +102,8 @@ def _sum_optional_decimals(*values: Decimal | None) -> Decimal | None:
     return sum(present, start=Decimal("0")) if present else None
 
 
-def aggregate_agent_telemetry(result: Any) -> dict[str, Any]:
-    """Combine agent model-call telemetry for existing persistence records."""
+def aggregate_semantic_telemetry(result: Any) -> dict[str, Any]:
+    """Combine semantic pipeline model-call telemetry for persistence."""
 
     calls = result.telemetry
     return {
@@ -229,73 +133,31 @@ def extract_semantics(
     source_media_type: str | None = None,
 ):
     """Extract one prepared source using the application's configured provider chain."""
-    providers: list[tuple[str, str, Any]] = []
-    if settings.gemini_api_key:
-        providers.append(
-            (
-                "google-gemini",
-                settings.gemini_model,
-                ChatGoogleGenerativeAI(
-                    model=settings.gemini_model,
-                    api_key=settings.gemini_api_key,
-                    temperature=0.0,
-                    request_timeout=settings.gemini_request_timeout_seconds,
-                    retries=0,
-                ),
-            )
-        )
-    if settings.openrouter_api_key:
-        providers.extend(
-            (
-                (
-                    "openrouter-gemini",
-                    settings.openrouter_gemini_model,
-                    ChatOpenRouter(
-                        model=settings.openrouter_gemini_model,
-                        api_key=SecretStr(settings.openrouter_api_key),
-                        temperature=0.0,
-                        timeout=settings.gemini_request_timeout_seconds,
-                        max_retries=0,
-                    ),
-                ),
-                (
-                    "openrouter-gpt-oss",
-                    settings.openrouter_final_fallback_model,
-                    ChatOpenRouter(
-                        model=settings.openrouter_final_fallback_model,
-                        api_key=SecretStr(settings.openrouter_api_key),
-                        temperature=0.0,
-                        timeout=settings.gemini_request_timeout_seconds,
-                        max_retries=0,
-                    ),
-                ),
-            )
-        )
-    if not providers:
-        raise ValueError("No Gemini or OpenRouter semantic extraction provider is configured.")
+    if not settings.gemini_api_key:
+        raise ValueError("Google Gemini semantic extraction is not configured.")
 
-    agent_context = dict(context)
+    model = init_chat_model(
+        f"google_genai:{settings.gemini_model}",
+        api_key=settings.gemini_api_key,
+        timeout=settings.gemini_request_timeout_seconds,
+    )
+
+    semantic_context = dict(context)
     if source_type == "json":
-        agent_context["canonical_field_dictionary"] = JSON_CANONICAL_FIELD_DICTIONARY
+        semantic_context["canonical_field_dictionary"] = JSON_CANONICAL_FIELD_DICTIONARY
     request = SemanticExtractionRequest(
         source_type=source_type,
-        context=agent_context,
+        context=semantic_context,
         source_media=source_media,
         source_media_type=source_media_type,
     )
-    provider_name, provider_model, provider = providers[0]
-    fallback_models = tuple(configured_provider for _, _, configured_provider in providers[1:])
     logger.info(
-        "[Provider] Semantic agent configured primary=%s model=%s fallback_count=%d source_type=%s",
-        provider_name,
-        provider_model,
-        len(fallback_models),
+        "[Provider] Semantic pipeline configured provider=google-gemini model=%s source_type=%s",
+        settings.gemini_model,
         source_type,
     )
-    return run_semantic_investigation(
-        provider,
+    return run_semantic_extraction(
+        model,
         request,
-        inspector=inspect_candidate,
-        provider_name=provider_name,
-        fallback_models=fallback_models,
+        provider_name="google-gemini",
     )
