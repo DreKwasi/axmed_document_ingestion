@@ -1,7 +1,7 @@
 from decimal import Decimal
 
 from app.extraction.commercial import validate_and_derive
-from app.extraction.contracts import Adjustment, CanonicalQuotation, LineItem, PriceTier, Quantity
+from app.extraction.contracts import Adjustment, CanonicalQuotation, Evidence, LineItem, PriceTier, Quantity
 
 
 def issue_codes(quotation: CanonicalQuotation) -> set[str]:
@@ -99,3 +99,32 @@ def test_pack_price_is_not_derived_when_the_price_unit_does_not_match_packaging(
     result = validate_and_derive(quotation)
 
     assert result.line_items[0].pricing.pack_price is None
+
+
+def test_quoted_price_derived_from_pack_price_inherits_its_source_evidence():
+    quotation = CanonicalQuotation(
+        line_items=[
+            LineItem(
+                pricing={"pack_price": Decimal("3.15")},
+                evidence=[
+                    Evidence(
+                        canonical_field="pricing.pack_price",
+                        source_path="$.items[0].pack_price",
+                        extraction_method="direct_json",
+                        confidence=Decimal("1"),
+                    )
+                ],
+            )
+        ]
+    )
+
+    result = validate_and_derive(quotation)
+
+    assert result.line_items[0].pricing.quoted_price.amount == Decimal("3.15")
+    derived = next(
+        evidence
+        for evidence in result.line_items[0].evidence
+        if evidence.canonical_field == "pricing.quoted_price.amount"
+    )
+    assert derived.source_path == "$.items[0].pack_price"
+    assert derived.extraction_method == "derived_from_pack_price"

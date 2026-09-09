@@ -24,7 +24,6 @@ def test_startup_applies_checked_in_alembic_migration(tmp_path: Path):
     settings = AppConfig(
         database_url=f"sqlite:///{database_path}",
         upload_dir=tmp_path / "uploads",
-        recorded_json_extraction_dir=PROJECT_ROOT / "backend/evals/recorded_json_extractions",
         golden_dataset_path=PROJECT_ROOT / "backend/evals/golden_dataset.json",
     )
 
@@ -50,13 +49,14 @@ def test_startup_applies_checked_in_alembic_migration(tmp_path: Path):
             row[1] for row in database.execute("PRAGMA table_info(quotation_field_values)").fetchall()
         }
         review_columns = {row[1] for row in database.execute("PRAGMA table_info(reviews)").fetchall()}
-    assert revision == ("20260908_24",)
+    assert revision == ("20260909_25",)
     assert source_fact_schema is not None
     assert {"approach", "result_json", "failure_reason"}.issubset(image_attempt_columns)
     assert "selected" not in image_attempt_columns
     assert "normalization_status" in source_fact_schema[0]
     assert batches_schema is None
     assert "batch_id" not in document_columns
+    assert "content_sha256" not in document_columns
     assert "system_decision" in quotation_columns
     assert "has_corrections" in quotation_columns
     assert {"reliability", "reliability_reason"}.issubset(field_value_columns)
@@ -82,7 +82,6 @@ def test_startup_upgrades_a_pre_alembic_slice_one_database(tmp_path: Path):
     settings = AppConfig(
         database_url=f"sqlite:///{database_path}",
         upload_dir=tmp_path / "uploads",
-        recorded_json_extraction_dir=PROJECT_ROOT / "backend/evals/recorded_json_extractions",
         golden_dataset_path=PROJECT_ROOT / "backend/evals/golden_dataset.json",
     )
     with TestClient(create_app(settings)) as client:
@@ -93,7 +92,7 @@ def test_startup_upgrades_a_pre_alembic_slice_one_database(tmp_path: Path):
         source_facts = database.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'extracted_source_facts'"
         ).fetchone()
-    assert revision == ("20260908_24",)
+    assert revision == ("20260909_25",)
     assert source_facts is not None
 
 
@@ -108,7 +107,6 @@ def test_startup_repairs_an_interrupted_review_learning_migration(tmp_path: Path
     settings = AppConfig(
         database_url=f"sqlite:///{database_path}",
         upload_dir=tmp_path / "uploads",
-        recorded_json_extraction_dir=PROJECT_ROOT / "backend/evals/recorded_json_extractions",
         golden_dataset_path=PROJECT_ROOT / "backend/evals/golden_dataset.json",
     )
     with TestClient(create_app(settings)) as client:
@@ -119,7 +117,7 @@ def test_startup_repairs_an_interrupted_review_learning_migration(tmp_path: Path
         review_learning = database.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'review_learning'"
         ).fetchone()
-    assert revision == ("20260908_24",)
+    assert revision == ("20260909_25",)
     assert review_learning is None
 
 

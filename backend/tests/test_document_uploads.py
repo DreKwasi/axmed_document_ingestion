@@ -109,7 +109,6 @@ def test_multi_file_upload_submits_each_pdf_to_a_concurrent_background_worker(tm
     settings = Config(
         database_url=f"sqlite:///{tmp_path / 'app.db'}",
         upload_dir=tmp_path / "uploads",
-        recorded_json_extraction_dir=PROJECT_ROOT / "backend/evals/recorded_json_extractions",
         golden_dataset_path=PROJECT_ROOT / "backend/evals/golden_dataset.json",
         background_processing_enabled=True,
     )

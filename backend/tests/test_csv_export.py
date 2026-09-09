@@ -36,6 +36,10 @@ def test_database_export_flattens_completed_products_and_excludes_active_sources
     }
     assert all(row["source"] == completed["source_name"] for row in exported)
     assert all(row["extraction_confidence"] == "100" for row in exported)
+    assert all(row["review_status"] in {"Needs review", "Pre-approved", "Approved"} for row in exported)
+    assert all(row["evidence_superseded_paths"] == "" for row in exported)
+    assert any(row["evidence_source_paths"] for row in exported)
+    assert any("$." in row["evidence_source_paths"] for row in exported)
 
 
 def test_database_export_flattens_peer_image_attempts_as_distinct_sources(client_settings):
@@ -104,5 +108,6 @@ def test_database_export_includes_failed_image_summary_and_excludes_active_attem
 
     assert len(exported) == 1
     assert exported[0]["source"] == "Glare — OCR-assisted"
+    assert exported[0]["review_status"] == "Extraction failed"
     assert exported[0]["product"] == ""
     assert exported[0]["failure_reason"] == "No trustworthy text regions passed the OCR gate."
