@@ -20,6 +20,16 @@ logger = logging.getLogger("app.extraction.pdf")
 # --- Section 1: Context Preparation & Structured Table Layout Detection ---
 
 
+def _has_structured_table_layout(text: str) -> bool:
+    """Identify table-shaped pages without assuming a supplier's column names.
+
+    Requires at least 3 common pharmaceutical quotation column markers (e.g. qty, price, uom).
+    """
+    markers = ("item", "product", "quantity", "qty", "price", "uom", "amount", "discount")
+    normalized = text.casefold()
+    return sum(marker in normalized for marker in markers) >= 3
+
+
 def _semantic_pdf_context(stored_context: dict[str, Any]) -> dict[str, Any]:
     """Prepare one source representation for semantic investigation.
 
@@ -58,16 +68,6 @@ def _semantic_pdf_context(stored_context: dict[str, Any]) -> dict[str, Any]:
         # every page retains a compact reading-order view for investigation.
         "semantic_pages": [{"page_number": page["page_number"], "text": page["text"]} for page in pages],
     }
-
-
-def _has_structured_table_layout(text: str) -> bool:
-    """Identify table-shaped pages without assuming a supplier's column names.
-
-    Requires at least 3 common pharmaceutical quotation column markers (e.g. qty, price, uom).
-    """
-    markers = ("item", "product", "quantity", "qty", "price", "uom", "amount", "discount")
-    normalized = text.casefold()
-    return sum(marker in normalized for marker in markers) >= 3
 
 
 # --- Section 2: Telemetry & Invocation Auditing Helpers ---

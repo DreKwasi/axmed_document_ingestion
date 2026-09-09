@@ -89,6 +89,17 @@ class JsonSemanticExtractor(Protocol):
 # --- Section 2: Structural Profiling & Collection Inventory ---
 
 
+def _json_type(value: Any) -> str:
+    """Classify a Python primitive into standard JSON type names."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return "number"
+    return "string"
+
+
 def profile_json(payload: Any) -> dict[str, Any]:
     """Create a lossless structural inventory without assigning source meaning.
 
@@ -134,17 +145,6 @@ def profile_json(payload: Any) -> dict[str, Any]:
 
     walk(payload, "$")
     return {"paths": paths, "candidate_collections": collections}
-
-
-def _json_type(value: Any) -> str:
-    """Classify a Python primitive into standard JSON type names."""
-    if value is None:
-        return "null"
-    if isinstance(value, bool):
-        return "boolean"
-    if isinstance(value, (int, float)):
-        return "number"
-    return "string"
 
 
 # --- Section 3: Deterministic JSONPath Navigation & Resolution ---
@@ -207,6 +207,18 @@ def resolve_json_path(payload: Any, path: str) -> Any:
 # --- Section 4: Grounded Source Fact Validation & Equivalence Checks ---
 
 
+def _same_json_value(source: Any, extracted: Any) -> bool:
+    """Compare JSON values tolerating numeric representation differences (e.g. float vs Decimal)."""
+    if isinstance(source, bool) or isinstance(extracted, bool):
+        return source is extracted
+    if isinstance(source, int | float) and isinstance(extracted, int | float | Decimal | str):
+        try:
+            return Decimal(str(source)) == Decimal(str(extracted))
+        except Exception:  # pragma: no cover - defensive at a provider boundary.
+            return False
+    return source == extracted
+
+
 def validate_source_facts(
     payload: dict[str, Any], facts: list[JsonSourceFact]
 ) -> tuple[list[JsonSourceFact], list[str]]:
@@ -237,18 +249,6 @@ def validate_source_facts(
         fact.normalization_status = "mapped" if fact.canonical_field else "unmapped"
         valid.append(fact)
     return valid, invalid_paths
-
-
-def _same_json_value(source: Any, extracted: Any) -> bool:
-    """Compare JSON values tolerating numeric representation differences (e.g. float vs Decimal)."""
-    if isinstance(source, bool) or isinstance(extracted, bool):
-        return source is extracted
-    if isinstance(source, int | float) and isinstance(extracted, int | float | Decimal | str):
-        try:
-            return Decimal(str(source)) == Decimal(str(extracted))
-        except Exception:  # pragma: no cover - defensive at a provider boundary.
-            return False
-    return source == extracted
 
 
 # --- Section 5: Extractor Implementations ---
