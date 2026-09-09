@@ -272,29 +272,29 @@ function mappingConfidenceLabel(doc: DocumentResponse): string {
             >
               <!-- Source name and in-platform file preview -->
               <td class="px-6 py-4 align-top">
-                <div class="flex items-start gap-2.5">
-                  <span class="mt-0.5 rounded border border-rule bg-surface-alt px-2 py-0.5 text-[10px] font-semibold tracking-[0.08em] text-ink-2 uppercase">
+                <div class="flex items-start gap-3">
+                  <span class="mt-0.5 inline-flex min-w-10 justify-center rounded-md border border-slate-200 bg-slate-50 px-1.5 py-1 text-[9px] font-medium tracking-[0.1em] text-slate-500 uppercase">
                     {{ formatBadge(doc.filename, doc.source_system) }}
                   </span>
                   <div class="min-w-0">
                     <button
                       type="button"
-                      class="group block max-w-sm text-left text-[12px] font-semibold leading-5 text-ink transition group-hover:text-axmed-primary sm:max-w-md cursor-pointer"
+                      class="group block max-w-sm text-left text-[13px] font-medium leading-[1.45rem] text-slate-700 transition group-hover:text-axmed-primary sm:max-w-md cursor-pointer"
                       :title="sourceName(doc)"
                     >
                       <span class="block truncate max-w-sm sm:max-w-md">{{ sourceName(doc) }}</span>
                     </button>
-                    <div class="mt-0.5 flex items-center">
+                    <div class="flex items-center">
                       <button
                         type="button"
-                        class="max-w-xs truncate text-left text-[10px] font-normal leading-4 text-slate-500 transition hover:text-axmed-primary hover:underline sm:max-w-md cursor-pointer"
+                        class="max-w-xs truncate text-left text-[11px] font-normal leading-[1.15rem] text-slate-400 transition hover:text-slate-600 hover:underline sm:max-w-md cursor-pointer"
                         :title="`Preview ${doc.filename}`"
                         @click.stop="emit('preview', doc)"
                       >
                         {{ doc.filename }}
                       </button>
                     </div>
-                    <p v-if="doc.notes?.[0]" class="mt-1 text-[11px] text-slate-500 line-clamp-1">
+                    <p v-if="doc.notes?.[0]" class="mt-1 text-[11px] leading-[1.15rem] text-slate-500 line-clamp-1">
                       {{ doc.notes[0] }}
                     </p>
                   </div>

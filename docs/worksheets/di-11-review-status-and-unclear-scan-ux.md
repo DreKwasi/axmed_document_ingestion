@@ -32,6 +32,7 @@
 - [x] Standardize all frontend dropdowns with a shared control style and custom chevron.
 - [x] Use the document mapping score for product rows whose field-level assessment is absent or incomplete, without changing JSON extraction.
 - [x] Inherit document-level currency into line-item pricing when a line has no explicit override, with a defensive frontend fallback.
+- [x] Soften source-row typography and contrast with medium-weight titles, quieter filenames, and restrained file-type labels.
 
 ## Context and constraints
 
