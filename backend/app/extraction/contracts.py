@@ -352,5 +352,6 @@ class CanonicalQuotation(BaseModel):
     commercial_terms: CommercialTerms = Field(default_factory=CommercialTerms)
     line_items: list[LineItem] = Field(default_factory=list)
     source: dict[str, str | None] = Field(default_factory=dict)
+    narrative_summary: str | None = None
     evidence: list[Evidence] = Field(default_factory=list)
     review_issues: list[ReviewIssue] = Field(default_factory=list)

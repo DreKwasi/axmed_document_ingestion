@@ -1,6 +1,5 @@
 """Document lifecycle orchestration, multi-format intake, and relational quotation management."""
 
-import hashlib
 import json
 import re
 from decimal import Decimal, InvalidOperation
@@ -21,6 +20,7 @@ from app.extraction.confidence import (
     MappingAssessment,
     assess_extraction_confidence,
     assess_mapping_confidence,
+    is_unusable_image_material,
     mapping_confidence_for_path,
 )
 from app.extraction.contracts import CanonicalQuotation
@@ -136,7 +136,6 @@ def ingest_email(
         original_filename=Path(filename).name,
         stored_filename=stored_filename,
         media_type="message/rfc822",
-        content_sha256=hashlib.sha256(data).hexdigest(),
         source_system="email",
         status="needs_semantic_extraction",
         parsed_summary_json=json.dumps(
@@ -198,7 +197,6 @@ def ingest_pdf(
         original_filename=Path(filename).name,
         stored_filename=stored_filename,
         media_type="application/pdf",
-        content_sha256=hashlib.sha256(data).hexdigest(),
         source_system="pdf",
         status="needs_ocr" if parsed.needs_ocr_pages else "needs_semantic_extraction",
         parsed_summary_json=json.dumps(
@@ -309,7 +307,6 @@ def ingest_image(
         original_filename=Path(filename).name,
         stored_filename=stored_filename,
         media_type=parsed.media_type,
-        content_sha256=hashlib.sha256(data).hexdigest(),
         source_system="image",
         status="needs_ocr",
     )
@@ -364,6 +361,7 @@ def _upsert_quotation(
             CanonicalQuotation.model_validate_json(payload_json),
             assessment=assessment,
         )
+        _apply_confidence_decision(session, document, stored, assessment)
         return stored
     document.status = "pending_review"
     stored = QuotationRecord(
@@ -383,7 +381,56 @@ def _upsert_quotation(
         CanonicalQuotation.model_validate_json(payload_json),
         assessment=assessment,
     )
+    _apply_confidence_decision(session, document, stored, assessment)
     return stored
+
+
+def _apply_confidence_decision(
+    session: Session,
+    document: DocumentRecord,
+    quotation: QuotationRecord | None,
+    assessment: MappingAssessment | None,
+    *,
+    has_extracted_result: bool = True,
+) -> str | None:
+    """Route a usable result by confidence without delegating policy to a model."""
+
+    signals = _extraction_confidence_signals(
+        session, document, has_extracted_result=has_extracted_result
+    )
+    extraction = assess_extraction_confidence(signals)
+    if is_unusable_image_material(signals):
+        document.status = "auto_rejected"
+        document.failure_reason = (
+            "Material is not readable enough to use safely. The extraction is retained for inspection, "
+            "but this source cannot be approved."
+        )
+        if quotation:
+            quotation.system_decision = "auto_rejected"
+            quotation.review_status = "rejected"
+            _set_field_review_status(session, quotation.id, "rejected")
+        return "auto_rejected"
+    if (
+        quotation
+        and extraction is not None
+        and extraction.score == 100
+        and assessment is not None
+        and assessment.score == 100
+        and not assessment.issues
+    ):
+        document.status = "pre_approved"
+        document.failure_reason = None
+        quotation.system_decision = "pre_approved"
+        quotation.review_status = "pre_approved"
+        _set_field_review_status(session, quotation.id, "pre_approved")
+        return "pre_approved"
+    if quotation:
+        document.status = "pending_review"
+        document.failure_reason = None
+        quotation.system_decision = "pending_review"
+        quotation.review_status = "pending_review"
+        _set_field_review_status(session, quotation.id, "pending_review")
+    return None
 
 
 def begin_image_extraction_review(session: Session, document_id: str, approach: str) -> DocumentRecord:
@@ -408,10 +455,15 @@ def begin_image_extraction_review(session: Session, document_id: str, approach: 
         raise ValueError("This image extraction result is not available for review.")
 
     quotation = CanonicalQuotation.model_validate_json(attempt.result_json)
+    if not quotation.line_items:
+        # A material-unusable image has no reviewable candidate. Keep its existing
+        # terminal material state instead of turning an attempted view into an error.
+        session.commit()
+        return document
     stored = _upsert_quotation(session, document, quotation)
     if stored is None:
         session.commit()
-        raise ValueError("This image extraction result has no products to review.")
+        return document
     record_event(
         session,
         document_id=document_id,
@@ -438,12 +490,8 @@ def reassess_persisted_confidence(session: Session) -> int:
             continue
         canonical = CanonicalQuotation.model_validate_json(quotation.payload_json)
         assessment = assess_mapping_confidence(canonical)
-        quotation.system_decision = "pending_review"
-        if quotation.review_status in {"unreviewed", "corrected"}:
-            quotation.review_status = "pending_review"
-        if document.status in {"needs_review", "auto_accepted", "pending_review", "corrected"}:
-            document.status = "pending_review"
         _sync_field_values(session, document.id, quotation, canonical, assessment=assessment)
+        _apply_confidence_decision(session, document, quotation, assessment)
         refreshed += 1
     return refreshed
 
@@ -782,9 +830,19 @@ def _attach_json_fact_evidence(quotation: CanonicalQuotation, facts: list[JsonSo
                 fact.canonical_field = None
                 fact.normalization_status = "unmapped"
                 continue
-            line_items[index].setdefault("evidence", []).append({"canonical_field": canonical_field, **evidence})
+            line_evidence = line_items[index].setdefault("evidence", [])
+            if not any(
+                item.get("canonical_field") == canonical_field and item.get("source_path") == fact.source_path
+                for item in line_evidence
+            ):
+                line_evidence.append({"canonical_field": canonical_field, **evidence})
         else:
-            payload.setdefault("evidence", []).append({"canonical_field": fact.canonical_field, **evidence})
+            quotation_evidence = payload.setdefault("evidence", [])
+            if not any(
+                item.get("canonical_field") == fact.canonical_field and item.get("source_path") == fact.source_path
+                for item in quotation_evidence
+            ):
+                quotation_evidence.append({"canonical_field": fact.canonical_field, **evidence})
     return CanonicalQuotation.model_validate(payload)
 
 
@@ -846,6 +904,10 @@ def _flatten_extracted_values(value: Any, path: str) -> list[tuple[str, Any]]:
     if isinstance(value, list):
         if not value:
             return []
+        if path == "product.strength" or path.endswith(".product.strength"):
+            from app.extraction.confidence import format_strength_summary
+
+            return [(f"{path}[{index}]", format_strength_summary(child)) for index, child in enumerate(value)]
         flattened = []
         for index, child in enumerate(value):
             flattened.extend(_flatten_extracted_values(child, f"{path}[{index}]"))
@@ -897,6 +959,8 @@ def _sync_field_values(
                     field_path == evidence_path
                     or field_path.startswith(f"{evidence_path}.")
                     or field_path.startswith(f"{evidence_path}[")
+                    or evidence_path.startswith(f"{field_path}.")
+                    or evidence_path.startswith(f"{field_path}[")
                 )
             ),
             None,
@@ -909,6 +973,8 @@ def _sync_field_values(
                     if field_path == evidence_path
                     or field_path.startswith(f"{evidence_path}.")
                     or field_path.startswith(f"{evidence_path}[")
+                    or evidence_path.startswith(f"{field_path}.")
+                    or evidence_path.startswith(f"{field_path}[")
                 ),
                 None,
             )
@@ -1097,8 +1163,11 @@ def apply_review_action(session: Session, document_id: str, action: str, command
     expected_revision = command.get("expected_revision")
     if expected_revision != quotation.revision:
         raise ValueError("The quotation revision is stale; reload before deciding.")
-    if document.status != "pending_review" or quotation.review_status != "pending_review":
-        raise ValueError("Only a quotation awaiting human review can receive a decision.")
+    if document.status not in {"pending_review", "pre_approved"} or quotation.review_status not in {
+        "pending_review",
+        "pre_approved",
+    }:
+        raise ValueError("Only a usable quotation can receive a human decision.")
     payload = json.loads(quotation.payload_json)
     prior_revision = quotation.revision
     patches = command.get("patches", [])
@@ -1131,7 +1200,7 @@ def apply_review_action(session: Session, document_id: str, action: str, command
         .where(
             QuotationRecord.id == quotation.id,
             QuotationRecord.revision == prior_revision,
-            QuotationRecord.review_status == "pending_review",
+            QuotationRecord.review_status.in_(("pending_review", "pre_approved")),
         )
         .values(
             payload_json=payload_json,
@@ -1211,9 +1280,8 @@ def ingest_json(
     payload = read_json(data)
     source_system = str(payload.get("source_system") or (payload.get("meta") or {}).get("source_system") or "unknown")
     source_schema_version = (payload.get("meta") or {}).get("export_version") or payload.get("schema_version")
-    # A repeat submission is an independent receipt. Content identity remains available via
-    # content_sha256, while a random document id prevents a prior submission from causing a
-    # database collision or overwriting its stored source.
+    # A repeat submission is an independent receipt. A random document id prevents
+    # a submission from overwriting another stored source.
     document_id = str(uuid4())
     safe_name = f"{document_id}.json"
     upload_dir = Path(settings.upload_dir)
@@ -1224,7 +1292,6 @@ def ingest_json(
         original_filename=Path(filename).name,
         stored_filename=safe_name,
         media_type="application/json",
-        content_sha256=hashlib.sha256(data).hexdigest(),
         source_system=source_system,
         schema_version=str(source_schema_version) if source_schema_version is not None else None,
         status="pending_extraction",
@@ -1291,34 +1358,14 @@ def _extract_json_document(
         record_event(
             session,
             document_id=document.id,
-            stage="json_source_validation_retrying",
+            stage="json_grounding_incomplete",
             metadata={"invalid_claim_count": len(invalid_paths)},
         )
-        try:
-            retry = extractor.extract(
-                payload,
-                profile,
-                source_document=document.original_filename,
-                invalid_source_paths=invalid_paths,
-            )
-        except Exception:
-            retry = None
-        if retry is not None:
-            retry_facts, _ = validate_source_facts(payload, retry.extraction.source_facts)
-
-            def fact_identity(fact: JsonSourceFact) -> tuple[str, str | None, str]:
-                return fact.source_path, fact.canonical_field, json.dumps(fact.value, default=str, sort_keys=True)
-
-            known = {fact_identity(fact) for fact in valid_facts}
-            valid_facts.extend(fact for fact in retry_facts if fact_identity(fact) not in known)
-            proposal = retry
 
     if not valid_facts:
-        document.status = "failed"
-        document.failure_reason = "No source-grounded quotation facts could be extracted from this JSON source."
-        record_event(session, document_id=document.id, stage="json_extraction_failed")
-        session.commit()
-        return document
+        # Grounding can be incomplete even when the primary extraction is a usable
+        # candidate. Persist it without evidence so mapping confidence routes it to review.
+        record_event(session, document_id=document.id, stage="json_grounding_incomplete")
 
     quotation = _attach_json_fact_evidence(proposal.extraction.quotation, valid_facts)
     quotation.source["document_name"] = document.original_filename
@@ -1981,7 +2028,6 @@ def ingest_failed_document(
         original_filename=Path(filename).name if filename else "upload",
         stored_filename=stored_filename,
         media_type=content_type or "application/octet-stream",
-        content_sha256=hashlib.sha256(data).hexdigest() if data else "empty",
         status="failed",
         failure_reason=error_message,
     )

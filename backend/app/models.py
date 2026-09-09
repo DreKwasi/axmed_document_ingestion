@@ -27,7 +27,6 @@ class DocumentRecord(Base):
     original_filename: Mapped[str] = mapped_column(String(255))
     stored_filename: Mapped[str] = mapped_column(String(255), unique=True)
     media_type: Mapped[str] = mapped_column(String(100))
-    content_sha256: Mapped[str] = mapped_column(String(64), index=True)
     source_system: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
     schema_version: Mapped[str | None] = mapped_column(String(120), nullable=True)
     status: Mapped[str] = mapped_column(String(40), default="received", index=True)
