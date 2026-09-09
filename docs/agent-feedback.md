@@ -119,3 +119,7 @@
 ## 2026-09-09 — Keep orchestration readable
 
 - A class that only stores one run's dependencies and immediately calls one method hides the actual control flow. Keep source-processing seams small and direct; reserve classes for durable records, real interchangeable adapters, or state that must outlive a single invocation.
+
+## 2026-09-09 — Validate the returned structured candidate
+
+- A model tool call does not prove that its final structured response is the same candidate. Track the exact validated candidate and run deterministic validation on a skipped or changed final response before returning it to a source processor.

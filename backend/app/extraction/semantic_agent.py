@@ -105,6 +105,7 @@ class _InvestigationState:
     evidence_characters: int = 0
     inspected_references: set[str] = field(default_factory=set)
     validation_count: int = 0
+    validated_candidate_fingerprint: str | None = None
     previous_issue_ids: set[str] = field(default_factory=set)
     repeated_issue_set: bool = False
 
@@ -168,6 +169,13 @@ def _deduplicate_issues(issues: list[SemanticIssue]) -> tuple[SemanticIssue, ...
         identified = issue.with_id()
         deduplicated.setdefault(identified.id or "", identified)
     return tuple(deduplicated.values())
+
+
+def _candidate_fingerprint(candidate: SemanticCandidate) -> str:
+    """Identify the exact candidate submitted to deterministic validation."""
+
+    payload = json.dumps(candidate.model_dump(mode="json"), sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(payload.encode()).hexdigest()
 
 
 def _chunk_summary(chunk: EvidenceChunk) -> dict[str, Any]:
@@ -363,6 +371,7 @@ def _issues_for(state: _InvestigationState, candidate: SemanticCandidate) -> tup
 
 def _validate_candidate(state: _InvestigationState, candidate: SemanticCandidate) -> dict[str, Any]:
     state.validation_count += 1
+    state.validated_candidate_fingerprint = _candidate_fingerprint(candidate)
     issues = list(_issues_for(state, candidate))
     issue_ids = {issue.id for issue in issues if issue.id}
     persistent = sorted(issue_ids & state.previous_issue_ids)
@@ -493,13 +502,13 @@ def run_semantic_investigation(
             _budget_state(state),
         )
         raise
-    if state.validation_count == 0:
-        raise ValueError("Semantic extraction agent finished without validating its candidate.")
-
     structured = agent_result.get("structured_response")
     candidate = (
         structured if isinstance(structured, SemanticCandidate) else SemanticCandidate.model_validate(structured)
     )
+    if state.validated_candidate_fingerprint != _candidate_fingerprint(candidate):
+        logger.info("[Agent] Deterministically validating final structured candidate")
+        _validate_candidate(state, candidate)
     unresolved = _issues_for(state, candidate)
     telemetry = _model_telemetry(agent_result, model, _duration_ms(state), provider_name)
     termination_reason = _termination_reason(state, unresolved)

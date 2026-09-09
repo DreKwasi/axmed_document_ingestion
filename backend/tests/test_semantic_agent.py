@@ -92,6 +92,22 @@ class FailingFactory:
         return FailingCompiledAgent()
 
 
+class ChangedFinalCandidateAgent:
+    def __init__(self, tools: list[Any]):
+        self.validation_tool = next(tool for tool in tools if tool.name == "validate_candidate")
+
+    def invoke(self, _input: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+        self.validation_tool.invoke(
+            {"candidate": SemanticCandidate(quotation=quotation("Earlier candidate")).model_dump(mode="json")}
+        )
+        return {"messages": [], "structured_response": SemanticCandidate(quotation=quotation("Final candidate"))}
+
+
+class ChangedFinalCandidateFactory:
+    def __call__(self, **kwargs: Any) -> ChangedFinalCandidateAgent:
+        return ChangedFinalCandidateAgent(kwargs["tools"])
+
+
 def investigate(
     factory: Any,
     request: SemanticExtractionRequest,
@@ -170,11 +186,24 @@ def test_agent_reports_no_progress_when_the_same_problem_repeats():
     assert result.termination_reason == "no_progress"
 
 
-def test_agent_rejects_a_final_response_that_skipped_validation():
+def test_agent_deterministically_validates_a_final_response_that_skipped_the_tool_call():
     factory = ScriptedFactory([quotation("Example")], validate=False)
 
-    with pytest.raises(ValueError, match="without validating"):
-        investigate(factory, SemanticExtractionRequest(source_type="json", context={"source_json": {}}))
+    result = investigate(factory, SemanticExtractionRequest(source_type="json", context={"source_json": {}}))
+
+    assert result.quotation.line_items[0].product.trade_name == "Example"
+    assert result.validation_count == 1
+    assert result.termination_reason == "validated"
+
+
+def test_agent_validates_the_final_response_even_after_an_earlier_tool_validation():
+    result = investigate(
+        ChangedFinalCandidateFactory(), SemanticExtractionRequest(source_type="email", context={"body_text": "Offer"})
+    )
+
+    assert result.quotation.line_items[0].product.trade_name == "Final candidate"
+    assert result.validation_count == 2
+    assert result.termination_reason == "validated"
 
 
 def test_agent_logs_a_safe_failure_boundary_for_provider_errors():
