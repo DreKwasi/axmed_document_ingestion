@@ -3,7 +3,6 @@
 
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import type { DocumentResponse } from "@/types";
-import { sourceDocumentUrl } from "@/api";
 
 // --- Section 1: Props & Emits ---
 
@@ -16,11 +15,13 @@ const emit = defineEmits<{
   (event: "select", document: DocumentResponse): void;
   (event: "ingest"): void;
   (event: "delete", document: DocumentResponse): void;
+  (event: "preview", document: DocumentResponse): void;
+  (event: "export"): void;
 }>();
 
 // --- Section 2: Peer Image Extraction Row Expansion ---
 
-const sourceRows = computed(() => props.documents.flatMap((document) => {
+const allSourceRows = computed(() => props.documents.flatMap((document) => {
   const isImage = document.source_system === "image" || /\.(png|jpg|jpeg)$/i.test(document.filename);
   const attempts = document.image_extraction_attempts ?? [];
   if (isImage) {
@@ -31,7 +32,8 @@ const sourceRows = computed(() => props.documents.flatMap((document) => {
         source_name: `${sourceName(document)} — ${attempt.approach === "ocr_assisted" ? "OCR-assisted" : "Direct vision"}`,
         extraction_confidence: attempt.extraction_confidence ?? document.extraction_confidence,
         mapping_confidence: attempt.mapping_confidence,
-        product_counts: { extracted: attempt.product_count, failed: attempt.status === "failed" ? 1 : 0 },
+        status: attempt.status === "failed" ? "failed" : document.status,
+        product_counts: { extracted: attempt.product_count, failed: 0 },
       }));
     }
     const ocrAttempt = attempts.find((a) => a.approach === "ocr_assisted");
@@ -44,7 +46,7 @@ const sourceRows = computed(() => props.documents.flatMap((document) => {
         extraction_confidence: ocrAttempt?.extraction_confidence ?? document.extraction_confidence,
         mapping_confidence: ocrAttempt?.mapping_confidence,
         product_counts: ocrAttempt
-          ? { extracted: ocrAttempt.product_count, failed: ocrAttempt.status === "failed" ? 1 : 0 }
+          ? { extracted: ocrAttempt.product_count, failed: 0 }
           : { extracted: 0, failed: 0 },
       },
       {
@@ -54,13 +56,22 @@ const sourceRows = computed(() => props.documents.flatMap((document) => {
         extraction_confidence: visionAttempt?.extraction_confidence ?? document.extraction_confidence,
         mapping_confidence: visionAttempt?.mapping_confidence,
         product_counts: visionAttempt
-          ? { extracted: visionAttempt.product_count, failed: visionAttempt.status === "failed" ? 1 : 0 }
+          ? { extracted: visionAttempt.product_count, failed: 0 }
           : { extracted: 0, failed: 0 },
       },
     ];
   }
   return [document];
 }));
+
+type StatusFilter = "all" | "preapproved" | "review" | "approved" | "failed" | "processing";
+
+const statusFilter = ref<StatusFilter>("all");
+const sourceRows = computed(() => (
+  statusFilter.value === "all"
+    ? allSourceRows.value
+    : allSourceRows.value.filter((document) => statusKey(document) === statusFilter.value)
+));
 
 // --- Section 3: Tooltip Controls ---
 
@@ -123,24 +134,35 @@ function productCounts(doc: DocumentResponse): { extracted: number; failed: numb
   };
 }
 
-function statusKey(doc: DocumentResponse): "ready" | "review" | "needs_attention" | "processing" {
-  if (doc.quotation?.review_status === "approved") return "ready";
-  if (["failed", "rejected"].includes(doc.status) || doc.quotation?.review_status === "rejected") {
-    return "needs_attention";
+function isApproved(doc: DocumentResponse): boolean {
+  return doc.status === "approved" || doc.quotation?.review_status === "approved";
+}
+
+function isRejected(doc: DocumentResponse): boolean {
+  return doc.status === "rejected" || doc.quotation?.review_status === "rejected";
+}
+
+function statusKey(doc: DocumentResponse): "approved" | "preapproved" | "review" | "failed" | "processing" {
+  if (isApproved(doc)) return "approved";
+  if (doc.status === "failed") return "failed";
+  if (isRejected(doc)) return "review";
+  if (doc.status === "pending_review") {
+    return doc.mapping_confidence?.score != null && doc.mapping_confidence.issue_count === 0
+      ? "preapproved"
+      : "review";
   }
-  if (doc.status === "approved") return "ready";
-  if (doc.status === "pending_review") return "review";
   return "processing";
 }
 
 function statusLabel(doc: DocumentResponse): string {
   if (doc.status === "failed") return "Extraction failed";
-  if (doc.status === "rejected" || doc.quotation?.review_status === "rejected") return "Rejected";
-  if (doc.status === "pending_review" && doc.quotation?.has_corrections) return "Review corrected";
+  if (isRejected(doc)) return "Needs review";
+  if (isApproved(doc)) return "Approved";
   const map = {
-    ready: "Ready",
-    review: "Pending review",
-    needs_attention: "Needs attention",
+    approved: "Approved",
+    preapproved: "Pre-approved",
+    review: "Needs review",
+    failed: "Extraction failed",
     processing: "Processing",
   };
   return map[statusKey(doc)];
@@ -148,9 +170,10 @@ function statusLabel(doc: DocumentResponse): string {
 
 function statusClasses(doc: DocumentResponse): string {
   const map = {
-    ready: "bg-ok-bg text-ok border-[#a6f4c5]",
-    review: "bg-axmed-primary-tint text-axmed-primary border-[#d0d5dd]",
-    needs_attention: "bg-down-bg text-down border-[#fecdca]",
+    approved: "bg-emerald-50 text-emerald-800 border-emerald-300",
+    preapproved: "bg-sky-50 text-sky-800 border-sky-300",
+    review: "bg-amber-50 text-amber-900 border-amber-300",
+    failed: "bg-rose-50 text-rose-800 border-rose-300",
     processing: "bg-surface-alt text-ink-3 border-rule",
   };
   return map[statusKey(doc)];
@@ -188,8 +211,43 @@ function mappingConfidenceLabel(doc: DocumentResponse): string {
         <div>
           <h2 class="text-sm sm:text-base font-bold text-ink">Uploaded sources</h2>
           <p class="mt-0.5 text-xs text-ink-3">
-            {{ documents.length }} total documents · {{ sourceRows.length }} extraction results · Click any row to view extracted products and schema.
+            {{ documents.length }} total documents ·
+            <template v-if="statusFilter === 'all'">{{ allSourceRows.length }} extraction results</template>
+            <template v-else>{{ sourceRows.length }} of {{ allSourceRows.length }} extraction results</template>
+            · Click any row to view extracted products and schema.
           </p>
+        </div>
+        <div class="flex items-center gap-2">
+          <label class="sr-only" for="source-status-filter">Filter by status</label>
+          <select
+            id="source-status-filter"
+            v-model="statusFilter"
+            class="app-select text-xs"
+            aria-label="Filter by status"
+          >
+            <option value="all">All statuses</option>
+            <option value="preapproved">Pre-approved</option>
+            <option value="review">Needs review</option>
+            <option value="approved">Approved</option>
+            <option value="failed">Extraction failed</option>
+            <option value="processing">Processing</option>
+          </select>
+          <button
+            type="button"
+            class="rounded-lg border border-rule-dark bg-white px-3.5 py-2 text-xs font-semibold text-ink-2 transition hover:bg-surface-alt disabled:opacity-40"
+            :disabled="!documents.length"
+            @click="emit('export')"
+          >
+            Export CSV
+          </button>
+          <button
+            type="button"
+            class="rounded-lg bg-[#261c7a] px-3.5 py-2 text-xs font-semibold text-white transition hover:bg-[#1e155c] disabled:opacity-50 cursor-pointer"
+            :disabled="busy"
+            @click="emit('ingest')"
+          >
+            {{ busy ? "Ingesting…" : "Ingest source" }}
+          </button>
         </div>
       </div>
 
@@ -212,30 +270,29 @@ function mappingConfidenceLabel(doc: DocumentResponse): string {
               class="group cursor-pointer transition hover:bg-surface-alt/70"
               @click="closeTooltips(); emit('select', doc)"
             >
-              <!-- Source Name, File, Download -->
+              <!-- Source name and in-platform file preview -->
               <td class="px-6 py-4 align-top">
                 <div class="flex items-start gap-2.5">
-                  <span class="mt-0.5 rounded-md bg-surface-alt px-2 py-0.5 text-[10px] font-bold tracking-wider text-ink-2 uppercase border border-rule">
+                  <span class="mt-0.5 rounded border border-rule bg-surface-alt px-2 py-0.5 text-[10px] font-semibold tracking-[0.08em] text-ink-2 uppercase">
                     {{ formatBadge(doc.filename, doc.source_system) }}
                   </span>
-                  <div>
+                  <div class="min-w-0">
                     <button
                       type="button"
-                      class="group block text-left font-bold text-ink group-hover:text-axmed-primary transition cursor-pointer"
+                      class="group block max-w-sm text-left text-[12px] font-semibold leading-5 text-ink transition group-hover:text-axmed-primary sm:max-w-md cursor-pointer"
                       :title="sourceName(doc)"
                     >
                       <span class="block truncate max-w-sm sm:max-w-md">{{ sourceName(doc) }}</span>
                     </button>
-                    <div class="mt-1 flex items-center text-[11px]">
-                      <a
-                        class="font-mono text-[10px] text-ink-3 hover:text-axmed-primary hover:underline transition truncate max-w-xs sm:max-w-md cursor-pointer"
-                        :href="sourceDocumentUrl(doc.id)"
-                        :download="doc.filename"
-                        :title="`Download ${doc.filename}`"
-                        @click.stop
+                    <div class="mt-0.5 flex items-center">
+                      <button
+                        type="button"
+                        class="max-w-xs truncate text-left text-[10px] font-normal leading-4 text-slate-500 transition hover:text-axmed-primary hover:underline sm:max-w-md cursor-pointer"
+                        :title="`Preview ${doc.filename}`"
+                        @click.stop="emit('preview', doc)"
                       >
                         {{ doc.filename }}
-                      </a>
+                      </button>
                     </div>
                     <p v-if="doc.notes?.[0]" class="mt-1 text-[11px] text-slate-500 line-clamp-1">
                       {{ doc.notes[0] }}
@@ -288,9 +345,6 @@ function mappingConfidenceLabel(doc: DocumentResponse): string {
               <!-- Products -->
               <td class="px-4 py-4 align-top text-slate-700">
                 <span class="font-bold text-slate-900">{{ productCounts(doc).extracted }}</span> extracted
-                <span v-if="productCounts(doc).failed" class="block text-[10px] font-semibold text-rose-600 mt-0.5">
-                  {{ productCounts(doc).failed }} failed
-                </span>
               </td>
 
               <!-- Status -->
@@ -308,12 +362,14 @@ function mappingConfidenceLabel(doc: DocumentResponse): string {
                 <div class="inline-flex items-center gap-1">
                   <button
                     type="button"
-                    class="rounded-lg px-2 py-1.5 text-[11px] font-semibold text-down hover:bg-down-bg transition disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+                    class="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition hover:bg-rose-50 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
                     :disabled="busy"
                     :aria-label="`Delete ${sourceName(doc)}`"
                     @click.stop="emit('delete', doc)"
                   >
-                    Delete
+                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13M10 11v5m4-5v5" />
+                    </svg>
                   </button>
                   <button
                     type="button"
@@ -323,6 +379,11 @@ function mappingConfidenceLabel(doc: DocumentResponse): string {
                     →
                   </button>
                 </div>
+              </td>
+            </tr>
+            <tr v-if="!sourceRows.length">
+              <td colspan="6" class="px-6 py-12 text-center text-xs text-ink-3">
+                No sources match this status.
               </td>
             </tr>
           </tbody>
@@ -338,14 +399,6 @@ function mappingConfidenceLabel(doc: DocumentResponse): string {
         <p class="mt-1 text-xs text-ink-3 max-w-sm mx-auto">
           Ingest a PDF, email, image, or JSON offer to begin review.
         </p>
-        <button
-          type="button"
-          class="mt-4 rounded-xl bg-[#261c7a] px-4 py-2 text-xs font-bold text-white hover:bg-[#1e155c] active:bg-[#150f42] transition shadow-xs cursor-pointer"
-          :disabled="busy"
-          @click="emit('ingest')"
-        >
-          Ingest source
-        </button>
       </div>
     </div>
   </div>
