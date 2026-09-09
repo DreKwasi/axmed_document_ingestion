@@ -3,7 +3,6 @@
 
 import { computed } from "vue";
 import type { DocumentResponse } from "@/types";
-import { sourceDocumentUrl } from "@/api";
 
 // --- Section 1: Props & Emits ---
 
@@ -18,9 +17,24 @@ const emit = defineEmits<{
   (event: "openReview"): void;
   (event: "reextract"): void;
   (event: "switchApproach", approach: string): void;
+  (event: "preview"): void;
 }>();
 
 // --- Section 2: Presentation & Status Derivations ---
+
+/**
+ * Whether the document has been approved by human review or policy.
+ */
+function isApproved(doc: DocumentResponse): boolean {
+  return doc.status === "approved" || doc.quotation?.review_status === "approved";
+}
+
+/**
+ * Whether the document has been rejected by human review or policy.
+ */
+function isRejected(doc: DocumentResponse): boolean {
+  return doc.status === "rejected" || doc.quotation?.review_status === "rejected";
+}
 
 /**
  * Derives categorical status key ('ready' | 'review' | 'needs_attention' | 'processing').
@@ -28,23 +42,28 @@ const emit = defineEmits<{
  * @param doc Target document response.
  * @returns Categorical status key.
  */
-function statusKey(doc: DocumentResponse): "ready" | "review" | "needs_attention" | "processing" {
-  if (doc.quotation?.review_status === "approved") return "ready";
-  if (["failed", "rejected"].includes(doc.status) || doc.quotation?.review_status === "rejected") return "needs_attention";
-  if (doc.status === "approved") return "ready";
-  if (doc.status === "pending_review") return "review";
+function statusKey(doc: DocumentResponse): "approved" | "preapproved" | "review" | "failed" | "processing" {
+  if (isApproved(doc)) return "approved";
+  if (doc.status === "failed") return "failed";
+  if (isRejected(doc)) return "review";
+  if (doc.status === "pending_review") {
+    return doc.mapping_confidence?.score != null && doc.mapping_confidence.issue_count === 0
+      ? "preapproved"
+      : "review";
+  }
   return "processing";
 }
 
 /** Human-readable status label */
 const statusLabel = computed(() => {
   if (props.document.status === "failed") return "Extraction failed";
-  if (props.document.status === "rejected" || props.document.quotation?.review_status === "rejected") return "Rejected";
-  if (props.document.status === "pending_review" && props.document.quotation?.has_corrections) return "Pending review after correction";
+  if (isRejected(props.document)) return "Needs review";
+  if (isApproved(props.document)) return "Approved";
   const map = {
-    ready: "Ready",
-    review: "Pending human review",
-    needs_attention: "Needs attention",
+    approved: "Approved",
+    preapproved: "Pre-approved",
+    review: "Needs review",
+    failed: "Extraction failed",
     processing: "Processing",
   };
   return map[statusKey(props.document)];
@@ -80,7 +99,7 @@ const confidence = computed(() => {
 });
 
 /** Non-empty Harmonized System (HS) tariff codes from commercial terms */
-const hsCodes = computed(() => props.document.quotation?.commercial_terms.hs_codes?.filter(Boolean) ?? []);
+const hsCodes = computed(() => props.document.quotation?.commercial_terms?.hs_codes?.filter(Boolean) ?? []);
 
 /** Human-readable shipping transit duration */
 const transitDuration = computed(() => {
@@ -137,9 +156,10 @@ const canReview = computed(() => {
 /** CSS text color class based on status key */
 const statusTextClass = computed(() => {
   const map = {
-    ready: "text-ok",
-    review: "text-axmed-primary",
-    needs_attention: "text-down",
+    approved: "text-emerald-800",
+    preapproved: "text-sky-800",
+    review: "text-amber-900",
+    failed: "text-rose-800",
     processing: "text-ink-3",
   };
   return map[statusKey(props.document)];
@@ -148,9 +168,10 @@ const statusTextClass = computed(() => {
 /** CSS indicator dot class based on status key */
 const statusDotClass = computed(() => {
   const map = {
-    ready: "bg-ok",
-    review: "bg-axmed-cyan-dark",
-    needs_attention: "bg-down",
+    approved: "bg-emerald-600",
+    preapproved: "bg-sky-600",
+    review: "bg-amber-500",
+    failed: "bg-rose-600",
     processing: "bg-ink-3 animate-pulse",
   };
   return map[statusKey(props.document)];
@@ -159,32 +180,16 @@ const statusDotClass = computed(() => {
 
 <template>
   <div class="space-y-4">
-    <div
-      v-if="document.status === 'failed' && document.failure_reason"
-      class="rounded-2xl border border-down/30 bg-down-bg px-5 py-4 text-sm text-down"
-    >
-      <p class="font-bold">Extraction failed</p>
-      <p class="mt-1 text-down/90">{{ document.failure_reason }}</p>
-      <button
-        v-if="document.filename.toLowerCase().endsWith('.json')"
-        type="button"
-        class="mt-3 rounded-lg border border-down/40 bg-surface px-3 py-1.5 text-xs font-bold text-down hover:bg-down-bg disabled:opacity-50 cursor-pointer"
-        :disabled="busy"
-        @click="emit('reextract')"
-      >
-        Extract again
-      </button>
-    </div>
-
     <!-- Back link -->
     <div>
-      <button
-        type="button"
+      <a
+        href="#"
+        role="button"
         class="inline-flex items-center gap-1.5 text-xs font-semibold text-ink-3 hover:text-axmed-primary transition cursor-pointer"
-        @click="emit('back')"
+        @click.prevent="emit('back')"
       >
         <span>←</span> Back to sources
-      </button>
+      </a>
     </div>
 
     <!-- Main Header Card -->
@@ -206,7 +211,7 @@ const statusDotClass = computed(() => {
               v-for="attempt in document.image_extraction_attempts"
               :key="attempt.approach"
               type="button"
-              class="rounded-lg px-2.5 py-1 font-semibold transition cursor-pointer"
+              class="rounded-lg px-2.5 py-1 font-semibold transition cursor-pointer inline-flex items-center gap-1.5"
               :class="
                 (selectedApproach || document.image_extraction_attempts[0]?.approach) === attempt.approach
                   ? 'bg-surface text-axmed-primary shadow-2xs font-bold border border-rule'
@@ -215,7 +220,13 @@ const statusDotClass = computed(() => {
               :disabled="busy"
               @click="emit('switchApproach', attempt.approach)"
             >
-              {{ attempt.approach === "ocr_assisted" ? "OCR-assisted" : "Direct vision" }}
+              <span>{{ attempt.approach === "ocr_assisted" ? "OCR-assisted" : "Direct vision" }}</span>
+              <span
+                v-if="attempt.status === 'failed'"
+                class="rounded px-1 py-0.2 text-[10px] font-medium bg-amber-100/80 text-amber-800"
+              >
+                Unclear
+              </span>
             </button>
           </div>
 
@@ -225,9 +236,6 @@ const statusDotClass = computed(() => {
             <span class="rounded-md bg-surface-alt px-2 py-0.5 text-[10px] font-mono font-bold uppercase tracking-wider text-ink-2 border border-rule">
               {{ formatBadge }}
             </span>
-
-            <!-- Filename -->
-            <span class="font-mono text-ink-3 text-[11px]">{{ document.filename }}</span>
 
             <template v-if="externalSystem">
               <span class="text-rule-dark">·</span>
@@ -261,19 +269,47 @@ const statusDotClass = computed(() => {
         <!-- Distinct Action Buttons -->
         <div class="flex flex-wrap items-center gap-2 sm:gap-3 shrink-0 w-full sm:w-auto">
           <!-- Secondary Action: Open Original -->
-          <a
+          <button
+            type="button"
             class="inline-flex flex-1 sm:flex-none justify-center items-center gap-1.5 rounded-xl border border-rule bg-surface px-3.5 py-2 text-xs font-semibold text-ink-2 hover:bg-surface-alt hover:text-ink hover:border-rule-dark transition shadow-2xs cursor-pointer"
-            :href="sourceDocumentUrl(document.id)"
-            target="_blank"
-            rel="noreferrer"
+            @click="emit('preview')"
           >
-            <span>Open original</span>
-            <span class="text-ink-3 text-xs font-mono">↗</span>
-          </a>
+            <span>Preview source</span>
+            <svg class="h-3.5 w-3.5 text-ink-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" /><circle cx="12" cy="12" r="2.5" />
+            </svg>
+          </button>
+
+          <!-- Re-extract Action for JSON sources when extraction failed -->
+          <button
+            v-if="document.status === 'failed' && document.filename.toLowerCase().endsWith('.json')"
+            type="button"
+            class="inline-flex flex-1 sm:flex-none justify-center items-center gap-1.5 rounded-xl bg-[#261c7a] px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-[#1e155c] active:bg-[#150f42] transition focus:outline-none focus:ring-2 focus:ring-[#261c7a] focus:ring-offset-1 disabled:opacity-50 cursor-pointer"
+            :disabled="busy"
+            @click="emit('reextract')"
+          >
+            <span>Extract again</span>
+          </button>
+
+          <!-- Reviewed State Confirmation Pill -->
+          <span
+            v-else-if="isApproved(document)"
+            class="inline-flex flex-1 sm:flex-none justify-center items-center gap-1.5 rounded-xl bg-ok-bg border border-ok/30 px-3.5 py-2 text-xs font-bold text-ok shadow-2xs"
+          >
+            <span class="text-xs">✓</span>
+            <span>Approved</span>
+          </span>
+          <span
+            v-else-if="isRejected(document)"
+            class="inline-flex flex-1 sm:flex-none justify-center items-center gap-1.5 rounded-xl bg-down-bg border border-down/30 px-3.5 py-2 text-xs font-bold text-down shadow-2xs"
+          >
+            <span class="text-xs">✕</span>
+            <span>Rejected</span>
+          </span>
 
           <!-- Primary CTA Action: Review Source -->
           <button
-            v-if="canReview"
+            v-else-if="canReview"
             type="button"
             class="inline-flex flex-1 sm:flex-none justify-center items-center gap-1.5 rounded-xl bg-[#261c7a] px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-[#1e155c] active:bg-[#150f42] transition focus:outline-none focus:ring-2 focus:ring-[#261c7a] focus:ring-offset-1 disabled:opacity-50 cursor-pointer"
             :disabled="busy"
@@ -285,8 +321,8 @@ const statusDotClass = computed(() => {
         </div>
       </div>
 
-      <!-- Metadata Strip -->
-      <div class="mt-5 border-t border-rule pt-4">
+      <!-- Metadata Strip (only shown when quotation data is available) -->
+      <div v-if="document.quotation" class="mt-5 border-t border-rule pt-4">
         <div class="grid grid-cols-2 gap-3 md:grid-cols-4 text-xs">
           <div class="rounded-xl bg-surface-alt p-3 border border-rule">
             <p class="text-[10px] font-bold uppercase tracking-wider text-ink-3">Supplier</p>
@@ -339,6 +375,17 @@ const statusDotClass = computed(() => {
               {{ document.quotation?.rfq_reference || "—" }}
             </p>
           </div>
+        </div>
+      </div>
+
+      <!-- Extraction State Summary (when extraction failed) -->
+      <div v-else-if="document.status === 'failed' && document.failure_reason" class="mt-5 border-t border-rule pt-4">
+        <div class="rounded-xl bg-surface-alt p-4 border border-rule text-xs">
+          <p class="text-[10px] font-bold uppercase tracking-wider text-ink-3">Extraction state</p>
+          <p class="mt-1 font-semibold text-ink">
+            Extraction failed
+            <span class="font-normal text-ink-2"> — {{ document.failure_reason }}</span>
+          </p>
         </div>
       </div>
     </div>

@@ -121,7 +121,7 @@ function onReject() {
         <select
           id="rejection-reason"
           v-model="rejectionReason"
-          class="w-full rounded-xl border border-rule-dark bg-surface p-3 text-sm text-ink focus:border-axmed-primary focus:ring-1 focus:ring-axmed-primary focus:outline-none"
+          class="app-select w-full text-sm"
         >
           <option value="incorrect_extraction">Incorrect extraction</option>
           <option value="unreadable_source">Unreadable source</option>

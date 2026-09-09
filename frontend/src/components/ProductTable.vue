@@ -8,6 +8,7 @@ import type { LineItem } from "@/types";
 
 const props = defineProps<{
   lineItems: LineItem[];
+  documentMappingConfidence?: number | null;
   mappingIssues: Array<{ field_path: string; code: string; message: string; severity: string }>;
   fieldReviews?: Array<{
     field_path: string;
@@ -80,28 +81,42 @@ function displayPrice(value: string | null | undefined): string {
 }
 
 function mappingConfidenceForLine(index: number): number | null {
-  const values = props.fieldReviews
-    ?.filter((field) => field.field_path.startsWith(`line_items[${index}]`))
+  const fields = props.fieldReviews
+    ?.filter((field) => field.field_path.startsWith(`line_items[${index}]`)) ?? [];
+  const values = fields
     .map((field) => field.mapping_confidence_score)
-    .filter((score): score is number => score != null) ?? [];
+    .filter((score): score is number => score != null);
+  const hasUnscoredMappedFields = fields.some(
+    (field) => field.mapping_confidence_score == null
+      && field.mapping_confidence_reason?.includes("precise source provenance"),
+  );
+  if ((!values.length || hasUnscoredMappedFields) && props.documentMappingConfidence != null) {
+    return props.documentMappingConfidence;
+  }
   return values.length ? Math.round(values.reduce((sum, score) => sum + score, 0) / values.length) : null;
 }
 
 function mappingConfidenceExplanation(index: number): string {
   const fields = props.fieldReviews?.filter((field) => field.field_path.startsWith(`line_items[${index}]`)) ?? [];
   const scores = fields.map((field) => field.mapping_confidence_score).filter((score): score is number => score != null);
+  const hasUnscoredMappedFields = fields.some(
+    (field) => field.mapping_confidence_score == null
+      && field.mapping_confidence_reason?.includes("precise source provenance"),
+  );
+  if ((!scores.length || hasUnscoredMappedFields) && props.documentMappingConfidence != null) {
+    return `This product uses the source's ${props.documentMappingConfidence}% mapping confidence because a complete product-level field score is not available.`;
+  }
   if (!scores.length) return "No mapped fields are available to assess.";
   const reasons = [...new Set(fields.map((field) => field.mapping_confidence_reason).filter((reason): reason is string => Boolean(reason)))];
   const issueCount = mappingIssueCountForLine(index);
   return `Average of ${scores.length} mapped field score${scores.length === 1 ? "" : "s"}: ${mappingConfidenceForLine(index)}%. ${reasons.join(" ")} Mapping issues are counted separately: ${issueCount}.`;
 }
 
-function confidenceBadgeClass(confidence: number | null): string {
-  if (confidence == null) return "bg-surface-alt text-ink-3 border-rule";
-  if (confidence >= 85) return "bg-ok-bg text-ok border-[#a6f4c5]";
-  if (confidence >= 65) return "bg-alert-bg text-alert border-[#fedf89]";
-  if (confidence < 65) return "bg-down-bg text-down border-[#fecdca]";
-  return "bg-surface-alt text-ink-3 border-rule";
+function confidenceTextClass(confidence: number | null): string {
+  if (confidence == null) return "text-ink-3";
+  if (confidence >= 85) return "text-emerald-700";
+  if (confidence >= 65) return "text-amber-700";
+  return "text-rose-700";
 }
 
 function mappingIssueCountForLine(index: number): number {
@@ -152,7 +167,6 @@ function mappingIssueCountForLine(index: number): number {
                 <span class="mt-1 block">Mapping issues are counted separately and do not represent missing fields.</span>
               </span>
             </th>
-            <th class="px-4 py-3.5">Mapping issues</th>
             <th class="px-4 py-3.5 text-right"></th>
           </tr>
         </thead>
@@ -183,9 +197,9 @@ function mappingIssueCountForLine(index: number): number {
 
             <!-- Quoted Quantity -->
             <td class="px-4 py-4 align-top text-ink tabular-nums">
-              <span class="font-bold">{{ displayValue(item.quantity.quoted_quantity) }} {{ item.quantity.quoted_quantity_uom || "" }}</span>
+              <span class="font-bold">{{ displayValue(item.quantity?.quoted_quantity) }} {{ item.quantity?.quoted_quantity_uom || "" }}</span>
               <span
-                v-if="item.quantity.minimum_order_quantity"
+                v-if="item.quantity?.minimum_order_quantity"
                 class="mt-0.5 block text-[11px] text-ink-3 font-normal"
               >
                 MOQ: {{ displayValue(item.quantity.minimum_order_quantity) }} {{ item.quantity.minimum_order_quantity_uom || "" }}
@@ -203,18 +217,24 @@ function mappingIssueCountForLine(index: number): number {
             </td>
 
             <td class="px-4 py-4 align-top">
-              <span class="relative inline-flex" data-tooltip-container>
+              <div class="relative inline-flex flex-col items-start" data-tooltip-container>
                 <button
                   type="button"
-                  class="inline-flex items-center rounded-lg border px-2.5 py-1 text-[11px] font-bold cursor-pointer"
-                  :class="confidenceBadgeClass(mappingConfidenceForLine(index))"
+                  class="text-xs font-semibold tabular-nums underline decoration-transparent underline-offset-4 transition hover:decoration-current cursor-pointer"
+                  :class="confidenceTextClass(mappingConfidenceForLine(index))"
                   :aria-expanded="activeMappingTooltip === index"
                   :title="mappingConfidenceExplanation(index)"
                   aria-label="Explain mapping confidence"
                   @click.stop="toggleMappingTooltip(index)"
                 >
-                  {{ mappingConfidenceForLine(index) != null ? `${mappingConfidenceForLine(index)}%` : (mappingIssueCountForLine(index) === 0 ? "No issues" : "Needs review") }}
+                  {{ mappingConfidenceForLine(index) != null ? `${mappingConfidenceForLine(index)}%` : "No issues" }}
                 </button>
+                <span
+                  class="mt-1 text-[10px] font-medium"
+                  :class="mappingIssueCountForLine(index) > 0 ? 'text-rose-700' : 'text-ink-3'"
+                >
+                  {{ mappingIssueCountForLine(index) }} mapping {{ mappingIssueCountForLine(index) === 1 ? "issue" : "issues" }}
+                </span>
                 <span
                   v-if="activeMappingTooltip === index"
                   role="tooltip"
@@ -222,18 +242,7 @@ function mappingIssueCountForLine(index: number): number {
                 >
                   {{ mappingConfidenceExplanation(index) }}
                 </span>
-              </span>
-            </td>
-
-            <td class="px-4 py-4 align-top">
-              <span
-                class="inline-flex min-w-7 items-center justify-center rounded-lg border px-2.5 py-1 text-[11px] font-bold"
-                :class="mappingIssueCountForLine(index) > 0
-                  ? 'border-[#fecdca] bg-down-bg text-down'
-                  : 'border-rule bg-surface-alt text-ink-3'"
-              >
-                {{ mappingIssueCountForLine(index) }}
-              </span>
+              </div>
             </td>
 
             <!-- Action -->
