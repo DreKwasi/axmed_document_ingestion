@@ -7,23 +7,14 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-
-WHOLE_SOURCE_CHARACTER_LIMIT = 16_000
-CHUNK_CHARACTER_LIMIT = 4_000
+WHOLE_SOURCE_CHARACTER_LIMIT = 10_000_000
+CHUNK_CHARACTER_LIMIT = 10_000_000
 DEFAULT_SEARCH_LIMIT = 6
-MAX_ATLAS_CHUNKS = 60
-TEXT_SPLITTER = RecursiveCharacterTextSplitter(
-    chunk_size=CHUNK_CHARACTER_LIMIT,
-    chunk_overlap=0,
-    add_start_index=True,
-    strip_whitespace=False,
-)
 
 
 @dataclass(frozen=True)
-class EvidenceChunk:
-    """One addressable, deterministic fragment of a prepared source."""
+class EvidenceItem:
+    """One addressable, deterministic item of a prepared source document."""
 
     reference: str
     text: str
@@ -36,34 +27,20 @@ class EvidenceChunk:
         return " ".join(self.text.split())[:length]
 
 
-# --- Section 1: Data Chunking & Search Term Extraction Helpers ---
+# --- Section 1: Search Term Extraction & Document Items ---
 
 
 def _terms(value: str) -> tuple[str, ...]:
     return tuple(term for term in re.findall(r"[\w.-]+", value.casefold()) if len(term) > 1)
 
 
-def _json_chunks(payload: Any, path: str = "$") -> list[EvidenceChunk]:
+def _json_items(payload: Any, path: str = "$") -> list[EvidenceItem]:
     encoded = json.dumps(payload, default=str, sort_keys=True)
-    if len(encoded) <= CHUNK_CHARACTER_LIMIT:
-        return [EvidenceChunk(reference=f"json:{path}", text=encoded, kind="json_node", metadata={"path": path})]
-    if isinstance(payload, list):
-        chunks: list[EvidenceChunk] = []
-        for index, item in enumerate(payload):
-            chunks.extend(_json_chunks(item, f"{path}[{index}]"))
-        return chunks
-    if isinstance(payload, dict):
-        chunks = []
-        for key, item in payload.items():
-            escaped = str(key).replace("\\", "\\\\").replace("'", "\\'")
-            child_path = f"{path}.{key}" if str(key).replace("_", "").isalnum() else f"{path}['{escaped}']"
-            chunks.extend(_json_chunks(item, child_path))
-        return chunks
-    return [EvidenceChunk(reference=f"json:{path}", text=encoded, kind="json_value", metadata={"path": path})]
+    return [EvidenceItem(reference=f"json:{path}", text=encoded, kind="json", metadata={"path": path})]
 
 
-def _page_chunks(pages: Any, *, prefix: str) -> list[EvidenceChunk]:
-    chunks: list[EvidenceChunk] = []
+def _page_items(pages: Any, *, prefix: str) -> list[EvidenceItem]:
+    items: list[EvidenceItem] = []
     for fallback_page, page in enumerate(pages if isinstance(pages, list) else [], start=1):
         if not isinstance(page, dict):
             continue
@@ -74,8 +51,8 @@ def _page_chunks(pages: Any, *, prefix: str) -> list[EvidenceChunk]:
         if layout is not None:
             page_payload["native_layout"] = layout
         page_text = json.dumps(page_payload, default=str, sort_keys=True)
-        chunks.append(
-            EvidenceChunk(
+        items.append(
+            EvidenceItem(
                 reference=f"{prefix}:page:{page_number}",
                 text=page_text,
                 kind="page",
@@ -88,91 +65,80 @@ def _page_chunks(pages: Any, *, prefix: str) -> list[EvidenceChunk]:
                 },
             )
         )
-    return chunks
+    return items
 
 
-def _text_chunks(
+def _text_items(
     text: str,
     *,
     prefix: str,
     kind: str,
     metadata: dict[str, Any] | None = None,
-) -> list[EvidenceChunk]:
+) -> list[EvidenceItem]:
     if not text:
         return []
     base_metadata = metadata or {}
-    chunks = []
-    for document in TEXT_SPLITTER.create_documents([text]):
-        start = int(document.metadata["start_index"])
-        end = start + len(document.page_content)
-        chunks.append(
-            EvidenceChunk(
-                reference=f"{prefix}:{start}-{end}",
-                text=document.page_content,
-                kind=kind,
-                metadata={**base_metadata, "start_offset": start, "end_offset": end},
-            )
+    return [
+        EvidenceItem(
+            reference=f"{prefix}:0-{len(text)}",
+            text=text,
+            kind=kind,
+            metadata={**base_metadata, "start_offset": 0, "end_offset": len(text)},
         )
-    return chunks
+    ]
 
 
-def _chunks_for(source_type: str, context: dict[str, Any]) -> list[EvidenceChunk]:
+def _items_for(source_type: str, context: dict[str, Any]) -> list[EvidenceItem]:
     if source_type == "json" and isinstance(context.get("source_json"), dict):
-        return _json_chunks(context["source_json"])
+        return _json_items(context["source_json"])
     if source_type == "pdf":
-        return _page_chunks(context.get("pages", []), prefix="pdf")
+        return _page_items(context.get("pages", []), prefix="pdf")
     if source_type in {"ocr", "vision_direct", "ocr_assisted"}:
-        return _page_chunks(context.get("pages", []), prefix="ocr")
+        return _page_items(context.get("pages", []), prefix="ocr")
     if source_type == "email":
         body = str(context.get("body_text", ""))
-        return _text_chunks(body, prefix="email:body", kind="email_block")
-    return _text_chunks(json.dumps(context, default=str, sort_keys=True), prefix="source", kind="source_text")
+        return _text_items(body, prefix="email:body", kind="email_body")
+    return _text_items(json.dumps(context, default=str, sort_keys=True), prefix="source", kind="source_text")
 
 
 # --- Section 2: Unified Evidence Workspace ---
 
 
 class EvidenceWorkspace:
-    """Source-specific chunks behind a uniform search and inspection interface."""
+    """Source-specific evidence representations behind a uniform search and inspection interface."""
 
-    def __init__(self, *, source_type: str, chunks: tuple[EvidenceChunk, ...], mode: str):
+    def __init__(self, *, source_type: str, items: tuple[EvidenceItem, ...], mode: str = "whole_source"):
         self.source_type = source_type
-        self.chunks = chunks
+        self.items = items
         self.mode = mode
-        self._by_reference = {chunk.reference: chunk for chunk in chunks}
+        self._by_reference = {item.reference: item for item in items}
 
     @classmethod
     def from_context(cls, source_type: str, context: dict[str, Any]) -> EvidenceWorkspace:
-        """Create stable source references without changing parser output."""
+        """Create stable source references without chunking or splitting."""
 
-        chunks = tuple(_chunks_for(source_type, context))
-        characters = max(
-            sum(len(chunk.text) for chunk in chunks),
-            len(json.dumps(context, default=str, sort_keys=True)),
-        )
+        items = tuple(_items_for(source_type, context))
         return cls(
             source_type=source_type,
-            chunks=chunks,
-            mode="whole_source" if characters <= WHOLE_SOURCE_CHARACTER_LIMIT else "retrieval",
+            items=items,
+            mode="whole_source",
         )
 
     def atlas(self) -> dict[str, Any]:
-        """Expose source shape and references without sending every chunk body."""
+        """Expose source document structure and references without chunking."""
 
-        visible_chunks = self.chunks[:MAX_ATLAS_CHUNKS]
         return {
             "mode": self.mode,
             "source_type": self.source_type,
-            "chunk_count": len(self.chunks),
-            "omitted_chunk_count": len(self.chunks) - len(visible_chunks),
-            "chunks": [
+            "item_count": len(self.items),
+            "items": [
                 {
-                    "reference": chunk.reference,
-                    "kind": chunk.kind,
-                    "preview": chunk.preview(),
-                    "metadata": chunk.metadata,
+                    "reference": item.reference,
+                    "kind": item.kind,
+                    "preview": item.preview(),
+                    "metadata": item.metadata,
                 }
-                for chunk in visible_chunks
+                for item in self.items
             ],
         }
 
@@ -182,36 +148,32 @@ class EvidenceWorkspace:
         *,
         references: list[str] | None = None,
         limit: int = DEFAULT_SEARCH_LIMIT,
-    ) -> tuple[EvidenceChunk, ...]:
-        """Return lexically and structurally relevant candidate fragments.
-
-        This intentionally does not embed source data. A later embedding provider
-        can participate in ranking, while exact source references stay unchanged.
-        """
+    ) -> tuple[EvidenceItem, ...]:
+        """Return lexically and structurally relevant candidate evidence items."""
 
         query_terms = set(_terms(query))
         candidates = self._select(references)
-        scored: list[tuple[int, EvidenceChunk]] = []
-        for chunk in candidates:
-            haystack = f"{chunk.reference} {chunk.kind} {chunk.text}".casefold()
+        scored: list[tuple[int, EvidenceItem]] = []
+        for item in candidates:
+            haystack = f"{item.reference} {item.kind} {item.text}".casefold()
             score = sum(term in haystack for term in query_terms)
             if query.casefold().strip() and query.casefold().strip() in haystack:
                 score += len(query_terms) + 2
             if score:
-                scored.append((score, chunk))
-        scored.sort(key=lambda item: (-item[0], item[1].reference))
-        return tuple(chunk for _, chunk in scored[: max(1, min(limit, DEFAULT_SEARCH_LIMIT))])
+                scored.append((score, item))
+        scored.sort(key=lambda entry: (-entry[0], entry[1].reference))
+        return tuple(item for _, item in scored[: max(1, min(limit, DEFAULT_SEARCH_LIMIT))])
 
-    def inspect(self, references: list[str]) -> tuple[EvidenceChunk, ...]:
+    def inspect(self, references: list[str]) -> tuple[EvidenceItem, ...]:
         """Resolve explicit source references in caller-specified order."""
 
-        resolved: list[EvidenceChunk] = []
+        resolved: list[EvidenceItem] = []
         seen: set[str] = set()
         for reference in references:
-            chunk = self._resolve(reference)
-            if chunk is not None and chunk.reference not in seen:
-                resolved.append(chunk)
-                seen.add(chunk.reference)
+            item = self._resolve(reference)
+            if item is not None and item.reference not in seen:
+                resolved.append(item)
+                seen.add(item.reference)
         return tuple(resolved)
 
     def has_reference(self, reference: str) -> bool:
@@ -222,30 +184,43 @@ class EvidenceWorkspace:
     def references(self) -> tuple[str, ...]:
         """Return all stable evidence references."""
 
-        return tuple(chunk.reference for chunk in self.chunks)
+        return tuple(item.reference for item in self.items)
 
-    def _select(self, references: list[str] | None) -> tuple[EvidenceChunk, ...]:
+    def _select(self, references: list[str] | None) -> tuple[EvidenceItem, ...]:
         if not references:
-            return self.chunks
-        selected: list[EvidenceChunk] = []
+            return self.items
+        selected: list[EvidenceItem] = []
         seen: set[str] = set()
         for reference in references:
-            chunk = self._resolve(reference)
-            if chunk is not None and chunk.reference not in seen:
-                selected.append(chunk)
-                seen.add(chunk.reference)
+            item = self._resolve(reference)
+            if item is not None and item.reference not in seen:
+                selected.append(item)
+                seen.add(item.reference)
         return tuple(selected)
 
-    def _resolve(self, reference: str) -> EvidenceChunk | None:
+    def _resolve(self, reference: str) -> EvidenceItem | None:
         direct = self._by_reference.get(reference)
         if direct is not None:
             return direct
-        if not reference.startswith("json:"):
-            return None
-        path = reference.removeprefix("json:")
-        containing = [
-            chunk
-            for chunk in self.chunks
-            if isinstance(chunk.metadata.get("path"), str) and path.startswith(chunk.metadata["path"])
-        ]
-        return max(containing, key=lambda chunk: len(str(chunk.metadata["path"])), default=None)
+        if reference.startswith("json:"):
+            path = reference.removeprefix("json:")
+            containing = [
+                item
+                for item in self.items
+                if isinstance(item.metadata.get("path"), str) and path.startswith(item.metadata["path"])
+            ]
+            return max(containing, key=lambda item: len(str(item.metadata["path"])), default=None)
+        prefix_match = re.match(r"^(.*?):(\d+)-(\d+)$", reference)
+        for item in self.items:
+            item_match = re.match(r"^(.*?):(\d+)-(\d+)$", item.reference)
+            if prefix_match:
+                item_prefix = item_match.group(1) if item_match else item.reference
+                if prefix_match.group(1) == item_prefix:
+                    start, end = int(prefix_match.group(2)), int(prefix_match.group(3))
+                    item_end = int(item_match.group(3)) if item_match else len(item.text)
+                    if 0 <= start <= end <= item_end:
+                        return item
+                    return None
+            if item.reference == reference or item.reference.startswith(f"{reference}:"):
+                return item
+        return None

@@ -1,4 +1,4 @@
-from app.extraction.evidence_workspace import WHOLE_SOURCE_CHARACTER_LIMIT, EvidenceWorkspace
+from app.extraction.evidence_workspace import EvidenceWorkspace
 
 
 def test_json_workspace_uses_document_paths_for_provenance_ready_chunks():
@@ -56,12 +56,12 @@ def test_pdf_workspace_keeps_native_layout_addressable_without_reconstructing_it
     assert '"Product"' in layout[0].text
 
 
-def test_large_email_uses_chunked_retrieval_without_sending_full_source_by_default():
-    text = "Panadol terms\n" * ((WHOLE_SOURCE_CHARACTER_LIMIT // len("Panadol terms\n")) + 1)
+def test_large_email_uses_whole_source_without_chunking():
+    text = "Panadol terms\n" * 100
     workspace = EvidenceWorkspace.from_context("email", {"body_text": text})
 
-    assert workspace.mode == "retrieval"
-    assert len(workspace.chunks) > 1
+    assert workspace.mode == "whole_source"
+    assert len(workspace.items) == 1
     assert all(reference.startswith("email:body:") for reference in workspace.references())
 
 
