@@ -1136,6 +1136,7 @@ def apply_review_action(session: Session, document_id: str, action: str, command
         .values(
             payload_json=payload_json,
             review_status=next_review_status,
+            system_decision=next_review_status,
             has_corrections=True if action == "corrected" else quotation.has_corrections,
             revision=next_revision,
         )

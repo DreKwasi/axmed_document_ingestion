@@ -198,6 +198,7 @@ def test_rejection_requires_a_structured_reason_and_preserves_it(client, sanova_
     assert missing_reason.status_code == 422
     assert rejected.status_code == 200
     assert rejected.json()["quotation"]["review_status"] == "rejected"
+    assert rejected.json()["quotation"]["system_decision"] == "rejected"
     assert rejected.json()["reviews"][0]["rejection_reason"] == "incorrect_extraction"
 
 

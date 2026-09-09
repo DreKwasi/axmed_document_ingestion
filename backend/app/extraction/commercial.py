@@ -57,11 +57,12 @@ def _quotation_dates(context: RuleContext) -> list[ReviewIssue]:
 
 
 def _price_and_pack(context: RuleContext) -> list[ReviewIssue]:
-    """Validate prices and derive normalized unit prices.
+    """Validate prices and derive unit or pack prices when their basis is explicit.
 
     When pack_price is provided and units_per_pack is positive, computes:
         normalized_price = pack_price / units_per_pack
-    If only quoted_price is present, sets quoted price as the normalized amount.
+    When a quoted unit price matches the packaging unit label, computes:
+        pack_price = quoted_price * units_per_pack
     """
     assert context.line is not None
     pricing = context.line.pricing
@@ -75,7 +76,15 @@ def _price_and_pack(context: RuleContext) -> list[ReviewIssue]:
                 "derived": True,
                 "validation_status": "passed",
             }
-        return []
+            if (
+                units is not None
+                and units > 0
+                and context.line.packaging.unit_label
+                and pricing.quoted_price.uom == context.line.packaging.unit_label
+            ):
+                pricing.pack_price = pricing.quoted_price.amount * Decimal(units)
+        if pricing.pack_price is None:
+            return []
     # ``pack_price`` has already been classified by the mapping/reasoning
     # layer. It does not license a global assumption that the source UOM is
     # "pack": it may be a carton, kit, bottle, vial, or an unclassified

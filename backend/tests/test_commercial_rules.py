@@ -67,3 +67,35 @@ def test_document_currency_is_inherited_by_lines_without_an_override():
 
     assert result.line_items[0].pricing.currency == "USD"
     assert result.line_items[1].pricing.currency == "EUR"
+
+
+def test_pack_price_is_derived_from_an_explicit_matching_unit_price():
+    quotation = CanonicalQuotation(
+        commercial_terms={"currency": "USD"},
+        line_items=[
+            LineItem(
+                packaging={"units_per_pack": 20, "unit_label": "tablet"},
+                pricing={"quoted_price": {"amount": Decimal("0.0091"), "uom": "tablet"}},
+            )
+        ],
+    )
+
+    result = validate_and_derive(quotation)
+
+    assert result.line_items[0].pricing.pack_price == Decimal("0.1820")
+    assert result.line_items[0].pricing.currency == "USD"
+
+
+def test_pack_price_is_not_derived_when_the_price_unit_does_not_match_packaging():
+    quotation = CanonicalQuotation(
+        line_items=[
+            LineItem(
+                packaging={"units_per_pack": 20, "unit_label": "tablet"},
+                pricing={"quoted_price": {"amount": Decimal("0.0091"), "uom": "vial"}},
+            )
+        ],
+    )
+
+    result = validate_and_derive(quotation)
+
+    assert result.line_items[0].pricing.pack_price is None
