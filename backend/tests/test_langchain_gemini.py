@@ -1,4 +1,4 @@
-"""Tests for LangChain + Gemini 3.1 Flash Lite semantic reasoning across all extraction sources."""
+"""Tests for LangChain structured model calls across all extraction sources."""
 
 import json
 from decimal import Decimal
@@ -25,7 +25,7 @@ from app.extraction.contracts import (
 )
 from app.extraction.email_processing import consume_email_extraction
 from app.extraction.llm import extract_semantics
-from app.extraction.semantic_agent import SemanticExtractionResult
+from app.extraction.semantic import SemanticExtractionResult
 from app.models import (
     DocumentRecord,
     EmailExtractionRecord,
@@ -39,7 +39,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 EMAIL_FIXTURE = PROJECT_ROOT / "backend/evals/fixtures/documents/RE_RFQ-2026-0244_Novara_quotation.eml"
 
 
-def semantic_agent_result(quotation: CanonicalQuotation, duration_ms: int = 100) -> SemanticExtractionResult:
+def semantic_result(quotation: CanonicalQuotation, duration_ms: int = 100) -> SemanticExtractionResult:
     return SemanticExtractionResult(
         quotation=quotation,
         source_facts=(),
@@ -47,37 +47,32 @@ def semantic_agent_result(quotation: CanonicalQuotation, duration_ms: int = 100)
         validation_count=1,
         model_call_count=2,
         termination_reason="validated",
-        telemetry=({"duration_ms": duration_ms, "model": "gemini-3.1-flash-lite"},),
+        telemetry=({"duration_ms": duration_ms, "model": "gemini-3.5-flash-lite"},),
     )
 
 
-def test_semantic_extractor_configures_langchain_fallback_models_in_priority_order():
+def test_semantic_extractor_configures_google_gemini_as_the_only_provider():
     configured: dict[str, object] = {}
 
-    def stub_investigation(model, _request, *, provider_name, fallback_models, **_kwargs):
+    def stub_extraction(model, _request, *, provider_name, **_kwargs):
         configured["primary"] = model
         configured["provider_name"] = provider_name
-        configured["fallback_models"] = fallback_models
         quotation = CanonicalQuotation(line_items=[LineItem(product=Product(trade_name="Fallback"))])
-        return semantic_agent_result(quotation)
+        return semantic_result(quotation)
 
     direct = object()
-    openrouter_gemini = object()
-    openrouter_oss = object()
-    with patch("app.extraction.llm.ChatGoogleGenerativeAI", return_value=direct):
-        with patch("app.extraction.llm.ChatOpenRouter", side_effect=[openrouter_gemini, openrouter_oss]):
-            with patch("app.extraction.llm.run_semantic_investigation", side_effect=stub_investigation):
-                result = extract_semantics(
-                    Config(gemini_api_key="direct-key", openrouter_api_key="openrouter-key"),
-                    {"pages": []},
-                    source_type="pdf",
-                )
+    with patch("app.extraction.llm.init_chat_model", return_value=direct):
+        with patch("app.extraction.llm.run_semantic_extraction", side_effect=stub_extraction):
+            result = extract_semantics(
+                Config(gemini_api_key="direct-key"),
+                {"pages": []},
+                source_type="pdf",
+            )
 
     assert result.quotation.line_items[0].product.trade_name == "Fallback"
     assert configured == {
         "primary": direct,
         "provider_name": "google-gemini",
-        "fallback_models": (openrouter_gemini, openrouter_oss),
     }
 
 
@@ -123,7 +118,6 @@ def test_email_worker_executes_langchain_when_gemini_configured(tmp_path):
         database_url=db_url,
         upload_dir=tmp_path / "uploads",
         gemini_api_key="test-api-key",
-        gemini_model="gemini-3.1-flash-lite",
     )
 
     engine = create_sqlite_engine(db_url)
@@ -157,7 +151,7 @@ def test_email_worker_executes_langchain_when_gemini_configured(tmp_path):
     )
 
     with patch("app.extraction.llm.extract_semantics") as mock_extract:
-        mock_extract.return_value = semantic_agent_result(mock_quotation, 120)
+        mock_extract.return_value = semantic_result(mock_quotation, 120)
         with session_factory() as session:
             consume_email_extraction(session, extraction_id, settings)
 
@@ -171,7 +165,7 @@ def test_email_worker_executes_langchain_when_gemini_configured(tmp_path):
         )
         assert invocation is not None
         assert invocation.provider == "google-gemini"
-        assert invocation.model == "gemini-3.1-flash-lite"
+        assert invocation.model == "gemini-3.5-flash-lite"
         assert invocation.status == "completed"
 
 
@@ -188,7 +182,6 @@ def test_pdf_worker_executes_langchain_when_gemini_configured(tmp_path):
         database_url=db_url,
         upload_dir=tmp_path / "uploads",
         gemini_api_key="test-api-key",
-        gemini_model="gemini-3.1-flash-lite",
     )
 
     engine = create_sqlite_engine(db_url)
@@ -229,7 +222,7 @@ def test_pdf_worker_executes_langchain_when_gemini_configured(tmp_path):
     )
 
     with patch("app.extraction.llm.extract_semantics") as mock_extract:
-        mock_extract.return_value = semantic_agent_result(mock_quotation, 145)
+        mock_extract.return_value = semantic_result(mock_quotation, 145)
         with session_factory() as session:
             consume_pdf_extraction(session, extraction_id, settings)
 
@@ -258,7 +251,7 @@ def test_pdf_worker_executes_langchain_when_gemini_configured(tmp_path):
         )
         assert invocation is not None
         assert invocation.provider == "google-gemini"
-        assert invocation.model == "gemini-3.1-flash-lite"
+        assert invocation.model == "gemini-3.5-flash-lite"
         assert invocation.status == "completed"
 
 
@@ -275,7 +268,6 @@ def test_ocr_worker_executes_langchain_when_gemini_configured(tmp_path):
         database_url=db_url,
         upload_dir=tmp_path / "uploads",
         gemini_api_key="test-api-key",
-        gemini_model="gemini-3.1-flash-lite",
         ocr_service_url="https://modal.example.com/ocr",
         ocr_service_token="test-service-token",
     )
@@ -294,7 +286,6 @@ def test_ocr_worker_executes_langchain_when_gemini_configured(tmp_path):
             original_filename="scan.png",
             stored_filename=f"{doc_id}.png",
             media_type="image/png",
-            content_sha256="abc",
             source_system="scan",
             status="ocr_running",
         )
@@ -347,8 +338,8 @@ def test_ocr_worker_executes_langchain_when_gemini_configured(tmp_path):
     with patch("app.extraction.image_processing.request_ocr", return_value=mock_ocr_result):
         with patch("app.extraction.image_processing.extract_semantics") as mock_ex:
             mock_ex.side_effect = [
-                semantic_agent_result(ocr_quotation, 110),
-                semantic_agent_result(vision_quotation, 120),
+                semantic_result(ocr_quotation, 110),
+                semantic_result(vision_quotation, 120),
             ]
             with session_factory() as session:
                 consume_ocr(session, job_id, settings)
@@ -426,7 +417,7 @@ def test_ocr_worker_executes_langchain_when_gemini_configured(tmp_path):
     with session_factory() as session:
         session.add(DocumentRecord(
             id=low_doc_id, original_filename="garbled.png", stored_filename=f"{low_doc_id}.png",
-            media_type="image/png", content_sha256="def", source_system="scan", status="ocr_running",
+            media_type="image/png", source_system="scan", status="ocr_running",
         ))
         low_job = OcrJobRecord(document_id=low_doc_id, selected_pages_json="[1]", status="queued")
         session.add(low_job)
@@ -436,19 +427,24 @@ def test_ocr_worker_executes_langchain_when_gemini_configured(tmp_path):
     low_result = mock_ocr_result.model_copy(deep=True)
     low_result.pages[0].lines[0].confidence = 0.35
     with patch("app.extraction.image_processing.request_ocr", return_value=low_result):
-        with patch("app.extraction.image_processing.extract_semantics") as blocked_extractor:
+        with patch("app.extraction.image_processing.extract_semantics") as low_extractor:
+            low_extractor.side_effect = [
+                semantic_result(ocr_quotation, 110),
+                semantic_result(vision_quotation, 120),
+            ]
             with session_factory() as session:
                 consume_ocr(session, low_job_id, settings)
-    blocked_extractor.assert_not_called()
+    assert low_extractor.call_count == 2
+    assert low_extractor.call_args_list[1].kwargs["source_media"] == source_bytes
     with session_factory() as session:
         rejected = session.get(DocumentRecord, low_doc_id)
         rejected_attempts = list(session.scalars(select(ImageExtractionAttemptRecord).where(
             ImageExtractionAttemptRecord.document_id == low_doc_id
         )))
-        assert rejected.status == "failed"
-        assert "too unclear" in rejected.failure_reason
+        assert rejected.status == "auto_rejected"
+        assert "not readable enough" in rejected.failure_reason
         assert len(rejected_attempts) == 2
-        assert all(attempt.status == "failed" for attempt in rejected_attempts)
+        assert all(attempt.status == "completed" for attempt in rejected_attempts)
 
 
 def test_langchain_offline_fallback_when_unconfigured(tmp_path):
@@ -460,7 +456,6 @@ def test_langchain_offline_fallback_when_unconfigured(tmp_path):
         database_url=db_url,
         upload_dir=tmp_path / "uploads",
         gemini_api_key=None,
-        openrouter_api_key=None,  # No semantic provider configured
     )
 
     engine = create_sqlite_engine(db_url)

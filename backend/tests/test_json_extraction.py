@@ -13,10 +13,10 @@ from app.extraction.json import JsonExtractionProposal, JsonSemanticExtraction, 
 class ScriptedExtractor:
     def __init__(self, *responses: JsonSemanticExtraction | None):
         self.responses = list(responses)
-        self.calls: list[list[str] | None] = []
+        self.calls = 0
 
-    def extract(self, _payload, _profile, *, invalid_source_paths=None, **_kwargs):
-        self.calls.append(invalid_source_paths)
+    def extract(self, _payload, _profile, **_kwargs):
+        self.calls += 1
         response = self.responses.pop(0) if self.responses else None
         if response is None:
             return None
@@ -78,7 +78,7 @@ def test_nested_flat_and_mixed_sources_are_extracted_without_cross_document_memo
 
     assert [response.status_code for response in responses] == [200, 200, 200]
     assert [response.json()["status"] for response in responses] == ["pending_review"] * 3
-    assert extractor.calls == [None, None, None]
+    assert extractor.calls == 3
 
 
 def test_unmapped_fact_is_preserved_but_a_source_without_products_fails_gracefully(tmp_path):
@@ -117,7 +117,7 @@ def test_unmapped_fact_is_preserved_but_a_source_without_products_fails_graceful
     ]
 
 
-def test_invalid_claim_is_retried_without_losing_another_valid_fact(tmp_path):
+def test_invalid_claim_is_discarded_without_rerunning_the_whole_extraction(tmp_path):
     payload = {"offer": {"reference": "Q-1", "minimum": "5,000 boxes"}}
     first = JsonSemanticExtraction(
         source_facts=[
@@ -125,10 +125,7 @@ def test_invalid_claim_is_retried_without_losing_another_valid_fact(tmp_path):
             JsonSourceFact(label="Bad", value="wrong", source_path="$.offer.missing"),
         ]
     )
-    second = JsonSemanticExtraction(
-        source_facts=[JsonSourceFact(label="Minimum order", value="5,000 boxes", source_path="$.offer.minimum")]
-    )
-    extractor = ScriptedExtractor(first, second)
+    extractor = ScriptedExtractor(first)
     settings = Config(database_url=f"sqlite:///{tmp_path / 'app.db'}", upload_dir=tmp_path / "uploads")
     with TestClient(create_app(settings, json_extractor=extractor)) as client:
         document = upload_json(client, payload).json()
@@ -137,9 +134,9 @@ def test_invalid_claim_is_retried_without_losing_another_valid_fact(tmp_path):
     assert document["quotation"] is None
     assert document["extraction_confidence"] is None
     assert document["mapping_confidence"] is None
-    assert {fact["label"] for fact in document["extracted_source_facts"]} == {"Reference", "Minimum order"}
+    assert {fact["label"] for fact in document["extracted_source_facts"]} == {"Reference"}
     assert {fact["review_status"] for fact in document["extracted_source_facts"]} == {"not_reviewable"}
-    assert extractor.calls == [None, ["$.offer.missing"]]
+    assert extractor.calls == 1
 
 
 def test_unpopulated_canonical_destination_is_preserved_as_unmapped(tmp_path):
@@ -166,7 +163,7 @@ def test_unpopulated_canonical_destination_is_preserved_as_unmapped(tmp_path):
     assert document["quotation"] is None
 
 
-def test_source_fails_only_when_no_grounded_quotation_fact_can_be_recovered(tmp_path):
+def test_source_fails_when_the_extraction_has_no_products(tmp_path):
     payload = {"offer": {"reference": "Q-1"}}
     extraction = JsonSemanticExtraction(
         source_facts=[JsonSourceFact(label="Bad", value="Q-1", source_path="$.offer.not_present")]
@@ -177,7 +174,7 @@ def test_source_fails_only_when_no_grounded_quotation_fact_can_be_recovered(tmp_
 
     assert response.status_code == 200
     assert response.json()["status"] == "failed"
-    assert "source-grounded" in response.json()["failure_reason"]
+    assert "No products" in response.json()["failure_reason"]
 
 
 def test_extractor_failure_is_kept_on_the_original_source_with_a_safe_reason(tmp_path):
@@ -196,9 +193,11 @@ def test_extractor_failure_is_kept_on_the_original_source_with_a_safe_reason(tmp
     )
 
 
-def test_json_can_be_explicitly_reextracted_without_any_mapping_confirmation(tmp_path, sanova_bytes):
+def test_json_can_be_explicitly_reextracted_without_any_mapping_confirmation(
+    tmp_path, sanova_bytes, sanova_json_extractor
+):
     settings = Config(database_url=f"sqlite:///{tmp_path / 'app.db'}", upload_dir=tmp_path / "uploads")
-    with TestClient(create_app(settings)) as client:
+    with TestClient(create_app(settings, json_extractor=sanova_json_extractor)) as client:
         uploaded = client.post(
             "/api/v1/documents",
             files={"files": ("sanova.json", sanova_bytes, "application/json")},
