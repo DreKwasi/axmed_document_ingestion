@@ -20,7 +20,6 @@ import type { DocumentResponse, ProcessingEvent } from "@/types";
 
 import AxmedLogo from "./components/AxmedLogo.vue";
 import HowItWorksModal from "./components/HowItWorksModal.vue";
-import PipelinePageView from "./components/PipelinePageView.vue";
 import ProductDetailDrawer from "./components/ProductDetailDrawer.vue";
 import ProductTable from "./components/ProductTable.vue";
 import ReviewModal from "./components/ReviewModal.vue";
@@ -50,7 +49,6 @@ const eventSources = new Map<string, EventSource>();
 const selectedApproach = ref<string | null>(null);
 const previewDocument = ref<DocumentResponse | null>(null);
 const isHowItWorksOpen = ref(false);
-const currentView = ref<"documents" | "pipeline">("documents");
 
 const toast = ref<ToastNotification>({
   show: false,
@@ -134,39 +132,12 @@ function closeDocument(historyMode: HistoryMode = "push") {
   if (historyMode !== "none") writeSourceUrl(null, historyMode);
 }
 
-function openPipelinePage(historyMode: HistoryMode = "push") {
-  currentView.value = "pipeline";
-  isHowItWorksOpen.value = false;
-  if (historyMode !== "none") {
-    const url = new URL(window.location.href);
-    url.searchParams.set("view", "pipeline");
-    url.searchParams.delete("source");
-    url.searchParams.delete("approach");
-    window.history[`${historyMode}State`]({}, "", `${url.pathname}${url.search}${url.hash}`);
-  }
-}
-
-function closePipelinePage(historyMode: HistoryMode = "push") {
-  currentView.value = "documents";
-  if (historyMode !== "none") {
-    const url = new URL(window.location.href);
-    url.searchParams.delete("view");
-    window.history[`${historyMode}State`]({}, "", `${url.pathname}${url.search}${url.hash}`);
-  }
-}
-
 function navigateHome() {
-  closePipelinePage();
   closeDocument();
 }
 
 function restoreViewFromUrl() {
   const params = new URLSearchParams(window.location.search);
-  if (params.get("view") === "pipeline") {
-    openPipelinePage("none");
-    return;
-  }
-  currentView.value = "documents";
   const documentId = params.get("source");
   const document = documents.value.find((item) => item.id === documentId);
   if (!document) {
@@ -512,18 +483,6 @@ onBeforeUnmount(() => {
 
         <div class="flex items-center gap-3">
           <a
-            id="pipeline-architecture-btn"
-            href="#"
-            role="button"
-            class="inline-flex items-center gap-1.5 rounded-lg border border-rule bg-white px-3 py-1.5 text-xs font-semibold transition cursor-pointer shadow-2xs"
-            :class="currentView === 'pipeline' ? 'border-[#261c7a] bg-[#261c7a]/10 text-[#261c7a]' : 'text-ink-2 hover:bg-surface-alt hover:text-ink'"
-            @click.prevent="openPipelinePage()"
-          >
-            <span>Pipeline Architecture</span>
-            <span class="hidden sm:inline-block rounded bg-sky-100 px-1.5 py-0.2 text-[9px] font-bold text-sky-700">Interactive</span>
-          </a>
-
-          <a
             id="how-it-works-btn"
             href="#"
             role="button"
@@ -533,7 +492,7 @@ onBeforeUnmount(() => {
             <svg class="h-3.5 w-3.5 text-axmed-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
               <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
-            How it works
+            <span>How it works</span>
           </a>
         </div>
 
@@ -560,16 +519,8 @@ onBeforeUnmount(() => {
         {{ errorMessage }}
       </p>
 
-      <!-- VIEW 3: DEDICATED PIPELINE & ARCHITECTURE PAGE -->
-      <div v-if="currentView === 'pipeline'">
-        <PipelinePageView
-          @back="closePipelinePage"
-          @close="closePipelinePage"
-        />
-      </div>
-
       <!-- VIEW 1: HOME PAGE (No source selected) -->
-      <div v-else-if="!selectedDocument">
+      <div v-if="!selectedDocument">
         <!-- Uploaded Sources Table -->
         <SourceTable
           :documents="documents"
@@ -579,7 +530,6 @@ onBeforeUnmount(() => {
           @delete="removeDocument"
           @preview="openSourcePreview"
           @export="exportAllData"
-          @open-how-it-works="isHowItWorksOpen = true"
         />
       </div>
 
@@ -595,7 +545,6 @@ onBeforeUnmount(() => {
           @open-review="isReviewModalOpen = true"
           @reextract="reextract(selectedDocument)"
           @preview="openSourcePreview(selectedDocument)"
-          @open-how-it-works="isHowItWorksOpen = true"
         />
 
         <section
@@ -677,7 +626,6 @@ onBeforeUnmount(() => {
             :field-reviews="selectedDocument.quotation.field_reviews"
             :selected-index="selectedLineIndex"
             @select-line="(idx) => { selectedLineIndex = idx; isDrawerOpen = true; }"
-            @open-how-it-works="isHowItWorksOpen = true"
           />
         </section>
 
@@ -724,7 +672,6 @@ onBeforeUnmount(() => {
     <HowItWorksModal
       :open="isHowItWorksOpen"
       @close="isHowItWorksOpen = false"
-      @open-page="openPipelinePage()"
     />
   </div>
 </template>

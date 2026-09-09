@@ -10,7 +10,6 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: "close"): void;
-  (e: "open-page"): void;
 }>();
 
 type Tab = "pipeline" | "scoring" | "routing";
@@ -62,17 +61,6 @@ onUnmounted(() => window.removeEventListener("keydown", handleKeyDown));
             </p>
           </div>
           <div class="flex items-center gap-2">
-            <button
-              type="button"
-              class="inline-flex items-center gap-1.5 rounded-xl border border-rule bg-white px-3 py-1.5 text-xs font-semibold text-axmed-primary hover:bg-surface-alt transition cursor-pointer shadow-2xs"
-              title="Open as full-screen dedicated page"
-              @click="emit('open-page')"
-            >
-              <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
-              </svg>
-              <span>Full Page</span>
-            </button>
             <button
               type="button"
               class="rounded-xl p-2 text-ink-3 hover:bg-surface-alt hover:text-ink transition cursor-pointer"

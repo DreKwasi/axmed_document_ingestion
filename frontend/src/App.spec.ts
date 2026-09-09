@@ -1534,27 +1534,20 @@ describe("App", () => {
 
     expect(wrapper.text()).not.toContain("How It Works: Pipeline & Confidence Engine");
 
-    // 1. Open from Home table button
+    // 1. Verify there is no redundant "How it works" button in the Home table
     const homeGuideBtn = wrapper.findAll("button").find((btn) => btn.text() === "How it works");
-    expect(homeGuideBtn).toBeDefined();
-    await homeGuideBtn?.trigger("click");
-    await flushPromises();
-    expect(wrapper.text()).toContain("How It Works: Pipeline & Confidence Engine");
+    expect(homeGuideBtn).toBeUndefined();
 
-    // Close
-    let closeBtn = wrapper.findAll("button").find((btn) => btn.text().includes("Got it, close guide"));
-    await closeBtn?.trigger("click");
-    await flushPromises();
-    expect(wrapper.text()).not.toContain("How It Works: Pipeline & Confidence Engine");
-
-    // Open document to navigate to Source Detail page
+    // 2. Open document to navigate to Source Detail page and verify no redundant button in Detail header
     await wrapper.get("button.group").trigger("click");
     await flushPromises();
 
-    // 2. Open from Detail page header button
     const detailGuideBtn = wrapper.findAll("button").find((btn) => btn.text().includes("How it works"));
-    expect(detailGuideBtn).toBeDefined();
-    await detailGuideBtn?.trigger("click");
+    expect(detailGuideBtn).toBeUndefined();
+
+    // 3. Open from the single global top header button
+    const headerGuideBtn = wrapper.get("#how-it-works-btn");
+    await headerGuideBtn.trigger("click");
     await flushPromises();
     expect(wrapper.text()).toContain("How It Works: Pipeline & Confidence Engine");
 
@@ -1568,16 +1561,10 @@ describe("App", () => {
     expect(wrapper.text()).toContain("82% (Medium)");
     expect(wrapper.text()).toContain("Commercial Math Bonus (+5%)");
 
-    // Close
-    closeBtn = wrapper.findAll("button").find((btn) => btn.text().includes("Got it, close guide"));
+    // Close modal
+    const closeBtn = wrapper.findAll("button").find((btn) => btn.text().includes("Got it, close guide"));
     await closeBtn?.trigger("click");
     await flushPromises();
     expect(wrapper.text()).not.toContain("How It Works: Pipeline & Confidence Engine");
-
-    // 3. Open from global top header
-    const headerGuideBtn = wrapper.get("#how-it-works-btn");
-    await headerGuideBtn.trigger("click");
-    await flushPromises();
-    expect(wrapper.text()).toContain("How It Works: Pipeline & Confidence Engine");
   });
 });
