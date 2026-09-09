@@ -19,6 +19,7 @@
 ## Operational follow-ups
 
 - [ ] **Configure independent review providers** — set `AGENT_REVIEW_COMMAND` and, if desired, `AGENT_FIX_COMMAND` in the developer environment. Docs: agent review, tooling.
+- [ ] **Restore Playwright browser runtime** — install the pinned Playwright Chromium browser so `bin/agent-validate full` can execute browser E2E tests. Acceptance: `npm --prefix frontend run test:e2e` runs its five tests rather than failing before launch. Docs: `docs/system/testing.md`. Evidence: `docs/worksheets/semantic-final-candidate-validation.md`.
 
 ## Completed
 
