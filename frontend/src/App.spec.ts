@@ -529,6 +529,29 @@ describe("App", () => {
     expect(rows[0].findAll("td")[2].text()).not.toContain("No issues");
   });
 
+  it("shows extraction confidence for a completed zero-product image reading", async () => {
+    api.fetchDocuments.mockResolvedValue([{
+      id: "processing-image", filename: "glare.jpg", source_name: "Glare quotation", status: "pending_review",
+      source_system: "image", reviews: [], quotation: null,
+      extraction_confidence: { score: 100, band: "High", factors: [] },
+      image_extraction_attempts: [{
+        approach: "ocr_assisted", status: "completed", result: { supplier: {}, line_items: [] }, product_count: 0,
+        extraction_confidence: { score: 74, band: "Medium", factors: [] },
+        mapping_confidence: { score: 100, band: "High", issue_count: 0 },
+      }],
+    }]);
+
+    const wrapper = mount(App);
+    await flushPromises();
+
+    const rows = wrapper.findAll("tbody tr");
+    expect(rows).toHaveLength(2);
+    expect(rows[0].text()).toContain("OCR-assisted");
+    expect(rows[0].findAll("td")[1].text()).toContain("74%");
+    expect(rows[0].findAll("td")[1].text()).not.toContain("—");
+    expect(rows[1].findAll("td")[1].text()).toContain("—");
+  });
+
   it("marks mapping confidence as not applicable when image extraction failed", async () => {
     api.fetchDocuments.mockResolvedValue([{
       id: "failed-image", filename: "glare.jpg", source_name: "Glare quotation", status: "failed",

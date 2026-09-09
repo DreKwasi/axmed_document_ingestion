@@ -24,13 +24,14 @@ const emit = defineEmits<{
 const allSourceRows = computed(() => props.documents.flatMap((document) => {
   const isImage = document.source_system === "image" || /\.(png|jpg|jpeg)$/i.test(document.filename);
   const attempts = document.image_extraction_attempts ?? [];
+  const attemptConfidence = (attempt: typeof attempts[number] | undefined) => attempt?.extraction_confidence;
   if (isImage) {
     if (attempts.length >= 2) {
       return attempts.map((attempt) => ({
         ...document,
         source_result: attempt.approach,
         source_name: `${sourceName(document)} — ${attempt.approach === "ocr_assisted" ? "OCR-assisted" : "Direct vision"}`,
-        extraction_confidence: attempt.extraction_confidence ?? document.extraction_confidence,
+        extraction_confidence: attemptConfidence(attempt),
         mapping_confidence: attempt.mapping_confidence,
         status: attempt.status === "failed" ? "failed" : document.status,
         product_counts: { extracted: attempt.product_count, failed: 0 },
@@ -43,7 +44,7 @@ const allSourceRows = computed(() => props.documents.flatMap((document) => {
         ...document,
         source_result: "ocr_assisted",
         source_name: `${sourceName(document)} — OCR-assisted`,
-        extraction_confidence: ocrAttempt?.extraction_confidence ?? document.extraction_confidence,
+        extraction_confidence: attemptConfidence(ocrAttempt),
         mapping_confidence: ocrAttempt?.mapping_confidence,
         product_counts: ocrAttempt
           ? { extracted: ocrAttempt.product_count, failed: 0 }
@@ -53,7 +54,7 @@ const allSourceRows = computed(() => props.documents.flatMap((document) => {
         ...document,
         source_result: "vision_direct",
         source_name: `${sourceName(document)} — Direct vision`,
-        extraction_confidence: visionAttempt?.extraction_confidence ?? document.extraction_confidence,
+        extraction_confidence: attemptConfidence(visionAttempt),
         mapping_confidence: visionAttempt?.mapping_confidence,
         product_counts: visionAttempt
           ? { extracted: visionAttempt.product_count, failed: 0 }
