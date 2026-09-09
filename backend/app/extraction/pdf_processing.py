@@ -21,17 +21,16 @@ logger = logging.getLogger("app.extraction.pdf")
 
 
 def _semantic_pdf_context(stored_context: dict[str, Any]) -> dict[str, Any]:
-    """Prepare the low-token semantic pass from deterministic PDF reading order.
+    """Prepare one source representation for semantic investigation.
 
-    LiteParse geometry is retained for table-cell fidelity. The follow-up
-    semantic pass receives text only, so supply and regulatory enrichment does
-    not repeatedly send the price-table layout.
+    LiteParse geometry and reading-order text remain available to the same
+    investigation. No follow-up narrative-enrichment request is made.
 
     Args:
         stored_context: Raw context dictionary generated during initial parsing.
 
     Returns:
-        Structured context dictionary partitioned into layout and semantic views.
+        Structured context with native layout and reading-order views.
     """
     pages = [
         {
@@ -55,9 +54,8 @@ def _semantic_pdf_context(stored_context: dict[str, Any]) -> dict[str, Any]:
             "semantic_page_numbers": [page["page_number"] for page in pages],
         },
         "pages": pages,
-        # A table page can contain a scoped footnote or a shipping condition.
-        # The enrichment pass therefore receives every page's compact reading
-        # text, never the layout geometry used by the primary table pass.
+        # A table page can contain a scoped footnote or shipping condition, so
+        # every page retains a compact reading-order view for investigation.
         "semantic_pages": [{"page_number": page["page_number"], "text": page["text"]} for page in pages],
     }
 
@@ -138,14 +136,13 @@ def _sum_optional(left: Any, right: Any) -> Any:
 
 
 def consume_pdf_extraction(session: Session, extraction_id: str, settings: Config) -> None:
-    """Execute the full PDF extraction and enrichment pipeline for a pending document.
+    """Execute the PDF preparation and semantic-investigation pipeline.
 
     Orchestration Flow:
     1. Loads `PdfExtractionRecord` and redact PII contact data.
-    2. Runs Primary Pass: LangChain + Gemini for canonical quotation and table line items.
-    3. Runs Second Pass: Narrative section enrichment for storage, WHO PQ, and lead times.
-    4. Merges enrichments and applies deterministic commercial rules (price normalizations).
-    5. Persists quotation record, updates relational line items, and emits SSE events.
+    2. Runs the bounded LangChain investigation over native layout and reading-order text.
+    3. Applies deterministic commercial rules (price normalizations).
+    4. Persists quotation record, updates relational line items, and emits SSE events.
 
     Args:
         session: Active SQLAlchemy database session.
@@ -168,7 +165,7 @@ def consume_pdf_extraction(session: Session, extraction_id: str, settings: Confi
     document.status = "semantic_extraction_running"
     logger.info("[PDF %s] Processing document '%s' (%d pages)", document.id[:8], document.original_filename, page_count)
     record_event(session, document_id=document.id, stage="pdf_extraction_started")
-    if settings.gemini_api_key:
+    if settings.semantic_extraction_configured:
         _upsert_invocation(
             session,
             extraction,
@@ -179,7 +176,7 @@ def consume_pdf_extraction(session: Session, extraction_id: str, settings: Confi
             metadata={"source_type": "pdf", "page_count": page_count},
         )
         session.commit()
-        from app.extraction.llm import LangChainSemanticExtractor, merge_semantic_enrichment
+        from app.extraction.llm import aggregate_agent_telemetry, extract_semantics
 
         record_event(
             session,
@@ -190,17 +187,14 @@ def consume_pdf_extraction(session: Session, extraction_id: str, settings: Confi
         record_event(session, document_id=document.id, stage="pdf_semantic_extraction_started")
         session.commit()
         try:
-            extractor = LangChainSemanticExtractor(
-                api_key=settings.gemini_api_key,
-                model=settings.gemini_model,
-                request_timeout_seconds=settings.gemini_request_timeout_seconds,
-            )
             logger.info(
-                "[PDF %s] Calling Gemini (%s) for canonical quotation extraction...",
+                "[PDF %s] Calling semantic provider chain (primary=%s) for canonical quotation extraction...",
                 document.id[:8],
                 settings.gemini_model,
             )
-            quotation, telemetry = extractor.extract_canonical_quotation(safe_context, source_type="pdf")
+            agent_result = extract_semantics(settings, safe_context, source_type="pdf")
+            quotation = agent_result.quotation
+            telemetry = aggregate_agent_telemetry(agent_result)
             logger.info(
                 "[PDF %s] Extracted quotation in %d ms (%d line items)",
                 document.id[:8],
@@ -208,16 +202,6 @@ def consume_pdf_extraction(session: Session, extraction_id: str, settings: Confi
                 len(quotation.line_items),
             )
 
-            logger.info("[PDF %s] Enriching line items from narrative sections...", document.id[:8])
-            enrichment, enrichment_telemetry = extractor.enrich_line_items_from_semantic_sections(
-                safe_context, quotation
-            )
-            quotation = merge_semantic_enrichment(quotation, enrichment)
-            logger.info(
-                "[PDF %s] Enrichment finished in %d ms",
-                document.id[:8],
-                enrichment_telemetry.get("duration_ms", 0),
-            )
         except Exception as error:
             extraction.status = "failed"
             extraction.error_message = f"langchain_extraction_failed: {error}"
@@ -248,13 +232,18 @@ def consume_pdf_extraction(session: Session, extraction_id: str, settings: Confi
             provider="google-gemini",
             model=settings.gemini_model,
             status="completed",
-            duration_ms=(telemetry.get("duration_ms") or 0) + (enrichment_telemetry.get("duration_ms") or 0),
-            metadata={"source_type": "pdf", "line_item_count": len(quotation.line_items)},
-            input_tokens=_sum_optional(telemetry.get("input_tokens"), enrichment_telemetry.get("input_tokens")),
-            output_tokens=_sum_optional(telemetry.get("output_tokens"), enrichment_telemetry.get("output_tokens")),
-            estimated_cost_usd=_cost_text(
-                _sum_optional(telemetry.get("estimated_cost_usd"), enrichment_telemetry.get("estimated_cost_usd"))
-            ),
+            duration_ms=telemetry.get("duration_ms"),
+            metadata={
+                "source_type": "pdf",
+                "line_item_count": len(quotation.line_items),
+                "model_call_count": telemetry.get("model_call_count"),
+                "validation_count": telemetry.get("validation_count"),
+                "termination_reason": telemetry.get("termination_reason"),
+                "unresolved_issue_count": telemetry.get("unresolved_issue_count"),
+            },
+            input_tokens=telemetry.get("input_tokens"),
+            output_tokens=telemetry.get("output_tokens"),
+            estimated_cost_usd=_cost_text(telemetry.get("estimated_cost_usd")),
         )
         record_event(
             session,
@@ -275,7 +264,7 @@ def consume_pdf_extraction(session: Session, extraction_id: str, settings: Confi
         )
         return
 
-    logger.warning("[PDF %s] Gemini API key is not configured", document.id[:8])
+    logger.warning("[PDF %s] No semantic extraction provider is configured", document.id[:8])
     extraction.status = "awaiting_model_configuration"
     document.status = "needs_semantic_extraction"
     _upsert_invocation(

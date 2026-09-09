@@ -12,6 +12,7 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.config import Config
 from app.extraction.contracts import CanonicalQuotation
 
 # --- Section 1: Source Fact Models & Extractor Protocols ---
@@ -297,12 +298,10 @@ class RecordedJsonSemanticExtractor:
 
 
 class LangChainJsonSemanticExtractor:
-    """Adapter for the live LangChain/Gemini per-document extraction call."""
+    """Adapter for the live LangChain semantic extraction provider chain."""
 
-    def __init__(self, api_key: str, model: str, request_timeout_seconds: int):
-        self.api_key = api_key
-        self.model = model
-        self.request_timeout_seconds = request_timeout_seconds
+    def __init__(self, settings: Config):
+        self.settings = settings
 
     def extract(
         self,
@@ -312,21 +311,26 @@ class LangChainJsonSemanticExtractor:
         source_document: str,
         invalid_source_paths: list[str] | None = None,
     ) -> JsonExtractionProposal | None:
-        from app.extraction.llm import LangChainSemanticExtractor
+        from app.extraction.llm import extract_semantics
 
-        extractor = LangChainSemanticExtractor(
-            api_key=self.api_key,
-            model=self.model,
-            request_timeout_seconds=self.request_timeout_seconds,
+        result = extract_semantics(
+            self.settings,
+            {
+                "source_document": source_document,
+                "structural_inventory": profile,
+                "source_json": payload,
+                "invalid_source_paths_from_previous_attempt": invalid_source_paths or [],
+            },
+            source_type="json",
         )
-        extraction, telemetry = extractor.extract_json_quotation(
-            payload,
-            profile,
-            source_document=source_document,
-            invalid_source_paths=invalid_source_paths or [],
-        )
+        from app.extraction.llm import aggregate_agent_telemetry
+
+        telemetry = aggregate_agent_telemetry(result)
         return JsonExtractionProposal(
-            extraction=extraction,
+            extraction=JsonSemanticExtraction(
+                quotation=result.quotation,
+                source_facts=list(result.source_facts),
+            ),
             provider=str(telemetry.get("provider", "google-gemini")),
             model=telemetry.get("model"),
             prompt_version=str(telemetry.get("prompt_version", "json-semantic-extraction-v1")),

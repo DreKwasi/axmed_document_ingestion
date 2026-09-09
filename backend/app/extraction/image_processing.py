@@ -15,7 +15,11 @@ from app.config import Config
 from app.events import record_event
 from app.extraction.commercial import apply_commercial_rules
 from app.extraction.contracts import CanonicalQuotation
-from app.extraction.llm import CANONICAL_QUOTATION_PROMPT_VERSION, LangChainSemanticExtractor
+from app.extraction.llm import (
+    CANONICAL_QUOTATION_PROMPT_VERSION,
+    aggregate_agent_telemetry,
+    extract_semantics,
+)
 from app.extraction.ocr_client import request_ocr
 from app.extraction.ocr_contract import OcrResult
 from app.models import DocumentRecord, ImageExtractionAttemptRecord, ModelInvocationRecord, OcrJobRecord
@@ -83,7 +87,7 @@ def _trusted_image_regions(source_media: bytes, result: OcrResult, confidence_fl
 
 
 def _run_image_attempt(
-    extractor: LangChainSemanticExtractor,
+    settings: Config,
     *,
     context: dict[str, Any],
     source_type: str,
@@ -92,12 +96,15 @@ def _run_image_attempt(
 ) -> tuple[CanonicalQuotation | None, dict[str, Any], str | None]:
     """Execute one image extraction approach (OCR-assisted or direct Vision)."""
     try:
-        quotation, telemetry = extractor.extract_canonical_quotation(
+        result = extract_semantics(
+            settings,
             context,
             source_type=source_type,
             source_media=source_media,
             source_media_type=source_media_type,
         )
+        quotation = result.quotation
+        telemetry = aggregate_agent_telemetry(result)
     except Exception:
         return None, {}, "Image semantic extraction could not complete."
     return apply_commercial_rules(quotation), telemetry, None
@@ -230,7 +237,7 @@ def consume_ocr(session: Session, job_id: str, settings: Config) -> None:
         stage="ocr_completed",
         metadata={"page_count": len(result.pages), "duration_ms": int((time.perf_counter() - started) * 1000)},
     )
-    if settings.gemini_api_key:
+    if settings.semantic_extraction_configured:
         from app.documents import _upsert_quotation
 
         gate_reason = (
@@ -262,13 +269,8 @@ def consume_ocr(session: Session, job_id: str, settings: Config) -> None:
             session.commit()
             return
 
-        extractor = LangChainSemanticExtractor(
-            api_key=settings.gemini_api_key,
-            model=settings.gemini_model,
-            request_timeout_seconds=settings.gemini_request_timeout_seconds,
-        )
         ocr_quotation, ocr_telemetry, ocr_failure = _run_image_attempt(
-            extractor,
+            settings,
             context=redact_for_model(_semantic_ocr_context(result, settings.ocr_line_confidence_floor)),
             source_type="ocr",
         )
@@ -291,7 +293,7 @@ def consume_ocr(session: Session, job_id: str, settings: Config) -> None:
         if document.media_type.startswith("image/"):
             record_event(session, document_id=document.id, stage="image_vision_extraction_started")
             vision_quotation, vision_telemetry, vision_failure = _run_image_attempt(
-                extractor,
+                settings,
                 context={"source": {"kind": "ocr_trusted_image_regions", "media_type": "image/png"}},
                 source_type="image_vision",
                 source_media=_trusted_image_regions(source_media, result, settings.ocr_line_confidence_floor),

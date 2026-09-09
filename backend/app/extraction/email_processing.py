@@ -102,7 +102,7 @@ def consume_email_extraction(session: Session, extraction_id: str, settings: Con
     document.status = "semantic_extraction_running"
     logger.info("[Email %s] Processing email '%s'", document.id[:8], document.original_filename)
     record_event(session, document_id=document.id, stage="email_extraction_started")
-    if settings.gemini_api_key:
+    if settings.semantic_extraction_configured:
         _upsert_invocation(
             session,
             extraction,
@@ -113,7 +113,7 @@ def consume_email_extraction(session: Session, extraction_id: str, settings: Con
             metadata={"source_type": "email"},
         )
         session.commit()
-        from app.extraction.llm import LangChainSemanticExtractor
+        from app.extraction.llm import aggregate_agent_telemetry, extract_semantics
 
         record_event(
             session,
@@ -125,17 +125,14 @@ def consume_email_extraction(session: Session, extraction_id: str, settings: Con
         session.commit()
 
         try:
-            extractor = LangChainSemanticExtractor(
-                api_key=settings.gemini_api_key,
-                model=settings.gemini_model,
-                request_timeout_seconds=settings.gemini_request_timeout_seconds,
-            )
             logger.info(
-                "[Email %s] Calling Gemini (%s) for email quotation extraction...",
+                "[Email %s] Calling semantic provider chain (primary=%s) for email quotation extraction...",
                 document.id[:8],
                 settings.gemini_model,
             )
-            quotation, telemetry = extractor.extract_canonical_quotation(safe_context, source_type="email")
+            agent_result = extract_semantics(settings, safe_context, source_type="email")
+            quotation = agent_result.quotation
+            telemetry = aggregate_agent_telemetry(agent_result)
             logger.info(
                 "[Email %s] Extracted quotation in %d ms (%d line items)",
                 document.id[:8],
@@ -173,7 +170,14 @@ def consume_email_extraction(session: Session, extraction_id: str, settings: Con
             model=settings.gemini_model,
             status="completed",
             duration_ms=telemetry.get("duration_ms", int((time.perf_counter() - started) * 1000)),
-            metadata={"source_type": "email", "line_item_count": len(quotation.line_items)},
+            metadata={
+                "source_type": "email",
+                "line_item_count": len(quotation.line_items),
+                "model_call_count": telemetry.get("model_call_count"),
+                "validation_count": telemetry.get("validation_count"),
+                "termination_reason": telemetry.get("termination_reason"),
+                "unresolved_issue_count": telemetry.get("unresolved_issue_count"),
+            },
             input_tokens=telemetry.get("input_tokens"),
             output_tokens=telemetry.get("output_tokens"),
             estimated_cost_usd=_cost_text(telemetry.get("estimated_cost_usd")),
@@ -196,7 +200,7 @@ def consume_email_extraction(session: Session, extraction_id: str, settings: Con
             document.status,
         )
         return
-    logger.warning("[Email %s] Gemini API key is not configured", document.id[:8])
+    logger.warning("[Email %s] No semantic extraction provider is configured", document.id[:8])
     extraction.status = "awaiting_model_configuration"
     document.status = "needs_semantic_extraction"
     _upsert_invocation(
