@@ -113,7 +113,7 @@ def consume_email_extraction(session: Session, extraction_id: str, settings: Con
             metadata={"source_type": "email"},
         )
         session.commit()
-        from app.extraction.llm import aggregate_agent_telemetry, extract_semantics
+        from app.extraction.llm import aggregate_semantic_telemetry, extract_semantics
 
         record_event(
             session,
@@ -130,9 +130,9 @@ def consume_email_extraction(session: Session, extraction_id: str, settings: Con
                 document.id[:8],
                 settings.gemini_model,
             )
-            agent_result = extract_semantics(settings, safe_context, source_type="email")
-            quotation = agent_result.quotation
-            telemetry = aggregate_agent_telemetry(agent_result)
+            semantic_result = extract_semantics(settings, safe_context, source_type="email")
+            quotation = semantic_result.quotation
+            telemetry = aggregate_semantic_telemetry(semantic_result)
             logger.info(
                 "[Email %s] Extracted quotation in %d ms (%d line items)",
                 document.id[:8],

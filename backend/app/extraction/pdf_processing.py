@@ -176,7 +176,7 @@ def consume_pdf_extraction(session: Session, extraction_id: str, settings: Confi
             metadata={"source_type": "pdf", "page_count": page_count},
         )
         session.commit()
-        from app.extraction.llm import aggregate_agent_telemetry, extract_semantics
+        from app.extraction.llm import aggregate_semantic_telemetry, extract_semantics
 
         record_event(
             session,
@@ -192,9 +192,9 @@ def consume_pdf_extraction(session: Session, extraction_id: str, settings: Confi
                 document.id[:8],
                 settings.gemini_model,
             )
-            agent_result = extract_semantics(settings, safe_context, source_type="pdf")
-            quotation = agent_result.quotation
-            telemetry = aggregate_agent_telemetry(agent_result)
+            semantic_result = extract_semantics(settings, safe_context, source_type="pdf")
+            quotation = semantic_result.quotation
+            telemetry = aggregate_semantic_telemetry(semantic_result)
             logger.info(
                 "[PDF %s] Extracted quotation in %d ms (%d line items)",
                 document.id[:8],

@@ -2,12 +2,8 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from dataclasses import dataclass
 from decimal import Decimal
-from pathlib import Path
-from time import perf_counter
 from typing import Any, Protocol
 
 from pydantic import BaseModel, Field, field_validator
@@ -80,7 +76,6 @@ class JsonSemanticExtractor(Protocol):
         profile: dict[str, Any],
         *,
         source_document: str,
-        invalid_source_paths: list[str] | None = None,
     ) -> JsonExtractionProposal | None:
         """Extract quotation facts from an arbitrary JSON payload."""
         ...
@@ -204,6 +199,13 @@ def resolve_json_path(payload: Any, path: str) -> Any:
     return current
 
 
+def resolve_existing_json_path(payload: Any, path: str) -> tuple[bool, Any]:
+    """Resolve a JSONPath while keeping a legitimate JSON null distinct from a missing path."""
+
+    value = resolve_json_path(payload, path)
+    return (False, None) if value is _MISSING else (True, value)
+
+
 # --- Section 4: Grounded Source Fact Validation & Equivalence Checks ---
 
 
@@ -254,49 +256,6 @@ def validate_source_facts(
 # --- Section 5: Extractor Implementations ---
 
 
-class RecordedJsonSemanticExtractor:
-    """Immutable recorded extraction responses for the offline test/eval path.
-
-    Fixtures match the complete source content hash. They never map one source
-    structure onto another and therefore are not schema memory.
-    """
-
-    def __init__(self, fixture_directory: Path):
-        self.fixture_directory = fixture_directory
-
-    def extract(
-        self,
-        payload: dict[str, Any],
-        profile: dict[str, Any],
-        *,
-        source_document: str,
-        invalid_source_paths: list[str] | None = None,
-    ) -> JsonExtractionProposal | None:
-        del profile, source_document, invalid_source_paths
-        started = perf_counter()
-        content_hash = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
-        for fixture_path in self.fixture_directory.glob("*.json"):
-            fixture = json.loads(fixture_path.read_text())
-            if fixture.get("content_sha256") != content_hash:
-                continue
-            telemetry = fixture.get("telemetry", {})
-            return JsonExtractionProposal(
-                extraction=JsonSemanticExtraction.model_validate(fixture["extraction"]),
-                provider=str(telemetry.get("provider", "recorded-json-extraction")),
-                model=telemetry.get("model"),
-                prompt_version=str(telemetry.get("prompt_version", "recorded-json-extraction-v1")),
-                duration_ms=max(1, int((perf_counter() - started) * 1000)),
-                input_tokens=telemetry.get("input_tokens"),
-                output_tokens=telemetry.get("output_tokens"),
-                estimated_cost_usd=(
-                    Decimal(str(telemetry["estimated_cost_usd"]))
-                    if telemetry.get("estimated_cost_usd") is not None
-                    else None
-                ),
-            )
-        return None
-
-
 class LangChainJsonSemanticExtractor:
     """Adapter for the live LangChain semantic extraction provider chain."""
 
@@ -309,7 +268,6 @@ class LangChainJsonSemanticExtractor:
         profile: dict[str, Any],
         *,
         source_document: str,
-        invalid_source_paths: list[str] | None = None,
     ) -> JsonExtractionProposal | None:
         from app.extraction.llm import extract_semantics
 
@@ -319,13 +277,12 @@ class LangChainJsonSemanticExtractor:
                 "source_document": source_document,
                 "structural_inventory": profile,
                 "source_json": payload,
-                "invalid_source_paths_from_previous_attempt": invalid_source_paths or [],
             },
             source_type="json",
         )
-        from app.extraction.llm import aggregate_agent_telemetry
+        from app.extraction.llm import aggregate_semantic_telemetry
 
-        telemetry = aggregate_agent_telemetry(result)
+        telemetry = aggregate_semantic_telemetry(result)
         return JsonExtractionProposal(
             extraction=JsonSemanticExtraction(
                 quotation=result.quotation,
@@ -339,17 +296,3 @@ class LangChainJsonSemanticExtractor:
             output_tokens=telemetry.get("output_tokens"),
             estimated_cost_usd=telemetry.get("estimated_cost_usd"),
         )
-
-
-class ChainedJsonSemanticExtractor:
-    """Composite extractor evaluating a prioritized fallback chain of extractors."""
-
-    def __init__(self, extractors: list[JsonSemanticExtractor]):
-        self.extractors = extractors
-
-    def extract(self, payload: dict[str, Any], profile: dict[str, Any], **kwargs: Any) -> JsonExtractionProposal | None:
-        for extractor in self.extractors:
-            proposal = extractor.extract(payload, profile, **kwargs)
-            if proposal is not None:
-                return proposal
-        return None

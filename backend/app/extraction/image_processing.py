@@ -17,7 +17,7 @@ from app.extraction.commercial import apply_commercial_rules
 from app.extraction.contracts import CanonicalQuotation
 from app.extraction.llm import (
     CANONICAL_QUOTATION_PROMPT_VERSION,
-    aggregate_agent_telemetry,
+    aggregate_semantic_telemetry,
     extract_semantics,
 )
 from app.extraction.ocr_client import request_ocr
@@ -104,7 +104,7 @@ def _run_image_attempt(
             source_media_type=source_media_type,
         )
         quotation = result.quotation
-        telemetry = aggregate_agent_telemetry(result)
+        telemetry = aggregate_semantic_telemetry(result)
     except Exception:
         return None, {}, "Image semantic extraction could not complete."
     return apply_commercial_rules(quotation), telemetry, None
@@ -238,36 +238,13 @@ def consume_ocr(session: Session, job_id: str, settings: Config) -> None:
         metadata={"page_count": len(result.pages), "duration_ms": int((time.perf_counter() - started) * 1000)},
     )
     if settings.semantic_extraction_configured:
-        from app.documents import _upsert_quotation
+        from app.documents import _apply_confidence_decision, _upsert_quotation
 
-        gate_reason = (
-            "The source was too unclear to extract reliably. "
-            "No trustworthy text regions passed the OCR quality gate."
-        )
-        if not _ocr_quality_gate(
+        low_legibility = not _ocr_quality_gate(
             result,
             confidence_floor=settings.ocr_line_confidence_floor,
             minimum_ratio=settings.ocr_min_usable_line_ratio,
-        ):
-            approaches = (
-                ("ocr_assisted", "vision_direct")
-                if document.media_type.startswith("image/")
-                else ("ocr_assisted",)
-            )
-            for approach in approaches:
-                _persist_image_attempt(
-                    session,
-                    document_id=document.id,
-                    approach=approach,
-                    quotation=None,
-                    telemetry={},
-                    failure_reason=gate_reason,
-                )
-            document.status = "failed"
-            document.failure_reason = gate_reason
-            record_event(session, document_id=document.id, stage="ocr_quality_gate_failed")
-            session.commit()
-            return
+        )
 
         ocr_quotation, ocr_telemetry, ocr_failure = _run_image_attempt(
             settings,
@@ -296,7 +273,11 @@ def consume_ocr(session: Session, job_id: str, settings: Config) -> None:
                 settings,
                 context={"source": {"kind": "ocr_trusted_image_regions", "media_type": "image/png"}},
                 source_type="image_vision",
-                source_media=_trusted_image_regions(source_media, result, settings.ocr_line_confidence_floor),
+                source_media=(
+                    source_media
+                    if low_legibility
+                    else _trusted_image_regions(source_media, result, settings.ocr_line_confidence_floor)
+                ),
                 source_media_type="image/png",
             )
             _persist_image_attempt(
@@ -318,15 +299,33 @@ def consume_ocr(session: Session, job_id: str, settings: Config) -> None:
         if document.media_type.startswith("image/"):
             attempts.append(vision_quotation)
         if not any(attempt is not None and attempt.line_items for attempt in attempts):
-            document.status = "failed"
-            document.failure_reason = "No products could be extracted from this source."
-            record_event(session, document_id=document.id, stage="image_extraction_failed")
+            decision = _apply_confidence_decision(
+                session,
+                document,
+                None,
+                None,
+                has_extracted_result=True,
+            )
+            if decision == "auto_rejected":
+                record_event(session, document_id=document.id, stage="ocr_quality_gate_failed")
+            else:
+                document.status = "failed"
+                document.failure_reason = "No products could be extracted from this source."
+                record_event(session, document_id=document.id, stage="image_extraction_failed")
         elif document.media_type.startswith("image/"):
             # Both paths are peers. A human explicitly chooses a result to begin
             # reviewing; never promote one because it has more products or happens
             # to complete first.
-            document.status = "pending_review"
-            document.failure_reason = None
+            decision = _apply_confidence_decision(
+                session,
+                document,
+                None,
+                None,
+                has_extracted_result=True,
+            )
+            if decision != "auto_rejected":
+                document.status = "pending_review"
+                document.failure_reason = None
             record_event(
                 session,
                 document_id=document.id,

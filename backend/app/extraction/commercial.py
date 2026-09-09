@@ -83,6 +83,23 @@ def _price_and_pack(context: RuleContext) -> list[ReviewIssue]:
                 and pricing.quoted_price.uom == context.line.packaging.unit_label
             ):
                 pricing.pack_price = pricing.quoted_price.amount * Decimal(units)
+                unit_evidence = next(
+                    (
+                        item
+                        for item in context.line.evidence
+                        if item.canonical_field in ("pricing.quoted_price.amount", "pricing.quoted_price")
+                    ),
+                    None,
+                )
+                if unit_evidence is not None:
+                    context.line.evidence.append(
+                        unit_evidence.model_copy(
+                            update={
+                                "canonical_field": "pricing.pack_price",
+                                "extraction_method": "derived_from_quoted_price",
+                            }
+                        )
+                    )
         if pricing.pack_price is None:
             return []
     # ``pack_price`` has already been classified by the mapping/reasoning
@@ -92,6 +109,19 @@ def _price_and_pack(context: RuleContext) -> list[ReviewIssue]:
     # unknown basis null for review.
     if pricing.quoted_price.amount is None:
         pricing.quoted_price.amount = pricing.pack_price
+        pack_evidence = next(
+            (item for item in context.line.evidence if item.canonical_field == "pricing.pack_price"),
+            None,
+        )
+        if pack_evidence is not None:
+            context.line.evidence.append(
+                pack_evidence.model_copy(
+                    update={
+                        "canonical_field": "pricing.quoted_price.amount",
+                        "extraction_method": "derived_from_pack_price",
+                    }
+                )
+            )
     issues = []
     if pricing.pack_price <= 0:
         issues.append(context.issue("non_positive_price", "pricing.pack_price", "Quoted pack price must be positive."))
