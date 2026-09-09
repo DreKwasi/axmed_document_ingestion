@@ -189,6 +189,12 @@ def validate_and_derive(quotation: CanonicalQuotation) -> CanonicalQuotation:
     Returns:
         The updated canonical quotation with derived pricing and populated review issues.
     """
+    document_currency = quotation.commercial_terms.currency
+    if document_currency:
+        for line in quotation.line_items:
+            if not line.pricing.currency:
+                line.pricing.currency = document_currency
+
     rule_codes = {code for rule in RULES for code in rule.codes}
     quotation.review_issues = [issue for issue in quotation.review_issues if issue.code not in rule_codes]
     for rule in RULES:

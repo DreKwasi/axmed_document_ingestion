@@ -52,3 +52,18 @@ def test_quantity_normalizes_boxes_without_cutting_off_the_word():
     )
 
     assert quantity.minimum_order_quantity_uom == "box"
+
+
+def test_document_currency_is_inherited_by_lines_without_an_override():
+    quotation = CanonicalQuotation(
+        commercial_terms={"currency": "USD"},
+        line_items=[
+            LineItem(pricing={"pack_price": Decimal("0.899")}),
+            LineItem(pricing={"currency": "EUR", "pack_price": Decimal("1.20")}),
+        ],
+    )
+
+    result = validate_and_derive(quotation)
+
+    assert result.line_items[0].pricing.currency == "USD"
+    assert result.line_items[1].pricing.currency == "EUR"

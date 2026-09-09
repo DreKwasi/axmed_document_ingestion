@@ -129,7 +129,9 @@ def test_conflicting_price_is_one_actionable_mapping_issue():
     assert [(issue.field_path, issue.code) for issue in result.issues] == [
         ("line_items[0].pricing.quoted_price.amount", "conflicting_price")
     ]
-    assert result.issues[0].section == "pricing"
+    assert next(
+        issue for issue in result.issues if issue.code == "conflicting_price"
+    ).section == "pricing"
 
 
 def test_direct_json_mapping_is_exact_when_source_key_matches_canonical_field():

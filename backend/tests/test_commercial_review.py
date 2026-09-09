@@ -370,4 +370,3 @@ def test_reviewer_can_correct_transit_duration_in_commercial_terms(client, sanov
     assert "commercial_terms.transit_time_max_days" in field_reviews
     assert field_reviews["commercial_terms.transit_time_max_days"]["value"] == 32
     assert field_reviews["commercial_terms.transit_time_max_days"]["review_status"] == "corrected"
-
