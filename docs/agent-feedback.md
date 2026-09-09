@@ -188,3 +188,7 @@
 ## 2026-09-09 — Anchor explicit mapping issues directly to affected fields
 
 - When schema leaves (such as combination drug potencies or companion units) are flattened into detached scalar paths without context, reviewers are forced to decode cryptic messages like `Strength 1 · Unit` or generic section alerts. Structuring mapping issues around their human-readable composite field and value (e.g. `Tenofovir disoproxil fumarate strength 300 mg / 1 tablet`, `Quoted price (EUR 3.15 / tablet)`), suppressing duplicate companion unit issues, and anchoring warning indicators and explicit messages directly to every affected field card makes review immediate, unambiguous, and easy for the reviewer.
+
+## 2026-09-09 — Keep recovery confidence independent from product yield
+
+- A completed OCR attempt can recover readable source material even when semantic extraction finds no products. Compute and export extraction confidence from recovery evidence independently of line-item count.
