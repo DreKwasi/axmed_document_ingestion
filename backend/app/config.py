@@ -3,6 +3,7 @@
 import sys
 from functools import lru_cache
 from pathlib import Path
+from typing import ClassVar
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -38,7 +39,6 @@ class Config(BaseSettings):
     database_url: str = "sqlite:///./data/app.db"
     upload_dir: Path = Path("data/uploads")
     max_upload_bytes: int = 15 * 1024 * 1024  # 15 MB
-    recorded_json_extraction_dir: Path = Path("backend/evals/recorded_json_extractions")
     golden_dataset_path: Path = Path("backend/evals/golden_dataset.json")
     event_poll_interval_ms: int = 250
     background_processing_enabled: bool = True
@@ -51,13 +51,10 @@ class Config(BaseSettings):
     ocr_line_confidence_floor: float = Field(default=0.80, ge=0, le=1)
     ocr_min_usable_line_ratio: float = Field(default=0.60, ge=0, le=1)
 
-    # Google Gemini
+    # Semantic-model credentials and request controls. Google Gemini is the sole provider.
+    DIRECT_GEMINI_MODEL: ClassVar[str] = "gemini-3.5-flash-lite"
     gemini_api_key: str | None = None
-    gemini_model: str = "gemini-3.1-flash-lite"
     gemini_request_timeout_seconds: int = 60
-    openrouter_api_key: str | None = None
-    openrouter_gemini_model: str = "google/gemini-3.1-flash-lite"
-    openrouter_final_fallback_model: str = "openai/gpt-oss-120b"
 
     # HTTP & CORS
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,https://axmed-document-ingestion.pages.dev"
@@ -81,7 +78,13 @@ class Config(BaseSettings):
     def semantic_extraction_configured(self) -> bool:
         """Whether at least one supported semantic-model provider is configured."""
 
-        return bool(self.gemini_api_key or self.openrouter_api_key)
+        return bool(self.gemini_api_key)
+
+    @property
+    def gemini_model(self) -> str:
+        """Return the code-owned Google Gemini model."""
+
+        return self.DIRECT_GEMINI_MODEL
 
 
 # --- Section 3: Singleton Accessor ---

@@ -26,13 +26,19 @@ def test_gemini_credential_uses_only_the_explicit_environment_name(monkeypatch):
     assert Config().gemini_api_key == "configured-gemini-key"
 
 
-def test_openrouter_credential_enables_semantic_extraction_without_a_direct_gemini_key(monkeypatch):
+def test_google_gemini_credential_is_required_for_semantic_extraction(monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    monkeypatch.setenv("OPENROUTER_API_KEY", "configured-openrouter-key")
 
     settings = Config()
 
-    assert settings.openrouter_api_key == "configured-openrouter-key"
-    assert settings.semantic_extraction_configured is True
-    assert settings.openrouter_gemini_model == "google/gemini-3.1-flash-lite"
-    assert settings.openrouter_final_fallback_model == "openai/gpt-oss-120b"
+    assert settings.semantic_extraction_configured is False
+    monkeypatch.setenv("GEMINI_API_KEY", "configured-gemini-key")
+    assert Config().semantic_extraction_configured is True
+
+
+def test_google_gemini_model_is_not_overridden_by_environment_variables(monkeypatch):
+    monkeypatch.setenv("GEMINI_MODEL", "unapproved-model")
+
+    settings = Config()
+
+    assert settings.gemini_model == "gemini-3.5-flash-lite"
