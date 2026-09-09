@@ -1358,7 +1358,7 @@ Extraction confidence is a visible 0–100 score with a `High`, `Medium`, or `Lo
 
 The API returns each factor, weight, score, and plain-language reason. Glare, blur, cropping, damaged scans, OCR use, weak OCR lines, and parser warnings reduce extraction confidence. Product count, model self-assessment, OCR/vision agreement, and canonical schema ambiguity never affect it. Each uploaded image exposes its OCR-assisted and direct-vision reading as a separate source result; both share the same source-condition score because they read the same image.
 
-Confidence exists only for an assessable extraction result: at least one extracted product must be available for review. A source that fails with zero products returns `extraction_confidence: null` and `mapping_confidence: null`; it must display as failed, never as a low-percentage extraction.
+Image-reading confidence remains visible even when an image attempt yields zero products, because it explains whether the source material was usable. When that source-recovery score is below 50%, the image is `Material unusable`: it is terminal, cannot be opened for quotation review, and retains its original material and peer-reading evidence for inspection. At 50% or above, an image with zero recovered products is `Extraction failed`; neither state is a review candidate.
 
 OCR quality has a second role as a hard safety gate before semantic extraction. The default line-confidence floor is 0.80 and at least 60% of detected lines must clear it. If the source fails that gate, no OCR-assisted or vision model extraction runs and the reviewer is told that nothing trustworthy could be extracted. If it passes, only accepted OCR text and accepted image regions may be supplied to the two semantic extraction paths. Thresholds are configurable and must be evaluated against degraded fixtures.
 
@@ -1384,8 +1384,8 @@ If a product has no attributable mapping score and zero mapping issues, the prod
 
 # 46. Review status and human-in-the-loop decisions
 
-Every successful extraction containing at least one product requires human review before it can be approved. Confidence directs attention to
-uncertain fields; it never permits approval to be skipped. There is no auto-approval state.
+Every usable extraction containing at least one product requires human review before it can be approved. Confidence directs attention to
+uncertain fields; it never permits approval to be skipped. Image material below 50% source recovery is terminal `Material unusable`, rather than a human-review candidate. There is no auto-approval state.
 
 ```text
 processing → pending_review → approved | rejected
