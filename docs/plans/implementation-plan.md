@@ -263,7 +263,7 @@ Acceptance checks:
 ## 4. Dependency and delivery view
 
 ```text
-1 Schema-learning JSON proof
+1 Source-grounded JSON extraction proof (originally delivered with schema reuse; reuse later retired)
 └── 2 Commercial rules + review
     └── 3 Jobs + SSE
         ├── 4 Email correction
@@ -327,6 +327,6 @@ Normal CI must not require network access, model credentials, Modal, or non-dete
 
 ## 8. Confirmed decisions
 
-- Schema learning is the first runnable slice.
+- Source-grounded JSON extraction is the first runnable slice; the earlier schema-learning implementation was retired by migration `20260907_19`.
 - Deliver the full supplied corpus and batch processing.
 - Final OCR integration must use live PaddleOCR on Modal; request deployment authorization when the service/client are ready.

@@ -41,6 +41,10 @@ The backend configuration is managed by `app/config.py`. Variables can be define
 | `GEMINI_API_KEY` | *(None)* | Google Gemini API key for live LangChain semantic reasoning |
 | `GEMINI_MODEL` | `gemini-3.1-flash-lite` | Model name for LangChain structured extraction and per-document JSON semantic extraction |
 | `GEMINI_REQUEST_TIMEOUT_SECONDS` | `60` | Request timeout for Google Gemini API calls |
+| `BACKGROUND_PROCESSING_MAX_WORKERS` | `4` | Maximum independent PDF/email/JSON/OCR jobs run by this API process |
+| `OPENROUTER_API_KEY` | *(None)* | Enables OpenRouter fallbacks: Gemini, then `gpt-oss-120b` |
+| `OPENROUTER_GEMINI_MODEL` | `google/gemini-3.1-flash-lite` | OpenRouter Gemini fallback model |
+| `OPENROUTER_FINAL_FALLBACK_MODEL` | `openai/gpt-oss-120b` | Final OpenRouter fallback model |
 | `DATABASE_URL` | `sqlite:///./data/app.db` | SQLAlchemy SQLite database URL for operational persistence; relative SQLite paths resolve from `backend/` |
 | `UPLOAD_DIR` | `data/uploads` | Local directory for storing original uploaded files; relative paths resolve from `backend/` |
 | `MAX_UPLOAD_BYTES` | `15728640` (15 MB) | Maximum permitted file upload size |
@@ -86,7 +90,7 @@ uv run uvicorn main:app --host 127.0.0.1 --port 8000 --reload
 Run tests and linters using `uv`:
 
 ```bash
-# Run all 57 backend tests (commercial rules, schema memory, LangChain, PII audit)
+# Run the backend tests (commercial rules, source-grounded JSON extraction, LangChain, PII audit)
 PYTHONPATH=backend uv run --project backend pytest backend/tests -v
 
 # Run targeted test suites

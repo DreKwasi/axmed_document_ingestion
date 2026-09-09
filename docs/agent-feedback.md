@@ -14,6 +14,8 @@
 | 2026-09-07 | confidence-policy-no-critical-fields | Carrying forward a fixed required-field list contradicted the source-fact confidence model and created review issues for values a supplier simply did not provide. | Never infer criticality from a universal field list; route review only from observed extraction evidence, explicit failures, conflicts, or validation outcomes. | applied |
 | 2026-09-07 | prd-v9-mandatory-review | A supplier-specific regex proposal for PDF metadata would have passed one fixture while failing different layouts, languages, and supplier phrasing. | Keep document meaning at the semantic-extraction boundary: give the LLM generic cross-section instructions, retain parsed source context/evidence, and add a regression check for the resulting canonical fields. | applied |
 | 2026-09-07 | semantic-pdf-enrichment | Removing PDF geometry to save tokens caused the model to misassociate table quantities and prices, even though it recovered narrative shelf-life terms. | Keep layout-aware context for the table pass; reduce context only in a bounded, source-keyed narrative enrichment pass that cannot replace structured facts. | applied |
+| 2026-09-09 | langchain-semantic-agent | A separate narrative pass and JSON audit duplicated semantic responsibility and made the call count fixed by source type. | Give one bounded agent the complete prepared source, require deterministic validation, and continue only while feedback changes. | applied |
+| 2026-09-09 | robust-semantic-investigation | Sending an entire large prepared representation or only its text strips either cost control or table/layout provenance from the investigation. | Chunk every prepared representation behind stable source references; keep native layout addressable, cap discovery metadata, and make retrieval rankers interchangeable without changing validation. | applied |
 | 2026-09-07 | native-pdf-confidence-provenance | Missing leaf-level evidence in a clean native PDF expanded into repeated Low-confidence chips despite successful extraction. | Treat clean native PDF content without a saved leaf location as Medium and reserve review exceptions for Low-confidence or deterministic failures. | applied |
 | 2026-09-07 | extraction-status-indicator | Displaying an ongoing extraction history card with all past states (1, 2, 3) simultaneously after completion caused visual clutter and confusion. | Display a single active progress state only while extraction is in flight, updating dynamically per event and completely dismissing once extraction completes. | applied |
 | 2026-09-07 | frontend-overhaul | Rendering metadata (confidence, format, review status) in identical rounded pills alongside action buttons confused users and tests on interactive affordances. | Place informational metadata inline with document descriptors using text and status indicators, reserving high-contrast pills and borders strictly for interactive buttons. | applied |
@@ -86,6 +88,22 @@
 
 - Application-level exception logging at externally exercised boundaries is essential: platform HTTP logs can report a 500 without retaining the Python traceback needed to diagnose it.
 
+## 2026-09-09 — Logging configuration order
+
+- Migration startup can reset framework logging after early application setup. Bind the owned logger namespace after migrations, and verify a child extraction logger during the real lifespan rather than only testing a standalone logger helper.
+
+## 2026-09-09 — Provider failure boundaries
+
+- A provider exception without agent-level context makes an external 503 look like an extraction or parser bug. Log source type, workspace mode, budgets, tool counts, validation progress, and exception class at the boundary while never logging source content or search terms.
+
+## 2026-09-09 — Provider fallback tests
+
+- Environment-backed credentials can make an otherwise offline test suite unexpectedly call a live provider. Clear them by default in test fixtures, and assert each ordered fallback hop with injected provider failures.
+
+## 2026-09-09 — Independent document work
+
+- FastAPI `BackgroundTasks` runs a request's registered task list sequentially. For independent, bounded local document jobs, use an application-owned executor and prove parallel entry with a barrier-based integration test.
+
 ## 2026-09-08 — Non-verbose code structure and clean section headers
 
 - Multi-line ASCII banner borders and duplicate table-of-contents lists in module docstrings add unnecessary verbosity without improving discoverability. Concise single-line headers (`# --- Section X: ... ---` and `// --- Section X: ... ---`) paired with focused 1-2 sentence docstrings establish clear architectural boundaries across backend and frontend code while keeping files crisp and readable.
@@ -93,3 +111,11 @@
 ## 2026-09-08 — Direct subtext action affordances
 
 - Repeating an action verb like "Download file ·" next to the source document's filename creates visual repetition and clutters tabular views. Making the metadata subtext (the filename itself) an interactive download link with hover state (`text-slate-500 hover:text-emerald-700 hover:underline`), `@click.stop`, and an informative tooltip preserves screen real estate while maintaining intuitive direct manipulation.
+
+## 2026-09-09 — Keep retired architecture out of current narratives
+
+- Historical worksheets and migrations are valuable evidence, but README and write-up claims must follow the live schema and call path. Mark retired slices as historical, describe recorded responses as exact-content fixtures, and label proposed semantic investigation separately from current fixed extraction behavior.
+
+## 2026-09-09 — Keep orchestration readable
+
+- A class that only stores one run's dependencies and immediately calls one method hides the actual control flow. Keep source-processing seams small and direct; reserve classes for durable records, real interchangeable adapters, or state that must outlive a single invocation.
