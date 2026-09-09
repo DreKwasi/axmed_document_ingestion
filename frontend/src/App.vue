@@ -289,8 +289,8 @@ async function openCandidateForReview(approach: string) {
   writeSourceUrl({ ...doc, source_result: approach }, "replace");
 
   const attempt = doc.image_extraction_attempts?.find((a) => a.approach === approach);
-  if (attempt && attempt.status !== "completed") {
-    // If the attempt is failed or not completed, do not make the review promotion API request.
+  if (!attempt || attempt.status !== "completed" || attempt.product_count === 0) {
+    // There is no reviewable candidate for a failed or empty image reading.
     return;
   }
 
@@ -315,9 +315,11 @@ watch(
     const doc = selectedDocument.value;
     if (doc && !quotation && (attemptsLength ?? 0) > 0) {
       const completedAttempt =
-        (selectedApproach.value && doc.image_extraction_attempts?.find((a) => a.approach === selectedApproach.value)?.status === "completed")
+        (selectedApproach.value && doc.image_extraction_attempts?.find(
+          (a) => a.approach === selectedApproach.value && a.status === "completed" && a.product_count > 0
+        )?.approach)
           ? selectedApproach.value
-          : doc.image_extraction_attempts?.find((a) => a.status === "completed")?.approach;
+          : doc.image_extraction_attempts?.find((a) => a.status === "completed" && a.product_count > 0)?.approach;
       if (completedAttempt) {
         void openCandidateForReview(completedAttempt);
       }
@@ -524,6 +526,33 @@ onBeforeUnmount(() => {
           @preview="openSourcePreview(selectedDocument)"
         />
 
+        <section
+          v-if="selectedDocument.status === 'auto_rejected' && selectedDocument.source_system === 'image'"
+          class="overflow-hidden rounded-2xl border border-rule bg-surface shadow-xs"
+          aria-label="Original source material"
+        >
+          <div class="flex items-center justify-between border-b border-rule px-4 py-3 sm:px-5">
+            <div>
+              <p class="text-[10px] font-bold uppercase tracking-wider text-ink-3">Original material</p>
+              <p class="mt-0.5 text-xs text-ink-2">Retained for inspection</p>
+            </div>
+            <button
+              type="button"
+              class="text-xs font-semibold text-axmed-primary hover:underline"
+              @click="openSourcePreview(selectedDocument)"
+            >
+              Open larger preview
+            </button>
+          </div>
+          <div class="bg-surface-alt p-3 sm:p-5">
+            <img
+              :src="sourceDocumentUrl(selectedDocument.id)"
+              :alt="`Original material: ${selectedDocument.filename}`"
+              class="mx-auto max-h-[42rem] w-full rounded-lg border border-rule bg-white object-contain"
+            />
+          </div>
+        </section>
+
         <!-- Active Extraction Status (only shown while extraction is actively ongoing) -->
         <div
           v-if="isExtractionOngoing(selectedDocument)"
@@ -572,7 +601,6 @@ onBeforeUnmount(() => {
         <section v-if="selectedDocument.quotation">
           <ProductTable
             :line-items="selectedDocument.quotation.line_items"
-            :document-mapping-confidence="selectedDocument.mapping_confidence?.score"
             :mapping-issues="selectedDocument.mapping_issues ?? []"
             :field-reviews="selectedDocument.quotation.field_reviews"
             :selected-index="selectedLineIndex"

@@ -33,7 +33,7 @@ function isApproved(doc: DocumentResponse): boolean {
  * Whether the document has been rejected by human review or policy.
  */
 function isRejected(doc: DocumentResponse): boolean {
-  return doc.status === "rejected" || doc.quotation?.review_status === "rejected";
+  return doc.status === "rejected" || doc.status === "auto_rejected" || doc.quotation?.review_status === "rejected";
 }
 
 /**
@@ -45,18 +45,16 @@ function isRejected(doc: DocumentResponse): boolean {
 function statusKey(doc: DocumentResponse): "approved" | "preapproved" | "review" | "rejected" | "failed" | "processing" {
   if (isApproved(doc)) return "approved";
   if (doc.status === "failed") return "failed";
+  if (doc.status === "pre_approved" || doc.quotation?.review_status === "pre_approved") return "preapproved";
   if (isRejected(doc)) return "rejected";
-  if (doc.status === "pending_review") {
-    return doc.mapping_confidence?.score != null && doc.mapping_confidence.issue_count === 0
-      ? "preapproved"
-      : "review";
-  }
+  if (doc.status === "pending_review") return "review";
   return "processing";
 }
 
 /** Human-readable status label */
 const statusLabel = computed(() => {
   if (props.document.status === "failed") return "Extraction failed";
+  if (props.document.status === "auto_rejected") return "Material unusable";
   if (isRejected(props.document)) return "Rejected";
   if (isApproved(props.document)) return "Approved";
   const map = {
@@ -95,7 +93,7 @@ const sourceTitle = computed(() => {
 /** Descriptive extraction confidence label */
 const confidence = computed(() => {
   const summary = props.document.extraction_confidence;
-  if (!summary) return "Extraction confidence pending";
+  if (!summary) return "Extraction confidence unavailable";
   return `Extraction confidence ${summary.score}% (${summary.band})`;
 });
 
@@ -307,7 +305,7 @@ const statusDotClass = computed(() => {
             class="inline-flex flex-1 sm:flex-none justify-center items-center gap-1.5 rounded-xl bg-down-bg border border-down/30 px-3.5 py-2 text-xs font-bold text-down shadow-2xs"
           >
             <span class="text-xs">✕</span>
-            <span>Rejected</span>
+            <span>{{ document.status === "auto_rejected" ? "Material unusable" : "Rejected" }}</span>
           </span>
 
           <!-- Primary CTA Action: Review Source -->
@@ -340,7 +338,7 @@ const statusDotClass = computed(() => {
           <div class="rounded-xl bg-surface-alt p-3 border border-rule">
             <p class="text-[10px] font-bold uppercase tracking-wider text-ink-3">Delivery Terms</p>
             <p class="mt-1 font-semibold text-ink">
-              {{ document.quotation?.commercial_terms?.currency || "USD" }}
+              {{ document.quotation?.commercial_terms?.currency || "—" }}
               <span v-if="document.quotation?.commercial_terms?.incoterm" class="text-axmed-primary font-bold">
                 · {{ document.quotation.commercial_terms.incoterm }}
               </span>
@@ -382,11 +380,11 @@ const statusDotClass = computed(() => {
       </div>
 
       <!-- Extraction State Summary (when extraction failed) -->
-      <div v-else-if="document.status === 'failed' && document.failure_reason" class="mt-5 border-t border-rule pt-4">
+      <div v-else-if="['failed', 'auto_rejected'].includes(document.status) && document.failure_reason" class="mt-5 border-t border-rule pt-4">
         <div class="rounded-xl bg-surface-alt p-4 border border-rule text-xs">
           <p class="text-[10px] font-bold uppercase tracking-wider text-ink-3">Extraction state</p>
           <p class="mt-1 font-semibold text-ink">
-            Extraction failed
+            {{ document.status === "auto_rejected" ? "Material warning" : "Extraction failed" }}
             <span class="font-normal text-ink-2"> — {{ document.failure_reason }}</span>
           </p>
         </div>

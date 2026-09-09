@@ -8,7 +8,6 @@ import type { LineItem } from "@/types";
 
 const props = defineProps<{
   lineItems: LineItem[];
-  documentMappingConfidence?: number | null;
   mappingIssues: Array<{ field_path: string; code: string; message: string; severity: string }>;
   fieldReviews?: Array<{
     field_path: string;
@@ -86,27 +85,13 @@ function mappingConfidenceForLine(index: number): number | null {
   const values = fields
     .map((field) => field.mapping_confidence_score)
     .filter((score): score is number => score != null);
-  const hasUnscoredMappedFields = fields.some(
-    (field) => field.mapping_confidence_score == null
-      && field.mapping_confidence_reason?.includes("precise source provenance"),
-  );
-  if ((!values.length || hasUnscoredMappedFields) && props.documentMappingConfidence != null) {
-    return props.documentMappingConfidence;
-  }
   return values.length ? Math.round(values.reduce((sum, score) => sum + score, 0) / values.length) : null;
 }
 
 function mappingConfidenceExplanation(index: number): string {
   const fields = props.fieldReviews?.filter((field) => field.field_path.startsWith(`line_items[${index}]`)) ?? [];
   const scores = fields.map((field) => field.mapping_confidence_score).filter((score): score is number => score != null);
-  const hasUnscoredMappedFields = fields.some(
-    (field) => field.mapping_confidence_score == null
-      && field.mapping_confidence_reason?.includes("precise source provenance"),
-  );
-  if ((!scores.length || hasUnscoredMappedFields) && props.documentMappingConfidence != null) {
-    return `This product uses the source's ${props.documentMappingConfidence}% mapping confidence because a complete product-level field score is not available.`;
-  }
-  if (!scores.length) return "No mapped fields are available to assess.";
+  if (!scores.length) return "Mapping confidence is unavailable for this line item.";
   const reasons = [...new Set(fields.map((field) => field.mapping_confidence_reason).filter((reason): reason is string => Boolean(reason)))];
   const issueCount = mappingIssueCountForLine(index);
   return `Average of ${scores.length} mapped field score${scores.length === 1 ? "" : "s"}: ${mappingConfidenceForLine(index)}%. ${reasons.join(" ")} Mapping issues are counted separately: ${issueCount}.`;
@@ -227,7 +212,7 @@ function mappingIssueCountForLine(index: number): number {
                   aria-label="Explain mapping confidence"
                   @click.stop="toggleMappingTooltip(index)"
                 >
-                  {{ mappingConfidenceForLine(index) != null ? `${mappingConfidenceForLine(index)}%` : "No issues" }}
+                  {{ mappingConfidenceForLine(index) != null ? `${mappingConfidenceForLine(index)}%` : "—" }}
                 </button>
                 <span
                   class="mt-1 text-[10px] font-medium"

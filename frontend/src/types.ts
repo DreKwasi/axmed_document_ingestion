@@ -132,8 +132,8 @@ export type Quotation = {
     source_location?: string | null;
   }>;
   revision: number;
-  system_decision: "pending_review";
-  review_status: "pending_review" | "approved" | "rejected";
+  system_decision: "pending_review" | "pre_approved" | "auto_rejected";
+  review_status: "pending_review" | "pre_approved" | "approved" | "rejected";
   has_corrections?: boolean;
   review_issues: Array<{ field_path: string; code: string; message: string; severity: string }>;
 };
@@ -168,7 +168,7 @@ export type DocumentResponse = {
   id: string;
   filename: string;
   source_name?: string | null;
-  status: "pending_extraction" | "pending_review" | "approved" | "rejected" | "failed" | string;
+  status: "pending_extraction" | "pending_review" | "pre_approved" | "approved" | "rejected" | "auto_rejected" | "failed" | string;
   failure_reason?: string | null;
   source_system?: string | null;
   schema_version?: string | null;
@@ -178,7 +178,7 @@ export type DocumentResponse = {
     page_count?: number;
     needs_ocr_pages?: number[];
   } | null;
-  system_decision?: "pending_review" | null;
+  system_decision?: "pending_review" | "pre_approved" | "auto_rejected" | null;
   extraction_confidence?: {
     score: number;
     band: "High" | "Medium" | "Low";

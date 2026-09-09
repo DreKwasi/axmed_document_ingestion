@@ -139,23 +139,21 @@ function isApproved(doc: DocumentResponse): boolean {
 }
 
 function isRejected(doc: DocumentResponse): boolean {
-  return doc.status === "rejected" || doc.quotation?.review_status === "rejected";
+  return doc.status === "rejected" || doc.status === "auto_rejected" || doc.quotation?.review_status === "rejected";
 }
 
 function statusKey(doc: DocumentResponse): "approved" | "preapproved" | "review" | "rejected" | "failed" | "processing" {
   if (isApproved(doc)) return "approved";
   if (doc.status === "failed") return "failed";
+  if (doc.status === "pre_approved" || doc.quotation?.review_status === "pre_approved") return "preapproved";
   if (isRejected(doc)) return "rejected";
-  if (doc.status === "pending_review") {
-    return doc.mapping_confidence?.score != null && doc.mapping_confidence.issue_count === 0
-      ? "preapproved"
-      : "review";
-  }
+  if (doc.status === "pending_review") return "review";
   return "processing";
 }
 
 function statusLabel(doc: DocumentResponse): string {
   if (doc.status === "failed") return "Extraction failed";
+  if (doc.status === "auto_rejected") return "Material unusable";
   if (isRejected(doc)) return "Rejected";
   if (isApproved(doc)) return "Approved";
   const map = {
@@ -192,7 +190,7 @@ function formatBadge(filename: string, sourceSystem?: string | null): string {
 
 function mappingConfidenceExplanation(doc: DocumentResponse): string {
   const score = doc.mapping_confidence?.score;
-  if (score == null) return "No mapped fields are available to assess.";
+  if (score == null) return "Mapping confidence is unavailable for this source.";
   const issueCount = doc.mapping_confidence?.issue_count ?? 0;
   return `This is the average confidence that extracted values were assigned to the correct schema fields: ${score}%. Mapping issues are counted separately: ${issueCount}.`;
 }
@@ -200,8 +198,7 @@ function mappingConfidenceExplanation(doc: DocumentResponse): string {
 function mappingConfidenceLabel(doc: DocumentResponse): string {
   if (doc.status === "failed") return "Not applicable";
   if (doc.mapping_confidence?.score != null) return `${doc.mapping_confidence.score}%`;
-  if (doc.mapping_confidence?.issue_count === 0) return "No issues";
-  return "Pending";
+  return "—";
 }
 </script>
 
@@ -297,9 +294,6 @@ function mappingConfidenceLabel(doc: DocumentResponse): string {
                         {{ doc.filename }}
                       </button>
                     </div>
-                    <p v-if="doc.notes?.[0]" class="mt-1 text-[11px] leading-[1.15rem] text-slate-500 line-clamp-1">
-                      {{ doc.notes[0] }}
-                    </p>
                   </div>
                 </div>
               </td>
@@ -308,8 +302,8 @@ function mappingConfidenceLabel(doc: DocumentResponse): string {
                 <span class="font-bold" :class="confidenceClass(doc.extraction_confidence?.band)">
                   {{ doc.extraction_confidence ? `${doc.extraction_confidence.score}%` : "—" }}
                 </span>
-                <span class="block text-[10px] text-slate-500">
-                  {{ doc.extraction_confidence?.band || (doc.status === "failed" ? "Failed" : "Pending") }}
+                <span v-if="doc.extraction_confidence" class="block text-[10px] text-slate-500">
+                  {{ doc.extraction_confidence.band }}
                 </span>
               </td>
 
