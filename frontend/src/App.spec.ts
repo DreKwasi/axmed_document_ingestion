@@ -257,6 +257,162 @@ describe("App", () => {
     expect(wrapper.text()).not.toContain("null 0.899");
   });
 
+  it("distinguishes repeated mapping issue leaf fields by their canonical context", () => {
+    const wrapper = mount(ProductDetailDrawer, {
+      props: {
+        isOpen: true,
+        busy: false,
+        lineIndex: 0,
+        lineItem: {
+          source_key: "01",
+          product: {
+            trade_name: "Combination treatment",
+            inn: [],
+            strength: [
+              { value: "300", unit: "mg", per_value: "tablet" },
+              { value: "150", unit: "mg", per_value: "tablet" },
+            ],
+          },
+          packaging: {}, quantity: {}, pricing: {
+            currency: "EUR", quoted_price: { amount: "3.15", uom: "tablet" },
+            normalized_price: { amount: "3.15", uom: "tablet" }, price_tiers: [], adjustments: [],
+          }, supply: {}, regulatory: {}, evidence: [],
+        },
+        document: {
+          id: "doc-repeated-issues", filename: "offer.json", status: "pending_review", reviews: [],
+          quotation: { supplier: {}, commercial_terms: {}, line_items: [], revision: 1, system_decision: "pending_review", review_status: "pending_review", review_issues: [] },
+          mapping_issues: [
+            "line_items[0].product.strength[0].unit",
+            "line_items[0].product.strength[0].per_value",
+            "line_items[0].product.strength[1].unit",
+            "line_items[0].product.strength[1].per_value",
+          ].map((field_path) => ({
+            field_path, section: "product", code: "missing_mapping_evidence", severity: "warning",
+            message: `Record source evidence for ${field_path.split(".").at(-1)}; no source-linked evidence was recorded for this field`,
+          })),
+        },
+      },
+    });
+
+    expect(wrapper.text()).toContain("Strength 1 · Unit — no source-linked evidence was recorded for this field");
+    expect(wrapper.text()).toContain("Strength 2 · Per Value — no source-linked evidence was recorded for this field");
+  });
+
+  it("formats strength mapping issues explicitly with ingredient name and potency", () => {
+    const wrapper = mount(ProductDetailDrawer, {
+      props: {
+        isOpen: true,
+        busy: false,
+        lineIndex: 0,
+        lineItem: {
+          source_key: "01",
+          product: {
+            trade_name: "Sanotri-TLD",
+            inn: ["Tenofovir disoproxil fumarate", "Lamivudine", "Dolutegravir"],
+            strength: [
+              { ingredient: "Tenofovir disoproxil fumarate", value: "300", unit: "mg", per_value: "1", per_unit: "tablet" },
+              { ingredient: "Lamivudine", value: "300", unit: "mg", per_value: "1", per_unit: "tablet" },
+              { ingredient: "Dolutegravir", value: "50", unit: "mg", per_value: "1", per_unit: "tablet" },
+            ],
+          },
+          packaging: {}, quantity: {}, pricing: {
+            currency: "EUR", quoted_price: { amount: "3.15", uom: "tablet" },
+            normalized_price: { amount: "3.15", uom: "tablet" }, price_tiers: [], adjustments: [],
+          }, supply: {}, regulatory: {}, evidence: [],
+        },
+        document: {
+          id: "doc-tld-issues", filename: "offer.json", status: "pending_review", reviews: [],
+          quotation: { supplier: {}, commercial_terms: {}, line_items: [], revision: 1, system_decision: "pending_review", review_status: "pending_review", review_issues: [] },
+          mapping_issues: [
+            {
+              field_path: "line_items[0].product.strength[0]",
+              section: "product",
+              code: "missing_mapping_evidence",
+              severity: "warning",
+              message: "Record source evidence for Tenofovir disoproxil fumarate strength 300 mg / 1 tablet; no source-linked evidence was recorded for this field",
+            },
+          ],
+        },
+      },
+    });
+
+    expect(wrapper.text()).toContain("Tenofovir disoproxil fumarate strength 300 mg / 1 tablet — no source-linked evidence was recorded for this field");
+    expect(wrapper.text()).toContain("Mapping issue");
+  });
+
+  it("anchors mapping issues directly to affected non-strength fields with explicit labels", () => {
+    const wrapper = mount(ProductDetailDrawer, {
+      props: {
+        isOpen: true,
+        busy: false,
+        lineIndex: 0,
+        lineItem: {
+          product: {
+            trade_name: "Sanotri-TLD",
+            inn: ["Tenofovir", "Lamivudine"],
+            strength: [],
+            dosage_form: "tablet",
+          },
+          quantity: { quoted_quantity: 5000, quoted_quantity_uom: "packs" },
+          packaging: {},
+          pricing: {
+            currency: "USD",
+            quoted_price: { amount: "12.50", uom: "pack" },
+            price_tiers: [],
+            adjustments: [],
+          },
+          supply: { lead_time_days: 30 },
+          regulatory: {},
+          evidence: [],
+        },
+        document: {
+          id: "doc-non-strength",
+          filename: "quote.pdf",
+          status: "pending_review",
+          reviews: [],
+          quotation: {
+            supplier: {},
+            commercial_terms: {},
+            line_items: [],
+            revision: 1,
+            system_decision: "pending_review",
+            review_status: "pending_review",
+            review_issues: [],
+          },
+          mapping_issues: [
+            {
+              field_path: "line_items[0].product.trade_name",
+              section: "product",
+              code: "missing_mapping_evidence",
+              severity: "warning",
+              message: "Record source evidence for Trade name (Sanotri-TLD); no source-linked evidence was recorded for this field",
+            },
+            {
+              field_path: "line_items[0].pricing.quoted_price.amount",
+              section: "pricing",
+              code: "missing_mapping_evidence",
+              severity: "warning",
+              message: "Record source evidence for Quoted price (USD 12.50 / pack); no source-linked evidence was recorded for this field",
+            },
+            {
+              field_path: "line_items[0].supply.lead_time_days",
+              section: "supply",
+              code: "missing_mapping_evidence",
+              severity: "warning",
+              message: "Record source evidence for Lead time (30 days); no source-linked evidence was recorded for this field",
+            },
+          ],
+        },
+      },
+    });
+
+    expect(wrapper.text()).toContain("Trade name (Sanotri-TLD) — no source-linked evidence was recorded for this field");
+    expect(wrapper.text()).toContain("Quoted price (USD 12.50 / pack) — no source-linked evidence was recorded for this field");
+    expect(wrapper.text()).toContain("Lead time (30 days) — no source-linked evidence was recorded for this field");
+    const issues = wrapper.findAll(".text-amber-700");
+    expect(issues.length).toBeGreaterThanOrEqual(3);
+  });
+
   it("lists sources at a high level and opens a product breakdown with quoted quantity", async () => {
     api.fetchDocuments.mockResolvedValue([{
       id: "document-quantity",
@@ -312,7 +468,7 @@ describe("App", () => {
     expect(wrapper.findAll("button").filter((button) => button.text() === "andina.pdf" && button.attributes("title") === "Preview andina.pdf")).toHaveLength(1);
     expect(wrapper.text()).toContain("Products");
     expect(wrapper.text()).toContain("1 extracted");
-    expect(wrapper.text()).toContain("Quantity extracted from the source table.");
+    expect(wrapper.text()).not.toContain("Quantity extracted from the source table.");
     expect(wrapper.text()).not.toContain("OCR");
     expect(wrapper.findAll("thead")[0].text()).toContain("Source");
     expect(wrapper.findAll("thead")[0].text()).not.toContain("File source");
@@ -368,8 +524,8 @@ describe("App", () => {
     expect(rows).toHaveLength(2);
     expect(rows[0].text()).toContain("OCR-assisted");
     expect(rows[1].text()).toContain("Direct vision");
-    expect(rows[0].findAll("td")[2].text()).toContain("No issues");
-    expect(rows[0].findAll("td")[2].text()).not.toContain("—");
+    expect(rows[0].findAll("td")[2].text()).toContain("—");
+    expect(rows[0].findAll("td")[2].text()).not.toContain("No issues");
   });
 
   it("marks mapping confidence as not applicable when image extraction failed", async () => {
@@ -745,9 +901,9 @@ describe("App", () => {
     expect(api.sourceDocumentUrl).toHaveBeenCalledWith("preview-json");
   });
 
-  it("uses the four review states and flat status colors", async () => {
+  it("uses backend-provided review states and flat status colors", async () => {
     api.fetchDocuments.mockResolvedValue([
-      { id: "pre", filename: "pre.json", status: "pending_review", mapping_confidence: { score: 100, band: "High", issue_count: 0 }, quotation: null, reviews: [] },
+      { id: "pre", filename: "pre.json", status: "pre_approved", mapping_confidence: { score: 100, band: "High", issue_count: 0 }, quotation: null, reviews: [] },
       { id: "review", filename: "review.pdf", status: "pending_review", mapping_confidence: { score: 82, band: "Medium", issue_count: 2 }, quotation: null, reviews: [] },
       { id: "approved", filename: "approved.eml", status: "approved", quotation: null, reviews: [] },
       { id: "failed", filename: "failed.jpg", status: "failed", quotation: null, reviews: [] },
@@ -765,7 +921,7 @@ describe("App", () => {
 
   it("filters source results by their displayed status", async () => {
     api.fetchDocuments.mockResolvedValue([
-      { id: "pre", filename: "pre.json", source_name: "Pre-approved supplier", status: "pending_review", mapping_confidence: { score: 100, band: "High", issue_count: 0 }, quotation: null, reviews: [] },
+      { id: "pre", filename: "pre.json", source_name: "Pre-approved supplier", status: "pre_approved", mapping_confidence: { score: 100, band: "High", issue_count: 0 }, quotation: null, reviews: [] },
       { id: "review", filename: "review.pdf", source_name: "Review supplier", status: "pending_review", mapping_confidence: { score: 82, band: "Medium", issue_count: 2 }, quotation: null, reviews: [] },
       { id: "approved", filename: "approved.eml", source_name: "Approved supplier", status: "approved", quotation: null, reviews: [] },
       { id: "failed", filename: "failed.jpg", source_name: "Failed supplier", status: "failed", quotation: null, reviews: [] },
@@ -1170,6 +1326,9 @@ describe("App", () => {
     expect(wrapper.text()).toContain("Substance B");
     expect(wrapper.text()).toContain("LowerConfidenceItem");
     expect(wrapper.text()).toContain("Active ingredient requires confirmation");
+    expect(wrapper.text()).toContain("1 mapping issue");
+    expect(wrapper.text()).toContain("View details");
+    expect(wrapper.text()).not.toContain("below full mapping confidence");
     const mappingHelp = wrapper.get('[aria-labelledby="product-drawer-title"] button[aria-label="Explain mapping confidence"]');
     await mappingHelp.trigger("click");
     expect(wrapper.text()).toContain("Average of 1 mapped field score");
@@ -1253,8 +1412,8 @@ describe("App", () => {
 
     const productRows = wrapper.findAll("tbody tr");
     expect(productRows).toHaveLength(2);
-    expect(productRows[0].findAll("td")[4].text()).toContain("92%");
-    expect(productRows[1].findAll("td")[4].text()).toContain("92%");
+    expect(productRows[0].findAll("td")[4].text()).toContain("100%");
+    expect(productRows[1].findAll("td")[4].text()).toContain("—");
 
     // 2. ProductTable tooltip dismisses on Escape and outside click
     const tableMappingHelp = wrapper.get('button[aria-label="How mapping confidence is calculated"]');
@@ -1320,5 +1479,33 @@ describe("App", () => {
     expect(wrapper.text()).toContain("Image scan failed OCR quality checks");
     expect(wrapper.text()).toContain("Unclear");
     expect(wrapper.text()).not.toContain("1 failed");
+  });
+
+  it("shows retained image material inline for an auto-rejected source without opening review", async () => {
+    api.fetchDocuments.mockResolvedValue([{
+      id: "unusable-image",
+      filename: "glare.jpg",
+      source_name: "Glare quotation",
+      status: "auto_rejected",
+      source_system: "image",
+      failure_reason: "Material is not readable enough to use safely.",
+      quotation: null,
+      reviews: [],
+      image_extraction_attempts: [
+        { approach: "ocr_assisted", status: "completed", product_count: 0, result: { line_items: [] } },
+        { approach: "vision_direct", status: "completed", product_count: 0, result: { line_items: [] } },
+      ],
+    }]);
+
+    const wrapper = mount(App);
+    await flushPromises();
+    await wrapper.get("button.group").trigger("click");
+    await flushPromises();
+
+    const material = wrapper.get('[aria-label="Original source material"]');
+    expect(material.get("img").attributes("src")).toBe("/api/v1/documents/unusable-image/source");
+    expect(wrapper.text()).toContain("Material unusable");
+    expect(wrapper.text()).not.toContain("This image extraction result has no products to review.");
+    expect(api.openImageExtractionForReview).not.toHaveBeenCalled();
   });
 });

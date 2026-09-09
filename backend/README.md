@@ -1,6 +1,6 @@
 # Axmed Document Intelligence — Backend API
 
-FastAPI REST & Server-Sent Events (SSE) service backed by SQLite WAL. It uses API-owned Python background tasks for multi-format supplier document extraction (JSON, Native PDF, EML, Image Scans), deterministic-first progressive parsing, contact PII redaction, LangChain semantic reasoning powered by Google Gemini (`gemini-3.1-flash-lite`), and commercial validation for pharmaceutical procurement.
+FastAPI REST & Server-Sent Events (SSE) service backed by SQLite WAL. It uses API-owned Python background tasks for multi-format supplier document extraction (JSON, Native PDF, EML, Image Scans), deterministic-first progressive parsing, contact PII redaction, application-controlled LangChain structured model calls through Google Gemini, and commercial validation for pharmaceutical procurement.
 
 The backend is also the single source of truth for CSV export: `GET /api/v1/documents/export.csv` flattens persisted terminal document and image-attempt results into user-facing product rows.
 
@@ -38,13 +38,9 @@ The backend configuration is managed by `app/config.py`. Variables can be define
 
 | Variable | Default | Purpose |
 | :--- | :--- | :--- |
-| `GEMINI_API_KEY` | *(None)* | Google Gemini API key for live LangChain semantic reasoning |
-| `GEMINI_MODEL` | `gemini-3.1-flash-lite` | Model name for LangChain structured extraction and per-document JSON semantic extraction |
+| `GEMINI_API_KEY` | *(None)* | Direct Google Gemini fallback API key |
 | `GEMINI_REQUEST_TIMEOUT_SECONDS` | `60` | Request timeout for Google Gemini API calls |
 | `BACKGROUND_PROCESSING_MAX_WORKERS` | `4` | Maximum independent PDF/email/JSON/OCR jobs run by this API process |
-| `OPENROUTER_API_KEY` | *(None)* | Enables OpenRouter fallbacks: Gemini, then `gpt-oss-120b` |
-| `OPENROUTER_GEMINI_MODEL` | `google/gemini-3.1-flash-lite` | OpenRouter Gemini fallback model |
-| `OPENROUTER_FINAL_FALLBACK_MODEL` | `openai/gpt-oss-120b` | Final OpenRouter fallback model |
 | `DATABASE_URL` | `sqlite:///./data/app.db` | SQLAlchemy SQLite database URL for operational persistence; relative SQLite paths resolve from `backend/` |
 | `UPLOAD_DIR` | `data/uploads` | Local directory for storing original uploaded files; relative paths resolve from `backend/` |
 | `MAX_UPLOAD_BYTES` | `15728640` (15 MB) | Maximum permitted file upload size |

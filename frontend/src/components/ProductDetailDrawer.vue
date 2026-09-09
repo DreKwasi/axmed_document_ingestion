@@ -69,12 +69,6 @@ const selectedField = ref("pricing.pack_price");
 const correctionValue = ref("");
 const showExtractionCalculation = ref(false);
 const showMappingExplanation = ref(false);
-const showMappingConcernDefinition = ref(false);
-const mappingConcernDefinition =
-  "A field score is based on how directly the source identifies the schema field, "
-  + "the strength of its source location/provenance, whether the value matches the expected category, "
-  + "and whether related values agree. A score below 100% means the evidence is less direct; "
-  + "it is not automatically an actionable issue.";
 
 const displayCurrency = computed(
   () => props.lineItem?.pricing.currency || props.document.quotation?.commercial_terms.currency || "",
@@ -83,7 +77,6 @@ const displayCurrency = computed(
 function closeTooltips() {
   showExtractionCalculation.value = false;
   showMappingExplanation.value = false;
-  showMappingConcernDefinition.value = false;
 }
 
 function handleDocumentClick(event: MouseEvent) {
@@ -172,28 +165,6 @@ const displayTransitDuration = computed(() => {
   return "—";
 });
 
-function humanizeFieldPath(path: string): string {
-  const labels: Record<string, string> = {
-    "product.country_of_origin": "Country of origin",
-    "product.trade_name": "Trade name",
-    "product.inn": "Active ingredients",
-    "product.strength": "Strength",
-    "product.dosage_form": "Dosage form",
-    "pricing.quoted_price.amount": "Quoted price",
-    "pricing.pack_price": "Pack price",
-    "quantity.quoted_quantity": "Quoted quantity",
-    "quantity.minimum_order_quantity": "Minimum order quantity",
-    "commercial_terms.transit_time_days": "Transit duration",
-    "commercial_terms.transit_time_min_days": "Min transit duration",
-    "commercial_terms.transit_time_max_days": "Max transit duration",
-  };
-  if (labels[path]) return labels[path];
-  return path
-    .split(".")
-    .map((part) => part.replaceAll("_", " ").replace(/\b\w/g, (character) => character.toUpperCase()))
-    .join(" · ");
-}
-
 // --- Section 5: Mapping & Extraction Confidence ---
 
 const rowMappingConfidence = computed(() => {
@@ -211,7 +182,7 @@ const rowMappingExplanation = computed(() => {
   const fields = props.document.quotation?.field_reviews
     ?.filter((field) => field.field_path.startsWith(`line_items[${props.lineIndex}]`)) ?? [];
   const scores = fields.map((field) => field.mapping_confidence_score).filter((score): score is number => score != null);
-  if (!scores.length) return "No mapped fields are available to assess.";
+  if (!scores.length) return "Mapping confidence is unavailable for this line item.";
   const reasons = [...new Set(fields.map((field) => field.mapping_confidence_reason).filter((reason): reason is string => Boolean(reason)))];
   return `Average of ${scores.length} mapped field score${scores.length === 1 ? "" : "s"}: ${rowMappingConfidence.value}%. ${reasons.join(" ")} Mapping issues are counted separately: ${rowMappingIssueCount.value}.`;
 });
@@ -239,37 +210,79 @@ function mappingIssuesFor(section: string) {
   );
 }
 
-function mappingConcernsFor(section: string) {
-  const prefix = `line_items[${props.lineIndex}]`;
-  return (props.document.quotation?.field_reviews ?? [])
-    .filter((field) => field.field_path.startsWith(prefix))
-    .filter((field) => field.mapping_confidence_score != null && field.mapping_confidence_score < 100)
-    .filter((field) => {
-      const suffix = field.field_path.slice(`${prefix}.`.length);
-      if (suffix.startsWith("product.")) return section === "product";
-      if (suffix.startsWith("pricing.")) return section === "pricing";
-      if (suffix.startsWith("quantity.") || suffix.startsWith("packaging.")) return section === "quantity_packaging";
-      if (suffix.startsWith("supply.")) return section === "supply";
-      if (suffix.startsWith("regulatory.")) return section === "regulatory";
-      return false;
-    })
-    .map((field) => ({
-      label: humanizeFieldPath(field.field_path.slice(`${prefix}.`.length)),
-      score: field.mapping_confidence_score as number,
-      reason: reviewerMappingReason(field.mapping_confidence_reason),
-    }));
+function issuesForField(fieldOrFields: string | string[]) {
+  const prefix = `line_items[${props.lineIndex}].`;
+  const targets = Array.isArray(fieldOrFields) ? fieldOrFields : [fieldOrFields];
+  return (props.document.mapping_issues ?? []).filter((issue) => {
+    if (issue.field_path.startsWith("commercial_terms.")) {
+      return targets.some((t) => t.startsWith("commercial_terms.") && (issue.field_path === t || issue.field_path.startsWith(`${t}.`) || issue.field_path.startsWith(`${t}_`)));
+    }
+    if (!issue.field_path.startsWith(prefix)) return false;
+    const subPath = issue.field_path.slice(prefix.length);
+    return targets.some(
+      (target) =>
+        subPath === target ||
+        subPath.startsWith(`${target}.`) ||
+        subPath.startsWith(`${target}_`) ||
+        subPath.startsWith(`${target}[`) ||
+        target.startsWith(`${subPath}.`)
+    );
+  });
 }
 
-function reviewerMappingReason(reason?: string | null): string {
-  if (!reason) return "This field has less than full mapping certainty.";
-  if (reason.includes("source evidence: usable") && reason.includes("association: limited")) {
-    return "The value was found in the source, but the source did not explicitly identify it as this field.";
+function mappingIssueText(issue: { field_path: string; message: string }) {
+  const fieldPath = issue.field_path.replace(/^line_items\[\d+\]\.(product|pricing|quantity|packaging|supply|regulatory)\./, "");
+  const strengthMatch = fieldPath.match(/^strength\[(\d+)\](?:\.(.+))?$/);
+  if (strengthMatch) {
+    const sIndex = Number(strengthMatch[1]);
+    const subField = strengthMatch[2];
+    const strengthObj = props.lineItem?.product?.strength?.[sIndex];
+    if (strengthObj) {
+      const parts: string[] = [];
+      if (strengthObj.ingredient) {
+        parts.push(strengthObj.ingredient);
+      }
+      parts.push("strength");
+      if (strengthObj.value != null) parts.push(String(strengthObj.value));
+      if (strengthObj.unit) parts.push(strengthObj.unit);
+      if (strengthObj.per_value != null || strengthObj.per_unit) {
+        const perParts = [strengthObj.per_value, strengthObj.per_unit].filter((p) => p != null && p !== "");
+        if (perParts.length) parts.push(`/ ${perParts.join(" ")}`);
+      }
+      let strengthLabel = parts.join(" ");
+      if (!strengthObj.ingredient && subField) {
+        strengthLabel = `Strength ${sIndex + 1}`;
+      }
+      if (subField) {
+        const subLabel = subField.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+        strengthLabel = `${strengthLabel} · ${subLabel}`;
+      }
+      const [, reason = issue.message] = issue.message.split("; ", 2);
+      return `${strengthLabel} — ${reason}`;
+    }
   }
-  if (reason.includes("independent validation: unavailable")) {
-    return "No second source value was available to confirm this mapping.";
+
+  const recordMatch = issue.message.match(/^Record source evidence for (.+?); (.+)$/);
+  if (recordMatch && (recordMatch[1].includes(" ") || recordMatch[1].includes("("))) {
+    return `${recordMatch[1]} — ${recordMatch[2]}`;
   }
-  return reason;
+  const confirmMatch = issue.message.match(/^Confirm (.+?); (.+)$/);
+  if (confirmMatch && (confirmMatch[1].includes(" ") || confirmMatch[1].includes("("))) {
+    return `${confirmMatch[1]} — ${confirmMatch[2]}`;
+  }
+
+  const context = fieldPath.split(".").map((segment) => {
+    const match = segment.match(/^(.+?)(?:\[(\d+)\])?$/);
+    const label = (match?.[1] ?? segment).replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+    return match?.[2] == null ? label : `${label} ${Number(match[2]) + 1}`;
+  }).join(" · ");
+  const [, reason = issue.message] = issue.message.split("; ", 2);
+  return `${context} — ${reason}`;
 }
+
+const hasStrengthIssue = computed(() =>
+  issuesForField("product.strength").length > 0
+);
 
 // --- Section 6: Correction Submission ---
 
@@ -333,7 +346,7 @@ function editableValue(item: LineItem, path: string): string {
                 aria-label="Explain mapping confidence"
                 @click.stop="showMappingExplanation = !showMappingExplanation"
               >
-                Mapping confidence: <strong class="text-ink">{{ rowMappingConfidence != null ? `${rowMappingConfidence}%` : (rowMappingIssueCount === 0 ? "No issues" : "Needs review") }}</strong>
+                Mapping confidence: <strong class="text-ink">{{ rowMappingConfidence != null ? `${rowMappingConfidence}%` : "—" }}</strong>
               </button>
               <span
                 v-if="showMappingExplanation"
@@ -390,16 +403,6 @@ function editableValue(item: LineItem, path: string): string {
           <span class="sr-only">{{ extractionCalculation }}</span>
         </div>
 
-        <div v-if="showMappingConcernDefinition" role="tooltip" class="rounded-xl border border-rule bg-surface-alt p-3 text-[11px] leading-4 text-ink-2" data-tooltip-container>
-          <div class="flex items-start justify-between gap-2">
-            <div>
-              <span class="font-semibold">How field mapping confidence is calculated:</span>
-              {{ mappingConcernDefinition }}
-            </div>
-            <button type="button" class="font-bold text-xs text-ink-3 hover:text-ink" @click.stop="showMappingConcernDefinition = false">✕</button>
-          </div>
-        </div>
-
         <!-- Edit / Correction Card (Clean & Inline) -->
         <div class="rounded-xl border border-rule bg-white p-4 shadow-xs">
           <div class="flex items-center justify-between">
@@ -447,42 +450,132 @@ function editableValue(item: LineItem, path: string): string {
           <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 border-b border-slate-100 pb-2 mb-3">
             Product Identity
           </h3>
-          <div v-if="mappingIssuesFor('product').length" class="mb-3 border-l-2 border-amber-500 bg-surface-alt px-3 py-2 text-[11px] text-ink-2">
-            <p v-for="issue in mappingIssuesFor('product')" :key="`${issue.field_path}:${issue.code}`">{{ issue.message }}</p>
-          </div>
-          <div v-if="mappingConcernsFor('product').length" class="mb-3 border-l-2 border-amber-500 bg-surface-alt px-3 py-2 text-[11px] text-ink-2">
-            <p class="flex items-center gap-1 font-semibold">
-              {{ mappingConcernsFor('product').length }} field{{ mappingConcernsFor('product').length === 1 ? "" : "s" }} below full mapping confidence:
-              <button type="button" data-tooltip-container class="flex h-4 w-4 items-center justify-center rounded-full border border-rule-dark text-[9px] font-bold text-ink-3 hover:bg-white" aria-label="Explain field mapping confidence" :aria-expanded="showMappingConcernDefinition" @click.stop="showMappingConcernDefinition = !showMappingConcernDefinition">?</button>
-            </p>
-            <p v-for="concern in mappingConcernsFor('product')" :key="concern.label">{{ concern.label }} ({{ concern.score }}%): {{ concern.reason }}</p>
-          </div>
+          <details v-if="mappingIssuesFor('product').length" class="mb-3 border-l-2 border-amber-500 bg-surface-alt px-3 py-2 text-[11px] text-ink-2">
+            <summary class="flex cursor-pointer items-center justify-between gap-3 font-semibold marker:text-amber-600">
+              <span>{{ mappingIssuesFor('product').length }} mapping {{ mappingIssuesFor('product').length === 1 ? "issue" : "issues" }}</span>
+              <span class="text-[10px] font-medium text-ink-3">View details</span>
+            </summary>
+            <div class="mt-2 space-y-1 border-t border-amber-200 pt-2">
+              <p v-for="issue in mappingIssuesFor('product')" :key="`${issue.field_path}:${issue.code}`">{{ mappingIssueText(issue) }}</p>
+            </div>
+          </details>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <span class="text-[10px] font-bold uppercase text-slate-400">Trade Name</span>
+              <div class="flex items-center gap-1.5">
+                <span class="text-[10px] font-bold uppercase text-slate-400">Trade Name</span>
+                <span
+                  v-if="issuesForField('product.trade_name').length"
+                  class="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800"
+                >
+                  Mapping issue
+                </span>
+              </div>
               <p class="font-bold text-slate-800">{{ lineItem.product.trade_name || "—" }}</p>
-            </div>
-            <div>
-              <span class="text-[10px] font-bold uppercase text-slate-400">Active Ingredients (INN)</span>
-              <p class="font-medium text-slate-800">{{ lineItem.product.inn.join(" · ") || "—" }}</p>
-            </div>
-            <div>
-              <span class="text-[10px] font-bold uppercase text-slate-400">Strength</span>
-              <p class="font-medium text-slate-800">
-                {{ (lineItem.product.strength ?? []).map((s) => `${displayValue(s.value)} ${displayValue(s.unit)}${s.per_value ? ` / ${s.per_value} ${s.per_unit}` : ""}`).join(" · ") || "—" }}
+              <p
+                v-for="issue in issuesForField('product.trade_name')"
+                :key="`${issue.field_path}:${issue.code}`"
+                class="mt-1 text-[11px] text-amber-700"
+              >
+                ⚠ {{ mappingIssueText(issue) }}
               </p>
             </div>
             <div>
-              <span class="text-[10px] font-bold uppercase text-slate-400">Dosage Form</span>
+              <div class="flex items-center gap-1.5">
+                <span class="text-[10px] font-bold uppercase text-slate-400">Active Ingredients (INN)</span>
+                <span
+                  v-if="issuesForField('product.inn').length"
+                  class="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800"
+                >
+                  Mapping issue
+                </span>
+              </div>
+              <p class="font-medium text-slate-800">{{ lineItem.product.inn.join(" · ") || "—" }}</p>
+              <p
+                v-for="issue in issuesForField('product.inn')"
+                :key="`${issue.field_path}:${issue.code}`"
+                class="mt-1 text-[11px] text-amber-700"
+              >
+                ⚠ {{ mappingIssueText(issue) }}
+              </p>
+            </div>
+            <div>
+              <div class="flex items-center gap-1.5">
+                <span class="text-[10px] font-bold uppercase text-slate-400">Strength</span>
+                <span
+                  v-if="hasStrengthIssue"
+                  class="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800"
+                  title="Mapping issue detected for strength"
+                >
+                  Mapping issue
+                </span>
+              </div>
+              <p class="font-medium text-slate-800">
+                {{ (lineItem.product.strength ?? []).map((s) => `${displayValue(s.value)} ${displayValue(s.unit)}${s.per_value ? ` / ${s.per_value} ${s.per_unit}` : ""}`).join(" · ") || "—" }}
+              </p>
+              <p
+                v-for="issue in issuesForField('product.strength')"
+                :key="`${issue.field_path}:${issue.code}`"
+                class="mt-1 text-[11px] text-amber-700"
+              >
+                ⚠ {{ mappingIssueText(issue) }}
+              </p>
+            </div>
+            <div>
+              <div class="flex items-center gap-1.5">
+                <span class="text-[10px] font-bold uppercase text-slate-400">Dosage Form</span>
+                <span
+                  v-if="issuesForField('product.dosage_form').length"
+                  class="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800"
+                >
+                  Mapping issue
+                </span>
+              </div>
               <p class="font-medium text-slate-800">{{ lineItem.product.dosage_form || "—" }}</p>
+              <p
+                v-for="issue in issuesForField('product.dosage_form')"
+                :key="`${issue.field_path}:${issue.code}`"
+                class="mt-1 text-[11px] text-amber-700"
+              >
+                ⚠ {{ mappingIssueText(issue) }}
+              </p>
             </div>
             <div>
-              <span class="text-[10px] font-bold uppercase text-slate-400">Manufacturer</span>
+              <div class="flex items-center gap-1.5">
+                <span class="text-[10px] font-bold uppercase text-slate-400">Manufacturer</span>
+                <span
+                  v-if="issuesForField('product.manufacturer').length"
+                  class="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800"
+                >
+                  Mapping issue
+                </span>
+              </div>
               <p class="font-medium text-slate-800">{{ lineItem.product.manufacturer || "—" }}</p>
+              <p
+                v-for="issue in issuesForField('product.manufacturer')"
+                :key="`${issue.field_path}:${issue.code}`"
+                class="mt-1 text-[11px] text-amber-700"
+              >
+                ⚠ {{ mappingIssueText(issue) }}
+              </p>
             </div>
             <div>
-              <span class="text-[10px] font-bold uppercase text-slate-400">Country of Origin</span>
+              <div class="flex items-center gap-1.5">
+                <span class="text-[10px] font-bold uppercase text-slate-400">Country of Origin</span>
+                <span
+                  v-if="issuesForField('product.country_of_origin').length"
+                  class="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800"
+                >
+                  Mapping issue
+                </span>
+              </div>
               <p class="font-medium text-slate-800">{{ lineItem.product.country_of_origin || "—" }}</p>
+              <p
+                v-for="issue in issuesForField('product.country_of_origin')"
+                :key="`${issue.field_path}:${issue.code}`"
+                class="mt-1 text-[11px] text-amber-700"
+              >
+                ⚠ {{ mappingIssueText(issue) }}
+              </p>
             </div>
           </div>
         </div>
@@ -492,31 +585,68 @@ function editableValue(item: LineItem, path: string): string {
           <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 border-b border-slate-100 pb-2 mb-3">
             Pricing & Commercial Terms
           </h3>
-          <div v-if="mappingIssuesFor('pricing').length" class="mb-3 border-l-2 border-amber-500 bg-surface-alt px-3 py-2 text-[11px] text-ink-2">
-            <p v-for="issue in mappingIssuesFor('pricing')" :key="`${issue.field_path}:${issue.code}`">{{ issue.message }}</p>
-          </div>
-          <div v-if="mappingConcernsFor('pricing').length" class="mb-3 border-l-2 border-amber-500 bg-surface-alt px-3 py-2 text-[11px] text-ink-2">
-            <p class="flex items-center gap-1 font-semibold">
-              {{ mappingConcernsFor('pricing').length }} field{{ mappingConcernsFor('pricing').length === 1 ? "" : "s" }} below full mapping confidence:
-              <button type="button" data-tooltip-container class="flex h-4 w-4 items-center justify-center rounded-full border border-rule-dark text-[9px] font-bold text-ink-3 hover:bg-white" aria-label="Explain field mapping confidence" :aria-expanded="showMappingConcernDefinition" @click.stop="showMappingConcernDefinition = !showMappingConcernDefinition">?</button>
-            </p>
-            <p v-for="concern in mappingConcernsFor('pricing')" :key="concern.label">{{ concern.label }} ({{ concern.score }}%): {{ concern.reason }}</p>
-          </div>
+          <details v-if="mappingIssuesFor('pricing').length" class="mb-3 border-l-2 border-amber-500 bg-surface-alt px-3 py-2 text-[11px] text-ink-2">
+            <summary class="flex cursor-pointer items-center justify-between gap-3 font-semibold marker:text-amber-600">
+              <span>{{ mappingIssuesFor('pricing').length }} mapping {{ mappingIssuesFor('pricing').length === 1 ? "issue" : "issues" }}</span>
+              <span class="text-[10px] font-medium text-ink-3">View details</span>
+            </summary>
+            <div class="mt-2 space-y-1 border-t border-amber-200 pt-2">
+              <p v-for="issue in mappingIssuesFor('pricing')" :key="`${issue.field_path}:${issue.code}`">{{ mappingIssueText(issue) }}</p>
+            </div>
+          </details>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <span class="text-[10px] font-bold uppercase text-slate-400">Quoted Price</span>
+              <div class="flex items-center gap-1.5">
+                <span class="text-[10px] font-bold uppercase text-slate-400">Quoted Price</span>
+                <span
+                  v-if="issuesForField(['pricing.quoted_price', 'pricing.currency']).length"
+                  class="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800"
+                >
+                  Mapping issue
+                </span>
+              </div>
               <p class="font-bold text-slate-800">
                 {{ displayCurrency }} {{ displayPrice(lineItem.pricing.quoted_price.amount) }} / {{ lineItem.pricing.quoted_price.uom || "unit" }}
               </p>
-            </div>
-            <div>
-              <span class="text-[10px] font-bold uppercase text-slate-400">Pack Price</span>
-              <p class="font-medium text-slate-800">
-                {{ lineItem.pricing.pack_price ? `${displayCurrency} ${displayPrice(lineItem.pricing.pack_price)}` : "—" }}
+              <p
+                v-for="issue in issuesForField(['pricing.quoted_price', 'pricing.currency'])"
+                :key="`${issue.field_path}:${issue.code}`"
+                class="mt-1 text-[11px] text-amber-700"
+              >
+                ⚠ {{ mappingIssueText(issue) }}
               </p>
             </div>
             <div>
-              <span class="text-[10px] font-bold uppercase text-slate-400">Normalized Price</span>
+              <div class="flex items-center gap-1.5">
+                <span class="text-[10px] font-bold uppercase text-slate-400">Pack Price</span>
+                <span
+                  v-if="issuesForField('pricing.pack_price').length"
+                  class="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800"
+                >
+                  Mapping issue
+                </span>
+              </div>
+              <p class="font-medium text-slate-800">
+                {{ lineItem.pricing.pack_price ? `${displayCurrency} ${displayPrice(lineItem.pricing.pack_price)}` : "—" }}
+              </p>
+              <p
+                v-for="issue in issuesForField('pricing.pack_price')"
+                :key="`${issue.field_path}:${issue.code}`"
+                class="mt-1 text-[11px] text-amber-700"
+              >
+                ⚠ {{ mappingIssueText(issue) }}
+              </p>
+            </div>
+            <div>
+              <div class="flex items-center gap-1.5">
+                <span class="text-[10px] font-bold uppercase text-slate-400">Normalized Price</span>
+                <span
+                  v-if="issuesForField('pricing.normalized_price').length"
+                  class="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800"
+                >
+                  Mapping issue
+                </span>
+              </div>
               <p class="font-bold text-slate-800">
                 {{ displayCurrency }} {{ displayPrice(lineItem.pricing.normalized_price?.amount, lineItem.pricing.quoted_price?.amount) }} / {{ lineItem.pricing.normalized_price?.uom || "unit" }}
               </p>
@@ -526,14 +656,36 @@ function editableValue(item: LineItem, path: string): string {
               <span v-if="lineItem.pricing.normalized_price?.derived" class="mt-1 block text-[10px] font-semibold text-slate-500">
                 Derived value<span v-if="lineItem.pricing.normalized_price?.validation_status"> · Validation {{ lineItem.pricing.normalized_price.validation_status }}</span>
               </span>
+              <p
+                v-for="issue in issuesForField('pricing.normalized_price')"
+                :key="`${issue.field_path}:${issue.code}`"
+                class="mt-1 text-[11px] text-amber-700"
+              >
+                ⚠ {{ mappingIssueText(issue) }}
+              </p>
             </div>
             <div>
-              <span class="text-[10px] font-bold uppercase text-slate-400">Discount & Extended Price</span>
+              <div class="flex items-center gap-1.5">
+                <span class="text-[10px] font-bold uppercase text-slate-400">Discount & Extended Price</span>
+                <span
+                  v-if="issuesForField(['pricing.discount', 'pricing.extended_price']).length"
+                  class="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800"
+                >
+                  Mapping issue
+                </span>
+              </div>
               <p class="font-medium text-slate-800">
                 {{ lineItem.pricing.discount ? `${lineItem.pricing.discount}%` : "No discount" }}
                 <span v-if="lineItem.pricing.extended_price">
                   · Total {{ displayCurrency }} {{ displayPrice(lineItem.pricing.extended_price) }}
                 </span>
+              </p>
+              <p
+                v-for="issue in issuesForField(['pricing.discount', 'pricing.extended_price'])"
+                :key="`${issue.field_path}:${issue.code}`"
+                class="mt-1 text-[11px] text-amber-700"
+              >
+                ⚠ {{ mappingIssueText(issue) }}
               </p>
             </div>
           </div>
@@ -580,48 +732,137 @@ function editableValue(item: LineItem, path: string): string {
           <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 border-b border-slate-100 pb-2 mb-3">
             Quantity & Packaging
           </h3>
-          <div v-if="mappingIssuesFor('quantity_packaging').length" class="mb-3 border-l-2 border-amber-500 bg-surface-alt px-3 py-2 text-[11px] text-ink-2">
-            <p v-for="issue in mappingIssuesFor('quantity_packaging')" :key="`${issue.field_path}:${issue.code}`">{{ issue.message }}</p>
-          </div>
-          <div v-if="mappingConcernsFor('quantity_packaging').length" class="mb-3 border-l-2 border-amber-500 bg-surface-alt px-3 py-2 text-[11px] text-ink-2">
-            <p class="flex items-center gap-1 font-semibold">
-              {{ mappingConcernsFor('quantity_packaging').length }} field{{ mappingConcernsFor('quantity_packaging').length === 1 ? "" : "s" }} below full mapping confidence:
-              <button type="button" data-tooltip-container class="flex h-4 w-4 items-center justify-center rounded-full border border-rule-dark text-[9px] font-bold text-ink-3 hover:bg-white" aria-label="Explain field mapping confidence" :aria-expanded="showMappingConcernDefinition" @click.stop="showMappingConcernDefinition = !showMappingConcernDefinition">?</button>
-            </p>
-            <p v-for="concern in mappingConcernsFor('quantity_packaging')" :key="concern.label">{{ concern.label }} ({{ concern.score }}%): {{ concern.reason }}</p>
-          </div>
+          <details v-if="mappingIssuesFor('quantity_packaging').length" class="mb-3 border-l-2 border-amber-500 bg-surface-alt px-3 py-2 text-[11px] text-ink-2">
+            <summary class="flex cursor-pointer items-center justify-between gap-3 font-semibold marker:text-amber-600">
+              <span>{{ mappingIssuesFor('quantity_packaging').length }} mapping {{ mappingIssuesFor('quantity_packaging').length === 1 ? "issue" : "issues" }}</span>
+              <span class="text-[10px] font-medium text-ink-3">View details</span>
+            </summary>
+            <div class="mt-2 space-y-1 border-t border-amber-200 pt-2">
+              <p v-for="issue in mappingIssuesFor('quantity_packaging')" :key="`${issue.field_path}:${issue.code}`">{{ mappingIssueText(issue) }}</p>
+            </div>
+          </details>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <span class="text-[10px] font-bold uppercase text-slate-400">Quoted Quantity</span>
+              <div class="flex items-center gap-1.5">
+                <span class="text-[10px] font-bold uppercase text-slate-400">Quoted Quantity</span>
+                <span
+                  v-if="issuesForField(['quantity.quoted_quantity', 'quantity.quantity_basis']).length"
+                  class="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800"
+                >
+                  Mapping issue
+                </span>
+              </div>
               <p class="font-bold text-slate-800">
                 {{ displayValue(lineItem.quantity.quoted_quantity) }} {{ lineItem.quantity.quoted_quantity_uom || "" }}
               </p>
+              <p
+                v-for="issue in issuesForField(['quantity.quoted_quantity', 'quantity.quantity_basis'])"
+                :key="`${issue.field_path}:${issue.code}`"
+                class="mt-1 text-[11px] text-amber-700"
+              >
+                ⚠ {{ mappingIssueText(issue) }}
+              </p>
             </div>
             <div>
-              <span class="text-[10px] font-bold uppercase text-slate-400">Minimum Order Qty (MOQ)</span>
+              <div class="flex items-center gap-1.5">
+                <span class="text-[10px] font-bold uppercase text-slate-400">Minimum Order Qty (MOQ)</span>
+                <span
+                  v-if="issuesForField('quantity.minimum_order_quantity').length"
+                  class="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800"
+                >
+                  Mapping issue
+                </span>
+              </div>
               <p class="font-medium text-slate-800">
                 {{ displayValue(lineItem.quantity.minimum_order_quantity) }} {{ lineItem.quantity.minimum_order_quantity_uom || "" }}
               </p>
+              <p
+                v-for="issue in issuesForField('quantity.minimum_order_quantity')"
+                :key="`${issue.field_path}:${issue.code}`"
+                class="mt-1 text-[11px] text-amber-700"
+              >
+                ⚠ {{ mappingIssueText(issue) }}
+              </p>
             </div>
             <div>
-              <span class="text-[10px] font-bold uppercase text-slate-400">Primary Pack</span>
+              <div class="flex items-center gap-1.5">
+                <span class="text-[10px] font-bold uppercase text-slate-400">Primary Pack</span>
+                <span
+                  v-if="issuesForField('packaging.primary_pack').length"
+                  class="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800"
+                >
+                  Mapping issue
+                </span>
+              </div>
               <p class="font-medium text-slate-800">{{ lineItem.packaging.primary_pack || "—" }}</p>
+              <p
+                v-for="issue in issuesForField('packaging.primary_pack')"
+                :key="`${issue.field_path}:${issue.code}`"
+                class="mt-1 text-[11px] text-amber-700"
+              >
+                ⚠ {{ mappingIssueText(issue) }}
+              </p>
             </div>
             <div>
-              <span class="text-[10px] font-bold uppercase text-slate-400">Units Per Pack</span>
+              <div class="flex items-center gap-1.5">
+                <span class="text-[10px] font-bold uppercase text-slate-400">Units Per Pack</span>
+                <span
+                  v-if="issuesForField('packaging.units_per_pack').length"
+                  class="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800"
+                >
+                  Mapping issue
+                </span>
+              </div>
               <p class="font-medium text-slate-800">
                 {{ lineItem.packaging.units_per_pack ? `${lineItem.packaging.units_per_pack} ${lineItem.packaging.unit_label || "units"}` : "—" }}
               </p>
-            </div>
-            <div>
-              <span class="text-[10px] font-bold uppercase text-slate-400">Packs Per Shipper</span>
-              <p class="font-medium text-slate-800">
-                {{ lineItem.packaging.packs_per_shipper ? `${lineItem.packaging.packs_per_shipper} packs / shipper` : "—" }}
+              <p
+                v-for="issue in issuesForField('packaging.units_per_pack')"
+                :key="`${issue.field_path}:${issue.code}`"
+                class="mt-1 text-[11px] text-amber-700"
+              >
+                ⚠ {{ mappingIssueText(issue) }}
               </p>
             </div>
             <div>
-              <span class="text-[10px] font-bold uppercase text-slate-400">Presentation</span>
+              <div class="flex items-center gap-1.5">
+                <span class="text-[10px] font-bold uppercase text-slate-400">Packs Per Shipper</span>
+                <span
+                  v-if="issuesForField('packaging.packs_per_shipper').length"
+                  class="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800"
+                >
+                  Mapping issue
+                </span>
+              </div>
+              <p class="font-medium text-slate-800">
+                {{ lineItem.packaging.packs_per_shipper ? `${lineItem.packaging.packs_per_shipper} packs / shipper` : "—" }}
+              </p>
+              <p
+                v-for="issue in issuesForField('packaging.packs_per_shipper')"
+                :key="`${issue.field_path}:${issue.code}`"
+                class="mt-1 text-[11px] text-amber-700"
+              >
+                ⚠ {{ mappingIssueText(issue) }}
+              </p>
+            </div>
+            <div>
+              <div class="flex items-center gap-1.5">
+                <span class="text-[10px] font-bold uppercase text-slate-400">Presentation</span>
+                <span
+                  v-if="issuesForField(['packaging.presentation', 'packaging.description']).length"
+                  class="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800"
+                >
+                  Mapping issue
+                </span>
+              </div>
               <p class="font-medium text-slate-800">{{ lineItem.packaging.presentation || "—" }}</p>
+              <p
+                v-for="issue in issuesForField(['packaging.presentation', 'packaging.description'])"
+                :key="`${issue.field_path}:${issue.code}`"
+                class="mt-1 text-[11px] text-amber-700"
+              >
+                ⚠ {{ mappingIssueText(issue) }}
+              </p>
             </div>
           </div>
         </div>
@@ -631,47 +872,121 @@ function editableValue(item: LineItem, path: string): string {
           <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 border-b border-slate-100 pb-2 mb-3">
             Supply & Logistics
           </h3>
-          <div v-if="mappingIssuesFor('supply').length" class="mb-3 border-l-2 border-amber-500 bg-surface-alt px-3 py-2 text-[11px] text-ink-2">
-            <p v-for="issue in mappingIssuesFor('supply')" :key="`${issue.field_path}:${issue.code}`">{{ issue.message }}</p>
-          </div>
-          <div v-if="mappingConcernsFor('supply').length" class="mb-3 border-l-2 border-amber-500 bg-surface-alt px-3 py-2 text-[11px] text-ink-2">
-            <p class="flex items-center gap-1 font-semibold">
-              {{ mappingConcernsFor('supply').length }} field{{ mappingConcernsFor('supply').length === 1 ? "" : "s" }} below full mapping confidence:
-              <button type="button" data-tooltip-container class="flex h-4 w-4 items-center justify-center rounded-full border border-rule-dark text-[9px] font-bold text-ink-3 hover:bg-white" aria-label="Explain field mapping confidence" :aria-expanded="showMappingConcernDefinition" @click.stop="showMappingConcernDefinition = !showMappingConcernDefinition">?</button>
-            </p>
-            <p v-for="concern in mappingConcernsFor('supply')" :key="concern.label">{{ concern.label }} ({{ concern.score }}%): {{ concern.reason }}</p>
-          </div>
+          <details v-if="mappingIssuesFor('supply').length" class="mb-3 border-l-2 border-amber-500 bg-surface-alt px-3 py-2 text-[11px] text-ink-2">
+            <summary class="flex cursor-pointer items-center justify-between gap-3 font-semibold marker:text-amber-600">
+              <span>{{ mappingIssuesFor('supply').length }} mapping {{ mappingIssuesFor('supply').length === 1 ? "issue" : "issues" }}</span>
+              <span class="text-[10px] font-medium text-ink-3">View details</span>
+            </summary>
+            <div class="mt-2 space-y-1 border-t border-amber-200 pt-2">
+              <p v-for="issue in mappingIssuesFor('supply')" :key="`${issue.field_path}:${issue.code}`">{{ mappingIssueText(issue) }}</p>
+            </div>
+          </details>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <span class="text-[10px] font-bold uppercase text-slate-400">Lead Time</span>
+              <div class="flex items-center gap-1.5">
+                <span class="text-[10px] font-bold uppercase text-slate-400">Lead Time</span>
+                <span
+                  v-if="issuesForField('supply.lead_time').length"
+                  class="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800"
+                >
+                  Mapping issue
+                </span>
+              </div>
               <p class="font-medium text-slate-800">
                 {{ displayLeadTime(lineItem.supply) }}
               </p>
-            </div>
-            <div>
-              <span class="text-[10px] font-bold uppercase text-slate-400">Shipping Transit</span>
-              <p class="font-medium text-slate-800">
-                {{ displayTransitDuration }}
+              <p
+                v-for="issue in issuesForField('supply.lead_time')"
+                :key="`${issue.field_path}:${issue.code}`"
+                class="mt-1 text-[11px] text-amber-700"
+              >
+                ⚠ {{ mappingIssueText(issue) }}
               </p>
             </div>
             <div>
-              <span class="text-[10px] font-bold uppercase text-slate-400">Shelf Life</span>
+              <div class="flex items-center gap-1.5">
+                <span class="text-[10px] font-bold uppercase text-slate-400">Shipping Transit</span>
+                <span
+                  v-if="issuesForField('commercial_terms.transit_time').length"
+                  class="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800"
+                >
+                  Mapping issue
+                </span>
+              </div>
+              <p class="font-medium text-slate-800">
+                {{ displayTransitDuration }}
+              </p>
+              <p
+                v-for="issue in issuesForField('commercial_terms.transit_time')"
+                :key="`${issue.field_path}:${issue.code}`"
+                class="mt-1 text-[11px] text-amber-700"
+              >
+                ⚠ {{ mappingIssueText(issue) }}
+              </p>
+            </div>
+            <div>
+              <div class="flex items-center gap-1.5">
+                <span class="text-[10px] font-bold uppercase text-slate-400">Shelf Life</span>
+                <span
+                  v-if="issuesForField('supply.shelf_life').length"
+                  class="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800"
+                >
+                  Mapping issue
+                </span>
+              </div>
               <p class="font-medium text-slate-800">
                 {{ lineItem.supply.shelf_life_months ? `${lineItem.supply.shelf_life_months} months` : "—" }}
                 <span v-if="lineItem.supply.minimum_remaining_shelf_life_percent">
                   (min {{ lineItem.supply.minimum_remaining_shelf_life_percent }}% remaining)
                 </span>
               </p>
+              <p
+                v-for="issue in issuesForField('supply.shelf_life')"
+                :key="`${issue.field_path}:${issue.code}`"
+                class="mt-1 text-[11px] text-amber-700"
+              >
+                ⚠ {{ mappingIssueText(issue) }}
+              </p>
             </div>
             <div>
-              <span class="text-[10px] font-bold uppercase text-slate-400">Cold Chain</span>
+              <div class="flex items-center gap-1.5">
+                <span class="text-[10px] font-bold uppercase text-slate-400">Cold Chain</span>
+                <span
+                  v-if="issuesForField('supply.cold_chain_required').length"
+                  class="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800"
+                >
+                  Mapping issue
+                </span>
+              </div>
               <p class="font-medium text-slate-800">
                 {{ lineItem.supply.cold_chain_required != null ? (lineItem.supply.cold_chain_required ? "Required" : "Not required") : "—" }}
               </p>
+              <p
+                v-for="issue in issuesForField('supply.cold_chain_required')"
+                :key="`${issue.field_path}:${issue.code}`"
+                class="mt-1 text-[11px] text-amber-700"
+              >
+                ⚠ {{ mappingIssueText(issue) }}
+              </p>
             </div>
             <div class="sm:col-span-2">
-              <span class="text-[10px] font-bold uppercase text-slate-400">Storage Conditions</span>
+              <div class="flex items-center gap-1.5">
+                <span class="text-[10px] font-bold uppercase text-slate-400">Storage Conditions</span>
+                <span
+                  v-if="issuesForField('supply.storage_conditions').length"
+                  class="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800"
+                >
+                  Mapping issue
+                </span>
+              </div>
               <p class="font-medium text-slate-800">{{ lineItem.supply.storage_conditions || "—" }}</p>
+              <p
+                v-for="issue in issuesForField('supply.storage_conditions')"
+                :key="`${issue.field_path}:${issue.code}`"
+                class="mt-1 text-[11px] text-amber-700"
+              >
+                ⚠ {{ mappingIssueText(issue) }}
+              </p>
             </div>
           </div>
         </div>
@@ -681,35 +996,79 @@ function editableValue(item: LineItem, path: string): string {
           <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 border-b border-slate-100 pb-2 mb-3">
             Regulatory & Compliance
           </h3>
-          <div v-if="mappingIssuesFor('regulatory').length" class="mb-3 border-l-2 border-amber-500 bg-surface-alt px-3 py-2 text-[11px] text-ink-2">
-            <p v-for="issue in mappingIssuesFor('regulatory')" :key="`${issue.field_path}:${issue.code}`">{{ issue.message }}</p>
-          </div>
-          <div v-if="mappingConcernsFor('regulatory').length" class="mb-3 border-l-2 border-amber-500 bg-surface-alt px-3 py-2 text-[11px] text-ink-2">
-            <p class="flex items-center gap-1 font-semibold">
-              {{ mappingConcernsFor('regulatory').length }} field{{ mappingConcernsFor('regulatory').length === 1 ? "" : "s" }} below full mapping confidence:
-              <button type="button" data-tooltip-container class="flex h-4 w-4 items-center justify-center rounded-full border border-rule-dark text-[9px] font-bold text-ink-3 hover:bg-white" aria-label="Explain field mapping confidence" :aria-expanded="showMappingConcernDefinition" @click.stop="showMappingConcernDefinition = !showMappingConcernDefinition">?</button>
-            </p>
-            <p v-for="concern in mappingConcernsFor('regulatory')" :key="concern.label">{{ concern.label }} ({{ concern.score }}%): {{ concern.reason }}</p>
-          </div>
+          <details v-if="mappingIssuesFor('regulatory').length" class="mb-3 border-l-2 border-amber-500 bg-surface-alt px-3 py-2 text-[11px] text-ink-2">
+            <summary class="flex cursor-pointer items-center justify-between gap-3 font-semibold marker:text-amber-600">
+              <span>{{ mappingIssuesFor('regulatory').length }} mapping {{ mappingIssuesFor('regulatory').length === 1 ? "issue" : "issues" }}</span>
+              <span class="text-[10px] font-medium text-ink-3">View details</span>
+            </summary>
+            <div class="mt-2 space-y-1 border-t border-amber-200 pt-2">
+              <p v-for="issue in mappingIssuesFor('regulatory')" :key="`${issue.field_path}:${issue.code}`">{{ mappingIssueText(issue) }}</p>
+            </div>
+          </details>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <span class="text-[10px] font-bold uppercase text-slate-400">WHO Prequalified</span>
+              <div class="flex items-center gap-1.5">
+                <span class="text-[10px] font-bold uppercase text-slate-400">WHO Prequalified</span>
+                <span
+                  v-if="issuesForField('regulatory.who_prequalified').length"
+                  class="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800"
+                >
+                  Mapping issue
+                </span>
+              </div>
               <p class="font-medium text-slate-800">
                 <span v-if="lineItem.regulatory?.who_prequalified != null">
                   {{ lineItem.regulatory.who_prequalified ? `WHO prequalified${lineItem.regulatory.who_pq_reference ? ` · ${lineItem.regulatory.who_pq_reference}` : ""}` : "WHO not prequalified" }}
                 </span>
                 <span v-else>—</span>
               </p>
-            </div>
-            <div>
-              <span class="text-[10px] font-bold uppercase text-slate-400">Registered Markets</span>
-              <p class="font-medium text-slate-800">
-                {{ lineItem.regulatory?.registered_markets?.length ? `markets: ${lineItem.regulatory.registered_markets.join(", ")}` : "—" }}
+              <p
+                v-for="issue in issuesForField('regulatory.who_prequalified')"
+                :key="`${issue.field_path}:${issue.code}`"
+                class="mt-1 text-[11px] text-amber-700"
+              >
+                ⚠ {{ mappingIssueText(issue) }}
               </p>
             </div>
             <div>
-              <span class="text-[10px] font-bold uppercase text-slate-400">Regulatory Status</span>
+              <div class="flex items-center gap-1.5">
+                <span class="text-[10px] font-bold uppercase text-slate-400">Registered Markets</span>
+                <span
+                  v-if="issuesForField('regulatory.registered_markets').length"
+                  class="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800"
+                >
+                  Mapping issue
+                </span>
+              </div>
+              <p class="font-medium text-slate-800">
+                {{ lineItem.regulatory?.registered_markets?.length ? `markets: ${lineItem.regulatory.registered_markets.join(", ")}` : "—" }}
+              </p>
+              <p
+                v-for="issue in issuesForField('regulatory.registered_markets')"
+                :key="`${issue.field_path}:${issue.code}`"
+                class="mt-1 text-[11px] text-amber-700"
+              >
+                ⚠ {{ mappingIssueText(issue) }}
+              </p>
+            </div>
+            <div>
+              <div class="flex items-center gap-1.5">
+                <span class="text-[10px] font-bold uppercase text-slate-400">Regulatory Status</span>
+                <span
+                  v-if="issuesForField(['regulatory.regulatory_status', 'regulatory.registration_reference']).length"
+                  class="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800"
+                >
+                  Mapping issue
+                </span>
+              </div>
               <p class="font-medium text-slate-800">{{ lineItem.regulatory?.regulatory_status || "—" }}</p>
+              <p
+                v-for="issue in issuesForField(['regulatory.regulatory_status', 'regulatory.registration_reference'])"
+                :key="`${issue.field_path}:${issue.code}`"
+                class="mt-1 text-[11px] text-amber-700"
+              >
+                ⚠ {{ mappingIssueText(issue) }}
+              </p>
             </div>
           </div>
         </div>

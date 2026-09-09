@@ -21,17 +21,17 @@ Explain the observed Gemini 503 accurately and make background-task and semantic
 ## Work log and evidence
 
 - 2026-09-09: Inspected the supplied stack trace. The error originates in Google GenAI `generate_content`, after SDK retries, and passes through LangChain and the agent unchanged. It is not caused by PDF parsing or deterministic validation.
-- 2026-09-09: Added the requested ordered provider chain: direct Gemini, OpenRouter Gemini (`google/gemini-3.1-flash-lite`), then OpenRouter `gpt-oss-120b` (`openai/gpt-oss-120b`).
-- 2026-09-09: Added an autouse test fixture that clears direct-Gemini and OpenRouter credentials to prevent developer keys from causing live model calls during ordinary tests.
+- 2026-09-09: The former provider-chain experiment was removed. Direct Google Gemini is the sole provider.
+- 2026-09-09: The autouse test fixture clears the direct-Gemini credential to prevent developer keys from causing live model calls during ordinary tests.
 - 2026-09-09: Full-suite evaluation fakes initially only accepted the pre-failover constructor. Updated them to accept optional provider-chain settings while retaining offline recorded behavior.
-- 2026-09-09: Added regression coverage for direct Gemini -> OpenRouter Gemini -> OpenRouter `gpt-oss-120b` ordering.
+- 2026-09-09: Added regression coverage that direct Google Gemini is the only semantic provider.
 
 ## Tests, app run, and validation
 
 - Focused regression test: `uv run --project backend pytest backend/tests/test_semantic_agent.py backend/tests/test_processing_events.py -q` passed (18 tests).
 - `bin/agent-validate targeted` passed: frontend lint/tests, Ruff, mypy, and 119 backend tests.
 - The existing app lifespan run remains the terminal-handler verification. The new agent test drives an injected provider failure and verifies that the safe agent failure boundary is logged without the exception message being passed as an explicit log argument.
-- Provider-chain tests now cover both direct Gemini -> OpenRouter Gemini and direct Gemini -> OpenRouter Gemini -> OpenRouter `gpt-oss-120b`. `bin/agent-validate targeted` passes after the fallback addition: frontend lint/tests, Ruff, mypy, and 122 backend tests.
+- Provider tests now cover direct Google Gemini only. Historical validation counts above predate this provider simplification.
 
 ## Review findings and resolutions
 
