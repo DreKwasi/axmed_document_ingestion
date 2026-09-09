@@ -2,15 +2,13 @@
 # Run evaluation regressions and persist a SQLite evaluation run from backend configuration.
 set -euo pipefail
 
-mode="recorded"
-if [[ "${1:-}" == "--live" ]]; then
-  mode="live"
-elif [[ "${1:-}" == "--ocr" ]]; then
+mode="live"
+if [[ "${1:-}" == "--ocr" ]]; then
   mode="ocr"
 elif [[ "${1:-}" == "--email" ]]; then
   mode="email"
 elif [[ $# -ne 0 ]]; then
-  echo "Usage: backend/bin/run-evals [--live|--ocr|--email]" >&2
+  echo "Usage: backend/bin/run-evals [--ocr|--email]" >&2
   exit 64
 fi
 
@@ -27,7 +25,7 @@ fi
 if [[ -n "$database_url_override" ]]; then
   export DATABASE_URL="$database_url_override"
 fi
-if [[ "$mode" == "recorded" || "$mode" == "ocr" ]]; then
+if [[ "$mode" == "ocr" ]]; then
   unset GEMINI_API_KEY
 fi
 
@@ -40,8 +38,7 @@ from pathlib import Path
 
 from app.config import Config
 from app.database import SessionLocal, run_migrations
-from app.evaluations import run_live_email_evaluation, run_live_ocr_evaluation, run_live_pdf_evaluation, run_recorded_evaluation, seed_evaluation_cases
-from app.extraction.json import RecordedJsonSemanticExtractor
+from app.evaluations import run_live_email_evaluation, run_live_ocr_evaluation, run_live_pdf_evaluation, seed_evaluation_cases
 
 settings = Config()
 workspace_root = Path.cwd().parent
@@ -68,11 +65,11 @@ with SessionLocal() as session:
             settings=settings,
         )
     else:
-        run = run_recorded_evaluation(
+        run = run_live_pdf_evaluation(
             session,
             project_root=workspace_root,
             golden_dataset_path=workspace_root / settings.golden_dataset_path,
-            extractor=RecordedJsonSemanticExtractor(workspace_root / settings.recorded_json_extraction_dir),
+            settings=settings,
         )
     print(json.dumps({"id": run.id, "mode": run.execution_mode, "summary": json.loads(run.summary_json)}))
 PY

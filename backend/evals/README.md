@@ -1,8 +1,8 @@
 # Backend Evaluation Assets
 
 > Purpose: versioned inputs and approved expected outputs for pipeline evaluations.
-> Run: `backend/bin/run-evals` runs regression checks and persists a recorded SQLite run.
-> Default: recorded mode never calls a model; `--live` and `--email` explicitly enable model evaluation; `--ocr` calls only the OCR service.
+> Run: `backend/bin/run-evals` runs live PDF regression checks and persists the SQLite run.
+> Default: the PDF evaluation uses the configured semantic model; `--email` evaluates email extraction; `--ocr` calls only the OCR service.
 > Fixtures: `fixtures/documents/` contains source documents; `fixtures/ocr/` contains degraded image inputs.
 > Ground truth: only `golden_outputs/` reviewed from source documents is used for fidelity scoring.
 > Email privacy: the Novara source is retained as an eval fixture; greetings, signatures, email addresses, phones, and contact-address material are removed before model context is constructed.
@@ -13,7 +13,6 @@
 
 - `golden_dataset.json` — versioned cases and rubric.
 - `golden_outputs/` — reviewed expected canonical outputs.
-- `recorded_json_extractions/` — immutable per-document semantic fact responses for offline regression checks.
 - `fixtures/documents/` — document inputs used by the current golden cases.
 - `fixtures/ocr/` — real degraded image inputs for the OCR layer.
 

@@ -13,6 +13,7 @@ SOURCE_HEADERS = [
     "source",
     "source_file",
     "file_format",
+    "review_status",
     "failure_reason",
     "source_notes",
     "extraction_confidence",
@@ -61,6 +62,13 @@ PRODUCT_HEADERS = [
     "regulatory_status",
 ]
 ISSUE_HEADERS = ["issue_field_path", "issue_section", "issue_code", "issue_message", "issue_severity"]
+EVIDENCE_HEADERS = [
+    "evidence_canonical_fields",
+    "evidence_source_paths",
+    "evidence_source_locations",
+    "evidence_methods",
+    "evidence_superseded_paths",
+]
 REVIEW_HEADERS = [
     "review_action",
     "review_prior_revision",
@@ -69,8 +77,8 @@ REVIEW_HEADERS = [
     "review_rejection_reason",
     "review_patches",
 ]
-HEADERS = [*SOURCE_HEADERS, *PRODUCT_HEADERS, *ISSUE_HEADERS, *REVIEW_HEADERS]
-EXPORTABLE_STATUSES = {"pending_review", "approved", "rejected", "failed"}
+HEADERS = [*SOURCE_HEADERS, *PRODUCT_HEADERS, *EVIDENCE_HEADERS, *ISSUE_HEADERS, *REVIEW_HEADERS]
+EXPORTABLE_STATUSES = {"pending_review", "pre_approved", "approved", "rejected", "auto_rejected", "failed"}
 
 
 def _file_format(filename: str) -> str:
@@ -79,7 +87,28 @@ def _file_format(filename: str) -> str:
 
 
 def _aligned(values: list[Any]) -> str:
+    if not any(v not in (None, "") for v in values):
+        return ""
     return "; ".join("" if value is None else str(value) for value in values)
+
+
+def _review_status_label(source: dict[str, Any]) -> str:
+    status = source.get("status")
+    quotation = source.get("quotation") or {}
+    review_status = quotation.get("review_status")
+    if status == "failed":
+        return "Extraction failed"
+    if status == "auto_rejected":
+        return "Material unusable"
+    if status == "rejected" or review_status == "rejected":
+        return "Rejected"
+    if status == "approved" or review_status == "approved":
+        return "Approved"
+    if status == "pre_approved" or review_status == "pre_approved":
+        return "Pre-approved"
+    if status == "pending_review" or review_status == "pending_review":
+        return "Needs review"
+    return (status or "").replace("_", " ").title()
 
 
 def _confidence_explanation(source: dict[str, Any]) -> str:
@@ -116,6 +145,7 @@ def _source_values(source: dict[str, Any], item: dict[str, Any] | None) -> list[
         source.get("source_name"),
         source.get("filename"),
         _file_format(source.get("filename") or ""),
+        _review_status_label(source),
         source.get("failure_reason"),
         " | ".join(source.get("notes") or []),
         confidence.get("score"),
@@ -187,6 +217,18 @@ def _issue_values(source: dict[str, Any], position: int | None) -> list[str]:
     )]
 
 
+def _evidence_values(source: dict[str, Any], item: dict[str, Any] | None) -> list[str]:
+    quotation_evidence = (source.get("quotation") or {}).get("evidence") or []
+    evidence = [*quotation_evidence, *((item or {}).get("evidence") or [])]
+    return [
+        _aligned([record.get("canonical_field") for record in evidence]),
+        _aligned([record.get("source_path") for record in evidence]),
+        _aligned([record.get("source_location") for record in evidence]),
+        _aligned([record.get("extraction_method") for record in evidence]),
+        _aligned([record.get("supersedes_source_path") for record in evidence]),
+    ]
+
+
 def _review_values(source: dict[str, Any]) -> list[Any]:
     reviews = source.get("reviews") or []
     return [
@@ -254,6 +296,7 @@ def documents_to_csv(documents: list[dict[str, Any]]) -> str:
                 rows.append([
                     *_source_values(source, None),
                     *_product_values(None, None),
+                    *_evidence_values(source, None),
                     *_issue_values(source, None),
                     *_review_values(source),
                 ])
@@ -262,6 +305,7 @@ def documents_to_csv(documents: list[dict[str, Any]]) -> str:
                 rows.append([
                     *_source_values(source, item),
                     *_product_values(item, position),
+                    *_evidence_values(source, item),
                     *_issue_values(source, position),
                     *_review_values(source),
                 ])

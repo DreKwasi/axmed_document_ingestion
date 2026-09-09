@@ -39,12 +39,7 @@ from app.documents import (
 from app.events import list_events_after, record_event, serialize_event
 from app.extraction.email_processing import consume_email_extraction
 from app.extraction.image_processing import consume_ocr
-from app.extraction.json import (
-    ChainedJsonSemanticExtractor,
-    JsonSemanticExtractor,
-    LangChainJsonSemanticExtractor,
-    RecordedJsonSemanticExtractor,
-)
+from app.extraction.json import JsonSemanticExtractor, LangChainJsonSemanticExtractor
 from app.extraction.pdf_processing import consume_pdf_extraction
 from app.logging import get_api_logger
 from app.models import DocumentRecord
@@ -90,7 +85,6 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
     """Create and configure the FastAPI application instance."""
     active_settings = settings or get_config()
     active_settings.upload_dir = _absolute_path(active_settings.upload_dir)
-    active_settings.recorded_json_extraction_dir = _absolute_path(active_settings.recorded_json_extraction_dir)
     active_settings.golden_dataset_path = _absolute_path(active_settings.golden_dataset_path)
     engine = create_sqlite_engine(active_settings.database_url)
     session_factory = sessionmaker(
@@ -103,14 +97,7 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
         max_workers=active_settings.background_processing_max_workers,
         thread_name_prefix="axmed-extraction",
     )
-    extractors: list[JsonSemanticExtractor] = [
-        RecordedJsonSemanticExtractor(active_settings.recorded_json_extraction_dir)
-    ]
-    if active_settings.semantic_extraction_configured:
-        extractors.append(LangChainJsonSemanticExtractor(active_settings))
-    extractor = json_extractor or (
-        ChainedJsonSemanticExtractor(extractors) if len(extractors) > 1 else extractors[0]
-    )
+    extractor = json_extractor or LangChainJsonSemanticExtractor(active_settings)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):

@@ -14,7 +14,6 @@ from app.config import Config
 from app.extraction.commercial import apply_commercial_rules
 from app.extraction.email_parser import parse_email
 from app.extraction.email_reconciliation import reconcile_email_price_uoms
-from app.extraction.json import JsonSemanticExtractor, profile_json, validate_source_facts
 from app.extraction.ocr_client import request_ocr
 from app.extraction.pdf_parser import parse_native_pdf
 from app.models import EvaluationCaseRecord, EvaluationResultRecord, EvaluationRunRecord
@@ -52,113 +51,7 @@ def seed_evaluation_cases(session: Session, golden_dataset_path: Path) -> None:
     session.commit()
 
 
-# --- Section 2: Recorded Offline Evaluation Runner ---
-
-
-def run_recorded_evaluation(
-    session: Session,
-    *,
-    project_root: Path,
-    golden_dataset_path: Path,
-    extractor: JsonSemanticExtractor,
-) -> EvaluationRunRecord:
-    """Execute recorded offline evaluation against golden dataset JSON fixtures."""
-    dataset = json.loads(golden_dataset_path.read_text())
-    run = EvaluationRunRecord(
-        rubric_version=dataset["rubric_version"],
-        execution_mode="recorded",
-        summary_json="{}",
-    )
-    session.add(run)
-    session.flush()
-    results = []
-    not_run = 0
-    for case in dataset["cases"]:
-        if case.get("execution"):
-            skipped_scores = {"canonical_fidelity": 0.0, "source_grounding": 0.0, "safety_and_uncertainty": 0.0}
-            session.add(
-                EvaluationResultRecord(
-                    run_id=run.id,
-                    case_id=case["id"],
-                    status="not_run",
-                    scores_json=json.dumps(skipped_scores),
-                    error_analysis_json=json.dumps([f"This case requires {case['execution']} evaluation mode."]),
-                )
-            )
-            results.append(skipped_scores)
-            not_run += 1
-            continue
-        fixture_path = _dataset_fixture_path(golden_dataset_path, case["input_fixture"])
-        payload = json.loads(fixture_path.read_text())
-        source_system = str(
-            payload.get("source_system") or (payload.get("meta") or {}).get("source_system") or "unknown"
-        )
-        started = perf_counter()
-        proposal = extractor.extract(payload, profile_json(payload), source_document=str(fixture_path))
-        expected = case["expected"]
-        errors: list[str] = []
-        if proposal is None:
-            errors.append("No recorded JSON semantic extraction was available.")
-            extraction_calls = 0
-            line_item_count = 0
-            input_tokens = 0
-            output_tokens = 0
-            estimated_cost_usd = "0"
-            duration_ms = max(1, int((perf_counter() - started) * 1000))
-        else:
-            facts, invalid_paths = validate_source_facts(payload, proposal.extraction.source_facts)
-            extraction_calls = 1
-            input_tokens = proposal.input_tokens or 0
-            output_tokens = proposal.output_tokens or 0
-            estimated_cost_usd = (
-                "0" if proposal.estimated_cost_usd is None else str(proposal.estimated_cost_usd)
-            )
-            quotation = proposal.extraction.quotation
-            duration_ms = max(1, int((perf_counter() - started) * 1000))
-            line_item_count = len(quotation.line_items)
-            if invalid_paths:
-                errors.append("Recorded extraction contained invalid source references.")
-            if not facts:
-                errors.append("Recorded extraction did not recover source-grounded facts.")
-            if quotation.quotation_reference != expected["quotation_reference"]:
-                errors.append("Quotation reference did not match golden data.")
-            if line_item_count != expected["line_item_count"]:
-                errors.append("Line item count did not match golden data.")
-            if source_system != expected["source_system"]:
-                errors.append("Source system did not match golden data.")
-        scores: dict[str, Any] = {
-            "canonical_fidelity": 1.0 if not errors else 0.0,
-            "source_grounding": 1.0 if not errors else 0.0,
-            "safety_and_uncertainty": 1.0,
-            "semantic_extraction_calls": extraction_calls,
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "estimated_cost_usd": estimated_cost_usd,
-            "duration_ms": duration_ms,
-        }
-        status = "passed" if not errors else "failed"
-        result = EvaluationResultRecord(
-            run_id=run.id,
-            case_id=case["id"],
-            status=status,
-            scores_json=json.dumps(scores),
-            error_analysis_json=json.dumps(errors),
-        )
-        session.add(result)
-        results.append(scores)
-    run.summary_json = json.dumps(
-        {
-            "case_count": len(results),
-            "passed": sum(score["canonical_fidelity"] == 1.0 for score in results),
-            "not_run": not_run,
-            "rubrics": dataset["rubric"],
-        }
-    )
-    session.commit()
-    return run
-
-
-# --- Section 3: Live PDF Extraction Pipeline Evaluation ---
+# --- Section 2: Live PDF Extraction Pipeline Evaluation ---
 
 
 def run_live_pdf_evaluation(
@@ -197,11 +90,11 @@ def run_live_pdf_evaluation(
             }
         )
         started = perf_counter()
-        from app.extraction.llm import aggregate_agent_telemetry, extract_semantics
+        from app.extraction.llm import aggregate_semantic_telemetry, extract_semantics
 
-        agent_result = extract_semantics(settings, context, source_type="pdf")
-        actual = agent_result.quotation
-        telemetry = aggregate_agent_telemetry(agent_result)
+        semantic_result = extract_semantics(settings, context, source_type="pdf")
+        actual = semantic_result.quotation
+        telemetry = aggregate_semantic_telemetry(semantic_result)
         actual_payload = apply_commercial_rules(actual).model_dump(mode="json")
         errors = _subset_mismatches(expected, actual_payload)
         status = "passed" if not errors else "failed"
@@ -329,11 +222,11 @@ def run_live_email_evaluation(
             }
         )
         started = perf_counter()
-        from app.extraction.llm import aggregate_agent_telemetry
+        from app.extraction.llm import aggregate_semantic_telemetry
 
-        agent_result = extract_semantics(settings, context, source_type="email")
-        actual = agent_result.quotation
-        telemetry = aggregate_agent_telemetry(agent_result)
+        semantic_result = extract_semantics(settings, context, source_type="email")
+        actual = semantic_result.quotation
+        telemetry = aggregate_semantic_telemetry(semantic_result)
         reconciled = reconcile_email_price_uoms(actual, parsed.body_text)
         errors = _subset_mismatches(expected, apply_commercial_rules(reconciled).model_dump(mode="json"))
         status = "passed" if not errors else "failed"
