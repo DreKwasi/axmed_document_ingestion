@@ -35,13 +35,13 @@ class ColorFormatter(logging.Formatter):
 
 
 def get_api_logger(level: int = logging.INFO) -> logging.Logger:
-    """Return the dedicated API lifecycle logger used in every server mode.
+    """Configure application console logging and return the API lifecycle logger.
 
     Uvicorn applies its logging configuration after importing the application.
-    Configuring the root logger during import is therefore unreliable: application
-    records can disappear even while Uvicorn's own records remain visible.  This
-    logger owns a single stderr handler and does not propagate, so ingestion
-    lifecycle records consistently reach the terminal in local and deployed runs.
+    Configuring the root logger is therefore unreliable.  The application owns a
+    single stderr handler on the ``app`` namespace instead: API, event, parser,
+    and extraction child loggers all propagate to that handler without affecting
+    Uvicorn's own logging configuration.
     """
 
     # Silence redundant Google AFC warning from google-genai SDK
@@ -52,18 +52,28 @@ def get_api_logger(level: int = logging.INFO) -> logging.Logger:
     except Exception:
         pass
 
-    logger = logging.getLogger("axmed.api")
-    logger.setLevel(level)
-    logger.disabled = False
-    logger.propagate = False
+    application_logger = logging.getLogger("app")
+    application_logger.setLevel(level)
+    application_logger.disabled = False
+    application_logger.propagate = False
 
-    if not any(handler.get_name() == "axmed-lifecycle" for handler in logger.handlers):
-        # Use the original process stderr rather than a framework-rebound stream.
-        # This is the stream Uvicorn exposes in the developer terminal.
-        handler = logging.StreamHandler(sys.__stderr__)
+    # Uvicorn's dictConfig can leave already-imported child loggers disabled.
+    # Re-enable the owned namespace explicitly so parser and event records are
+    # not filtered before they reach the shared application handler.
+    for candidate in logging.root.manager.loggerDict.values():
+        if isinstance(candidate, logging.Logger) and candidate.name.startswith("app."):
+            candidate.disabled = False
+
+    if not any(handler.get_name() == "axmed-lifecycle" for handler in application_logger.handlers):
+        # Use the active process stderr so local Uvicorn and platform log capture
+        # receive the same records.
+        handler = logging.StreamHandler(sys.stderr)
         handler.setFormatter(ColorFormatter())
         handler.setLevel(level)
         handler.set_name("axmed-lifecycle")
-        logger.addHandler(handler)
+        application_logger.addHandler(handler)
 
-    return logger
+    api_logger = logging.getLogger("app.api")
+    api_logger.setLevel(level)
+    api_logger.disabled = False
+    return api_logger
