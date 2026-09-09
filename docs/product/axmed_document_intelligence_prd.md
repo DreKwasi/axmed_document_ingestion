@@ -48,7 +48,7 @@ For each uploaded document, the system should:
 9. Attach uncertainty and provenance to extracted information.
 10. Allow a human reviewer to approve, reject, or correct the result.
 
-The pipeline should become increasingly deterministic as previously encountered supplier schemas are seen again.
+The pipeline should keep deterministic parsing, validation, calculation, persistence, and review authority outside semantic interpretation. Repeated supplier schemas are not automatically trusted or reused; each document must retain source-grounded evidence for its canonical claims.
 
 ---
 
@@ -430,14 +430,13 @@ The document parser should recover the best representation it can. The LLM then 
 
 Deterministic logic returns after semantic extraction to validate commercial relationships.
 
-For native PDFs, the model must not stop at the visual price schedule. The pipeline keeps LiteParse's
-deterministic layout representation for exact table-row and column association, then runs a compact text-only
-semantic enrichment pass across the PDF reading order for facts that tables routinely omit. This pass applies explicitly scoped
-notes—single item, item list/range, exception, or all other items—to the relevant canonical line items.
+For native PDFs, the model must not stop at the visual price schedule. The pipeline supplies LiteParse's
+deterministic layout representation and complete reading-order context to one semantic investigation. The agent must inspect
+facts that tables routinely omit and apply explicitly scoped notes—single item, item list/range, exception, or all other items—to the relevant canonical line items.
 
 Examples include shelf life, minimum remaining shelf life, storage and cold-chain conditions, MOQ, registration
 references/status, and registered markets. A stated percentage is persisted in percentage points (`80`, not `0.80`).
-The enrichment pass fills omitted values only; it never replaces a table-derived price, quantity, or product fact.
+The agent preserves source-supported table values while incorporating source-supported narrative facts; deterministic validation handles commercial conflicts after extraction.
 
 ---
 
@@ -1128,6 +1127,38 @@ corrective extraction attempt, while valid facts from the first attempt remain s
 
 Canonical quotation fields remain blank when normalization is not certain. `field_evidence` is used only for normalized canonical fields; generic extracted facts are stored separately and are not shown in the current product detail. Human decisions apply to the quotation result, not to a source-schema interpretation.
 
+## 32.1 Bounded semantic investigation
+
+Semantic extraction uses a bounded LangChain `create_agent` investigation loop running in the document background task. Its objective is to produce the most complete source-grounded canonical candidate possible, preserve unmapped facts, and identify unresolved ambiguity. It does not choose the upload route, approve quotations, or override deterministic rules.
+
+```text
+Prepared source representation
+ ↓
+Build stable evidence chunks and a compact source atlas
+ ↓
+Propose canonical assignments with source evidence
+ ↓
+Search and inspect related evidence only when more context is needed
+ ↓
+Run deterministic path, value, reference, completeness, and commercial checks
+ ↓
+Validation failures or provenance gaps?
+ ├── no  → finalize review-ready candidate
+ └── yes → return all issues, inspect the conflicting context, and revise while feedback changes and budgets remain
+              ↓
+          still unresolved → emit a targeted review issue
+```
+
+The active loop exposes three capabilities: `search_evidence` for deterministic lexical/structural discovery, `inspect_evidence` for combining related source fragments, and `validate_candidate` for a complete structured issue set. Small sources are passed whole; larger sources use deterministic chunks with stable provenance references and a bounded evidence atlas. The active implementation does not call an embedding provider. An embedding ranker may later improve discovery over the same chunks, but must never replace the source references or deterministic validation.
+
+The active loop is constrained by model-call, per-tool, evidence-volume, and wall-clock limits plus the provider request timeout. Intermediate hypotheses are execution state, not quotation state. Only the final source-grounded candidate is normalized and persisted. A material conflict that remains when feedback stalls or a bound is reached must stay unresolved for human review. LangGraph is a future option if explicit persisted, resumable, operator-tweakable state is required.
+
+The application selects format-specific capabilities deterministically from the validated media type. JSON exposes paths, sibling context, and exact-value checks; PDF exposes native reading order, tables, pages, and regions; email exposes sanitized chronology; images expose accepted OCR lines and masked visual regions. The extraction component decides only which additional evidence to inspect when semantic interpretation remains uncertain.
+
+The target-field knowledge supplied to the extraction component must be richer than a flat alias list. For each canonical field it should provide its meaning, type, required context, related fields, common confusions, permitted derivations, evidence requirements, contradictions, and review triggers. This knowledge is guidance for per-document interpretation, never an exhaustive source-key dictionary or a reusable supplier mapping.
+
+Confidence remains application policy rather than model self-assessment. The extraction component reports observable evidence and conflicts. Deterministic policy calculates extraction confidence from source recovery and mapping confidence from field association, provenance, reconciliation, and contradictions.
+
 ---
 
 # 33. Source-fact normalization
@@ -1507,9 +1538,7 @@ This is deliberate.
 
 The project should demonstrate that a thoughtfully designed extraction pipeline doesn't require the most capable model for every operation.
 
-The architecture saves model reasoning for situations requiring semantics.
-
-Clean JSON should trend toward near-zero LLM usage as mappings accumulate.
+The architecture saves model reasoning for situations requiring semantics. For JSON, one document-level semantic investigation should recover related facts together; deterministic profiling, validation, and calculation should minimize unnecessary calls without reusing a prior supplier mapping.
 
 ---
 
@@ -1765,13 +1794,13 @@ Cover:
 
 A few things should stay out unless they prove necessary.
 
-**No LangGraph just to call this an agent.**
+**No model-directed routing for a known ingestion path.**
 
-The workflow is sufficiently known that a pipeline is easier to understand and test.
+Media detection, parser selection, safety gates, persistence, commercial rules, and review transitions remain explicit application control flow. Adaptive investigation is limited to semantic ambiguity inside extraction.
 
-**No LLM on every JSON field.**
+**No separate model call for every JSON field.**
 
-Schema memory and deterministic calculations should steadily reduce model usage.
+One document-level investigation recovers related facts together, while deterministic path/value validation and commercial calculations remain ordinary software.
 
 **No OCR of every PDF.**
 
@@ -1807,9 +1836,9 @@ Messy supplier input
  ↓
 Use structure when structure exists
  ↓
-Remember supplier schemas we've already understood
+Investigate each document against source-grounded target-field knowledge
  ↓
-Escalate only ambiguous content to AI
+Repair only claims rejected by deterministic validation
  ↓
 Preserve source evidence
  ↓

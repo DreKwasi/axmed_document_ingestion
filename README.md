@@ -12,7 +12,8 @@
 Axmed receives supplier quotations in varied formats: structured JSON exports, native digital PDFs, multi-turn emails with price corrections, and degraded image scans. This platform extracts, normalizes, validates, and presents supplier offers for human review.
 
 Key capabilities:
-- **Schema-Learning & Memory**: Novel schemas are confirmed once; subsequent uploads with matching fingerprints run deterministically with **zero LLM calls** and sub-second latency.
+- **Source-Grounded JSON Extraction**: Every JSON document is interpreted independently; recovered facts retain exact JSONPaths and values, invalid claims are rejected, and uncertain normalization remains explicit instead of becoming a reusable schema rule.
+- **Bounded Semantic Investigation**: One LangChain agent extracts the primary candidate, validates it through a deterministic tool, revisits the complete source while feedback changes, and returns a supported result or unresolved issues. It does not control routing, calculations, persistence, or human approval.
 - **Commercial Validation**: Automatic derivation of unit prices from pack pricing, MOQ compliance checking, volume tier verification, and date validity.
 - **Background Processing**: Reconnectable Server-Sent Events (SSE) via `Last-Event-ID`, with API-owned Python background tasks and SQLite-persisted progress.
 - **Independent Batch Ingestion**: Upload folders or multiple files simultaneously with derived aggregate progress and isolated failure handling.
@@ -33,7 +34,8 @@ See [WRITEUP.md](file:///Users/andrewsboateng/Projects/axmed-takehome/WRITEUP.md
 # Backend setup
 uv sync --project backend --all-groups
 cp backend/.env.example backend/.env
-# (Optional) Add your GEMINI_API_KEY in backend/.env for live LangChain Gemini reasoning
+# (Optional) Add GEMINI_API_KEY and OPENROUTER_API_KEY in backend/.env for live semantic reasoning.
+# The provider order is direct Gemini, OpenRouter Gemini, then OpenRouter gpt-oss-120b.
 
 # Frontend setup
 npm --prefix frontend install
@@ -111,6 +113,6 @@ axmed-takehome/
 │   ├── worksheets/          # Implementation worksheets & session evidence
 │   └── product/             # Product Requirements Document (PRD)
 ├── sample_documents/        # Synthetic supplier fixtures (JSON, EML, PDF, PNG, JPG)
-├── backend/evals/           # Golden datasets, outputs, mappings, and OCR fixtures
+├── backend/evals/           # Golden datasets, outputs, recorded extraction fixtures, and OCR fixtures
 └── WRITEUP.md               # Architecture design & trade-off narrative
 ```

@@ -1,143 +1,130 @@
 # Axmed Supplier Document Intelligence: Architecture & Implementation Narrative
 
-## Executive Summary
+## Executive summary
 
-Pharmaceutical procurement at Axmed involves processing supplier quotations across heterogeneous formats: structured ERP JSON exports, native digital PDFs, multi-turn email correspondence, and degraded fax/photograph scans. 
+Axmed receives pharmaceutical supplier quotations as structured JSON, native PDFs, email correspondence, and degraded scans. The system preserves each source, prepares a format-appropriate representation, uses semantic reasoning only where interpretation is required, validates commercial relationships in ordinary code, and requires a human decision before approval or rejection.
 
-A naive pipeline that pipes raw unredacted files into an expensive LLM fails on cost, privacy, latency, and determinism. Instead, this system implements an **intelligent document processing and human-review platform**:
-1. **Deterministic by Default**: Known fields, commercial calculations (pack-to-unit conversions, volume discount tiers, MOQs), and previously approved schemas are executed deterministically in ordinary code.
-2. **Schema Learning & Memory**: When an unfamiliar supplier schema arrives, the system proposes a mapping for human confirmation. Subsequent documents with the same normalized schema fingerprint are processed deterministically with **zero model calls, near-zero cost, and sub-second latency**.
-3. **Preserve Source Truth vs. Derived Values**: Quoted commercial bases (e.g. `EUR 3.15 / pack`) are explicitly kept distinct from calculated values (e.g. `EUR 0.035 / tablet`).
-4. **Uncertainty & Explicit Review Boundaries**: Missing or ambiguous fields remain explicit `null` values with review issues rather than hallucinated model guesses. Downstream systems accept offers only after human review decisions (`approved`, `rejected`, `corrected`).
-5. **Strict Privacy Boundary**: All external model context is stripped of contact PII (emails, phone numbers, personal identifiers) via a deterministic redaction barrier before entering queues or worker contexts.
-6. **Batch Progress & Failure Isolation**: Multi-file batch uploads derive aggregate progress from independent child document jobs; a corrupt or unsupported file fails safely without blocking or corrupting sibling documents.
+The implementation follows six boundaries:
 
----
+1. **Source truth before normalization.** Supplier-stated values and evidence remain distinct from calculated values.
+2. **Per-document semantic extraction.** JSON documents are interpreted independently; the system does not learn or reuse supplier-schema mappings.
+3. **Deterministic controls.** Media validation, source-path checks, commercial calculations, persistence, confidence policy, and review transitions remain application responsibilities.
+4. **Explicit uncertainty.** Ambiguous values remain unmapped or become targeted mapping issues rather than guesses.
+5. **Privacy-aware preparation.** Contact information is removed from text sent to providers; image pixels remain an explicit external-provider boundary.
+6. **Human authority.** Every successful quotation enters `pending_review`; only a reviewer can approve, reject, or correct it.
 
-## 1. System Architecture
+## Current architecture
 
 ```text
-┌─────────────────────────────────────────────────────────────────────────┐
-│                        Vue 3 + Vite Review Desk                         │
-│   - Multi-format file ingestion (JSON, EML, PDF, PNG, JPG)              │
-│   - Batch progress tracker & aggregate status indicators               │
-│   - Extracted offer review table with inline field-level corrections    │
-│   - SSE EventSource consumer (Last-Event-ID reconnectable)              │
-│   - Evaluation Lab (rubric scoring & benchmark execution)               │
-└────────────────────────────────────┬────────────────────────────────────┘
-                                     │ REST + SSE
-┌────────────────────────────────────▼────────────────────────────────────┐
-│                       FastAPI Application Layer                         │
-│  app.api.application: Ingestion, Batch Orchestration, Review Workflow  │
-└───────────────────┬─────────────────────────────────┬───────────────────┘
-                    │                                 │
-     (App State & Migrations)               (Enqueues Background Tasks)
-                    ▼                                 ▼
-┌────────────────────────────────────┐   ┌────────────────────────────────┐
-│           data/app.db              │   │         data/tasks.db          │
-│ SQLite WAL (Alembic Migrations)   │   │     SqliteHuey Queue Store     │
-│  - batches                         │   └────────────────┬───────────────┘
-│  - documents & document_artifacts  │                    │
-│  - quotations & field_evidence     │                    ▼
-│  - reviews & review_learning       │   ┌────────────────────────────────┐
-│  - processing_events (SSE stream)  │   │       Huey Worker Loop         │
-│  - schema_mappings & trust states  │   │  - Email extraction & revision │
-│  - model_invocations               │   │  - Native PDF extraction       │
-│  - evaluation_cases, runs, results │   │  - Degraded image OCR jobs     │
-└────────────────────────────────────┘   │  - Correction schema learning  │
-                                         └────────────────────────────────┘
+Vue review workspace
+        │ REST + SSE
+        ▼
+FastAPI application
+        ├── upload validation and safe source persistence
+        ├── API-owned document background tasks
+        ├── format-specific preparation and semantic extraction
+        ├── deterministic validation and commercial rules
+        └── human-review commands
+        │
+        ▼
+SQLite WAL
+        ├── documents and stored source references
+        ├── quotations and normalized line items
+        ├── source facts and field evidence
+        ├── processing events and model invocations
+        └── review and evaluation records
 ```
 
-### Layered Code Organization (`backend/app/`)
-* **`api/`**: Fast HTTP routing, CORS configuration, SSE event streaming, and request lifecycle management.
-* **`application/`**: Use cases including document ingestion, batch aggregation, human review commands, and evaluation execution.
-* **`domain/`**: Pure business rules: `commercial_rules.py` (calculations, MOQ checks, validity dates), `schema_mapping.py` (fingerprinting and mapping engine), `pdf_parser.py` (pypdf signature & page quality verification), `email_parser.py` (MIME text extraction without HTML rendering), `image_parser.py`, and `ocr_contract.py`.
-* **`infrastructure/`**: SQLAlchemy 2 models, database engines, and Alembic migration runners.
-* **`workers/`**: Async Huey task consumers with bounded retries and explicit terminal state tracking.
-* **`security/`**: Deterministic contact redaction (`redaction.py`).
-* **`core/`**: Environment configuration and typed settings (`settings.py`).
+The take-home uses one FastAPI process, API-owned Python background tasks, one SQLite database, and reconnectable Server-Sent Events. There is no Huey worker, separate task database, stored batch entity, or schema-mapping table in the current implementation. Multi-file upload results are independent document records, so one failure does not invalidate successful siblings.
 
----
+## Ingestion paths
 
-## 2. Ingestion Paths by Document Modality
+### Structured JSON
 
-### A. Structured JSON (Sanova, Ubuntu, Zenith)
-* The JSON structure is normalized and hashed into a canonical schema fingerprint: `(source_system, source_schema_version, normalized_shape_hash)`.
-* **Cold Path**: Unfamiliar schemas receive a proposed mapping. When a reviewer confirms the mapping, it becomes `trusted`.
-* **Warm Path**: The next upload with the same schema fingerprint applies the trusted mapping deterministically—making **0 LLM calls** and achieving 100% field parity with ground truth.
-* If schema fields change unexpectedly, the system demotes the status to `needs_mapping_resolution` rather than blindly guessing.
+The application parses and profiles each JSON document in memory. Semantic extraction returns a canonical candidate plus quotation-relevant source facts. Direct claims must resolve to exact JSONPaths and match their source values. Invalid claims receive one corrective attempt; valid facts are retained. Facts whose meaning is clear but whose canonical destination is uncertain remain stored as `unmapped`.
 
-### B. Supplier Email Threads (`.eml`, Novara RFQ)
-* Native Python MIME parser extracts plain text bodies without rendering untrusted HTML or executing scripts.
-* Sender contact details, telephone numbers, and email addresses are scrubbed.
-* Queued to the semantic worker to detect chronological postscripts and price corrections (e.g. Azimax corrected in P.S. from EUR 0.128 to EUR 0.134/tablet).
-* Audited model invocation records link duration and status to the extraction job.
+Recorded responses keyed to an exact source-content hash keep offline tests deterministic. They are fixtures, not reusable mappings, and do not create a zero-model path for similarly shaped documents.
 
-### C. Native Digital PDFs (Farmaceutica Andina, Mekong)
-* `pypdf` verifies PDF signatures and validates reading order.
-* Evaluates native character density and text quality page-by-page.
-* Clean digital pages bypass expensive OCR and queue to the structured semantic resolver.
-* Degraded or unreadable pages selectively route to `needs_ocr`.
+### Supplier email
 
-### D. Degraded Images & Scanned Faxes (Andina Scans)
-* Validates image magic bytes and dimensions (PNG/JPEG).
-* Governed by a typed, versioned OCR contract (`ocr_contract.py`) requiring bounding box coordinates, confidence scores, and DPI metadata.
-* PaddleOCR service definition on Modal (`modal/ocr_service.py`) ready for deployment with authenticated API keys.
+The MIME parser extracts safe text without rendering active HTML. It removes greetings, signatures, contact details, and repeated bodies before semantic extraction. Explicit later corrections are reconciled against the structured result only when item, amount, and commercial basis agree.
 
----
+### Native PDF
 
-## 3. Commercial Rules & Ground Truth Fidelity
+LiteParse produces native reading-order text, table geometry, page boundaries, and quality signals in process. The semantic agent interprets the complete prepared representation, including tables, notes, footnotes, and narrative. There is no separate narrative-enrichment call.
 
-Commercial interpretation is strictly decoupled from raw string extraction:
-* **Unit Price Derivation**: If a supplier quotes pack price and units per pack, unit price is derived deterministically:
-  $$\text{unit\_price} = \frac{\text{pack\_price}}{\text{units\_per\_pack}}$$
-  The raw pack price and derived unit price are preserved together with `derived: true` and the formula recorded in the canonical model.
-* **MOQ Validation**: Checks whether quoted purchase quantities meet supplier minimum order restrictions.
-* **Tiered Pricing**: Normalizes volume-based discounts and price adjustments.
-* **Validity Dates**: Flags quotations that have expired or possess invalid date spans.
+### Images and scanned documents
 
----
+PaddleOCR supplies text, confidence, and geometry. A configurable quality gate prevents semantic extraction when the source is too weak. For accepted images, OCR-assisted text and masked visual regions create separate extraction attempts; neither automatically overrides the other. Pixel content is treated as an explicit provider privacy boundary because it cannot be text-redacted reliably.
 
-## 4. Batch Processing & Failure Isolation (Slice 8)
+## Commercial rules and provenance
 
-When an operator uploads a folder or multiple files at once:
-* A `BatchRecord` is created, linking all child documents via `batch_id`.
-* **Aggregate Metrics**: Total documents, status counts (`needs_review`, `needs_mapping_confirmation`, `failed`), and completion states are derived directly from child document rows—preventing out-of-sync counters.
-* **Failure Isolation**: Each document is parsed inside an isolated try-catch block. If an individual file is corrupt (malformed JSON, broken PDF header, unsupported format):
-  * The invalid file receives `status="failed"` and records its exact `failure_reason`.
-  * Valid sibling documents continue processing, emit processing events, and enter review.
-  * The whole batch is **never** aborted due to one bad file.
+Deterministic rules run after semantic interpretation. They preserve quoted price and quantity bases, derive a normalized price only from established facts, record formulas and validation status, and never present a calculation as supplier evidence.
 
----
+```text
+EUR 3.15 / pack          source value
+90 tablets / pack        source value
+EUR 0.035 / tablet       derived value with formula and validation status
+```
 
-## 5. Security, Privacy & Compliance (Slice 9)
+Field evidence is reserved for real source excerpts/locations and human actions. An internal transformation path is lineage, not proof that the supplier stated a value.
 
-* **Presidio-Style Redaction**: Phone numbers and email addresses are replaced with `[redacted-phone]` and `[redacted-email]` tokens before payloads reach worker prompts, diagnostics, or database logs.
-* **Seeded PII Audits**: Automated unit tests (`backend/tests/test_pii_audit.py`) verify that seeded personal contacts in email headers, nested dictionaries, and diagnostics endpoints never escape unredacted.
-* **No Secret Leakage**: Database URLs, API tokens, and Modal service keys are injected via environment variables.
+## Confidence and review
 
----
+Extraction confidence answers whether the source was recovered faithfully. Mapping confidence answers whether a recovered value was assigned to the correct canonical field. They remain separate from completeness and approval.
 
-## 6. Continuous Integration & Test Strategy
+The application calculates confidence from observable signals such as source readability, OCR quality, JSONPath grounding, row/cell association, provenance, deterministic reconciliation, and conflicts. Model self-assessment is not accepted as the confidence policy. Every reviewable result still requires a human decision.
 
-* **GitHub Actions Workflow (`.github/workflows/ci.yml`)**:
-  * Python 3.12 installation via `uv`.
-  * Node.js 22 setup with NPM caching.
-  * Backend linting (`ruff check backend`).
-  * Backend automated test suite (50 tests covering commercial rules, migrations, schema learning, batch processing, PII audit, and worker task handling).
-  * Frontend linting (`eslint . --max-warnings=0`).
-  * Frontend unit/component tests (7 Vitest tests).
-  * Frontend production build (`vue-tsc && vite build`).
-  * Full browser end-to-end testing (Playwright E2E covering multi-file batch upload, mapping confirmation, price corrections, and approvals).
+## Bounded semantic investigation
 
----
+Semantic extraction uses a bounded, document-scoped LangChain agent within background processing:
 
-## 7. Operational Trade-offs & Production Roadmap
+```text
+Prepared source and format capabilities
+        ↓
+Build stable evidence references and source atlas
+        ↓
+Propose canonical assignments with evidence
+        ↓
+Search and inspect related evidence when more context is needed
+        ↓
+Deterministic path, value, reference, completeness, and commercial checks
+        ↓
+Re-investigate while feedback changes and execution budgets remain
+        ↓
+Finalize candidate or emit targeted unresolved issues
+```
 
-| Current Implementation | Production Evolution |
-| :--- | :--- |
-| **Local SQLite WAL (`app.db` / `tasks.db`)** | Managed PostgreSQL (Aurora/RDS) + separate Redis/RabbitMQ queue for horizontal multi-worker scaling. |
-| **Local Filesystem Uploads (`data/uploads`)** | S3-compatible cloud storage (AWS S3 or Cloudflare R2) with presigned upload URLs. |
-| **Local Huey Queue Worker** | Distributed Celery or Temporal workflow engine with dead-letter queues. |
-| **Open Review Desk** | Role-Based Access Control (RBAC) with procurement auditor vs. reviewer roles and SSO. |
-| **Modal OCR Escalation** | Direct deployment to Modal GPU endpoints with auto-scaling to zero during idle periods. |
+The application continues to detect media type and select parsers deterministically. The semantic component receives the relevant capabilities—JSON paths and sibling context, PDF pages/cells/regions, sanitized email chronology, or accepted OCR text and masked image regions—and chooses only what additional evidence to inspect when meaning is ambiguous.
+
+Canonical field knowledge should describe meaning, types, required context, related fields, common confusions, permitted derivations, evidence requirements, contradictions, and review triggers. It is guidance for interpreting one document, not an exhaustive source-key list or learned supplier mapping.
+
+`search_evidence`, `inspect_evidence`, and `validate_candidate` are the agent's only investigation capabilities. The first two operate over deterministic chunks with source references: JSON nodes, PDF/OCR page-text spans, and email-body spans. Small inputs are supplied whole; large inputs receive a compact atlas and fetch only relevant fragments. The active ranker is lexical/structural, not embedding-backed. An embedding ranker can later improve retrieval over the same chunks without changing their provenance contract.
+
+The active loop has model-call, per-tool, evidence-volume, wall-clock, and provider-timeout bounds. Intermediate hypotheses remain execution state and never enter quotation state. Unresolved material conflicts go to human review; the semantic component cannot approve a document or override deterministic validation. LangGraph remains a future orchestration option if explicit persisted and operator-tweakable investigation state becomes necessary.
+
+## Synchronous and background boundaries
+
+The boundary is based on latency and external-resource risk, not simply whether code is deterministic.
+
+The synchronous request path validates the upload, verifies media type, persists the source and processing record, performs inexpensive preparation, schedules unpredictable work, and returns a document identifier. Background processing owns expensive parsing or OCR, semantic investigation, post-extraction validation and derivation, confidence calculation, and persistence of the review-ready result. Fast deterministic operations that depend on semantic output remain in the background job immediately after extraction.
+
+PDF, email, image, and JSON semantic work all runs after the source record is persisted. The local implementation uses API-owned background tasks; a production deployment would use a durable queue or workflow runtime.
+
+## Security and operations
+
+Uploads are checked by extension and media signature, stored under generated names, and processed under configured size and quality limits. Logs, events, diagnostics, and recorded model metadata exclude raw source content and contact PII. SQLite is suitable for the local take-home; production scale would move durable records to managed PostgreSQL, source files to object storage, and document jobs to a durable queue or workflow service.
+
+## Evaluation
+
+Normal CI uses recorded adapters and deterministic fixtures; it does not require provider credentials or network access. Live evaluations separately record provider, model, prompt version, duration, token use, estimated cost, canonical diffs, and safe failure analysis. The evaluation corpus covers structured JSON, email correction chronology, native PDFs, OCR sources, commercial calculations, provenance, and seeded-PII leakage checks.
+
+## Deliberate limits
+
+- No model-directed file routing or parser selection.
+- No reusable supplier-schema mapping or automatic bypass of semantic interpretation.
+- No separate model call for every field.
+- No universal hand-built PDF table reconstruction.
+- No OCR of clean native PDF pages merely for uniformity.
+- No unsupported certainty or automatic approval.
+- No medicine-catalogue retrieval layer unless product matching becomes a demonstrated requirement.
