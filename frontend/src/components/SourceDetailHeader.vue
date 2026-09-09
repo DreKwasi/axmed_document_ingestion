@@ -18,7 +18,6 @@ const emit = defineEmits<{
   (event: "reextract"): void;
   (event: "switchApproach", approach: string): void;
   (event: "preview"): void;
-  (event: "openHowItWorks"): void;
 }>();
 
 // --- Section 2: Presentation & Status Derivations ---
@@ -319,18 +318,6 @@ const statusDotClass = computed(() => {
           >
             <span class="text-cyan-300">✓</span>
             <span>Review source</span>
-          </button>
-
-          <!-- How it works guide trigger -->
-          <button
-            type="button"
-            class="inline-flex flex-1 sm:flex-none justify-center items-center gap-1.5 rounded-xl border border-rule bg-surface px-3.5 py-2 text-xs font-semibold text-ink-2 hover:bg-surface-alt hover:text-ink hover:border-rule-dark transition shadow-2xs cursor-pointer"
-            @click="emit('openHowItWorks')"
-          >
-            <span>How it works</span>
-            <svg class="h-3.5 w-3.5 text-axmed-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
           </button>
         </div>
       </div>
