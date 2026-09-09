@@ -111,6 +111,7 @@ def test_multi_file_upload_submits_each_pdf_to_a_concurrent_background_worker(tm
         upload_dir=tmp_path / "uploads",
         golden_dataset_path=PROJECT_ROOT / "backend/evals/golden_dataset.json",
         background_processing_enabled=True,
+        background_processing_max_workers=2,
     )
     fixture = PROJECT_ROOT / "backend/evals/fixtures/documents/farmaceutica_andina_proforma_FA-COT-2026-118.pdf"
     pdf = fixture.read_bytes()
