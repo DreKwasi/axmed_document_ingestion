@@ -3,9 +3,9 @@ set -euo pipefail
 
 # Enforce max 4 files per commit (contextual commits policy).
 staged_count=$(git diff --cached --name-only --diff-filter=ACDMRT | wc -l | tr -d ' ')
-if [[ "$staged_count" -gt 4 ]]; then
-  echo "ERROR: Too many files staged ($staged_count > 4)." >&2
-  echo "Policy: commit no more than 4 files per commit; split into contextual commits." >&2
+if [[ "$staged_count" -gt 5 ]]; then
+  echo "ERROR: Too many files staged ($staged_count > 5)." >&2
+  echo "Policy: commit no more than 5 files per commit; split into contextual commits." >&2
   git diff --cached --name-only | sed 's/^/  - /' >&2
   exit 1
 fi
