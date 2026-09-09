@@ -205,6 +205,7 @@ def consume_ocr(session: Session, job_id: str, settings: Config) -> None:
         stage="ocr_started",
         metadata={"selected_page_count": len(selected_pages)},
     )
+    session.commit()
     if not settings.ocr_service_url or not settings.ocr_service_token:
         job.status = "awaiting_service_configuration"
         record_event(session, document_id=document.id, stage="ocr_awaiting_service_configuration")
@@ -237,6 +238,7 @@ def consume_ocr(session: Session, job_id: str, settings: Config) -> None:
         stage="ocr_completed",
         metadata={"page_count": len(result.pages), "duration_ms": int((time.perf_counter() - started) * 1000)},
     )
+    session.commit()
     if settings.semantic_extraction_configured:
         from app.documents import _apply_confidence_decision, _upsert_quotation
 
@@ -265,10 +267,12 @@ def consume_ocr(session: Session, job_id: str, settings: Config) -> None:
             stage="ocr_assisted_extraction_completed" if ocr_quotation else "ocr_assisted_extraction_failed",
             metadata={"line_item_count": 0 if ocr_quotation is None else len(ocr_quotation.line_items)},
         )
+        session.commit()
 
         vision_quotation: CanonicalQuotation | None = None
         if document.media_type.startswith("image/"):
             record_event(session, document_id=document.id, stage="image_vision_extraction_started")
+            session.commit()
             vision_quotation, vision_telemetry, vision_failure = _run_image_attempt(
                 settings,
                 context={"source": {"kind": "ocr_trusted_image_regions", "media_type": "image/png"}},
@@ -294,6 +298,7 @@ def consume_ocr(session: Session, job_id: str, settings: Config) -> None:
                 stage="image_vision_extraction_completed" if vision_quotation else "image_vision_extraction_failed",
                 metadata={"line_item_count": 0 if vision_quotation is None else len(vision_quotation.line_items)},
             )
+            session.commit()
 
         attempts = [ocr_quotation]
         if document.media_type.startswith("image/"):

@@ -42,7 +42,7 @@ class Config(BaseSettings):
     golden_dataset_path: Path = Path("backend/evals/golden_dataset.json")
     event_poll_interval_ms: int = 250
     background_processing_enabled: bool = True
-    background_processing_max_workers: int = Field(default=4, ge=1, le=16)
+    background_processing_max_workers: int = Field(default=1, ge=1, le=16)
 
     # OCR Service (hardcoded default endpoint)
     ocr_service_url: str | None = "https://andrewsboateng137--axmed-paddle-ocr.modal.run/ocr"

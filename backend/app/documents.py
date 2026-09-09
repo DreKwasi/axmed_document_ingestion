@@ -1338,6 +1338,7 @@ def _extract_json_document(
         metadata={"candidate_collection_count": len(profile["candidate_collections"])},
     )
     record_event(session, document_id=document.id, stage="json_semantic_extraction_started")
+    session.commit()
     try:
         proposal = extractor.extract(payload, profile, source_document=document.original_filename)
     except Exception:

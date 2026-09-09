@@ -20,10 +20,10 @@ class Base(DeclarativeBase):
 
 
 def create_sqlite_engine(database_url: str | None = None):
-    """Create SQLite engine with Write-Ahead Logging (WAL) and foreign keys enabled."""
+    """Create SQLite engine with Write-Ahead Logging (WAL), foreign keys, and busy timeout enabled."""
     engine = create_engine(
         database_url or get_config().database_url,
-        connect_args={"check_same_thread": False},
+        connect_args={"check_same_thread": False, "timeout": 60.0},
     )
 
     @event.listens_for(engine, "connect")
@@ -31,6 +31,8 @@ def create_sqlite_engine(database_url: str | None = None):
         cursor = connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA busy_timeout=60000")
         cursor.close()
 
     return engine

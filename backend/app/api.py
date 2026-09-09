@@ -414,15 +414,19 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
         return Response(status_code=204)
 
     @app.get("/api/v1/documents/{document_id}/source")
-    def get_document_source(document_id: str, session: SessionDep):
+    def get_document_source(document_id: str):
         """Download or stream the original uploaded file from storage."""
-        document = session.get(DocumentRecord, document_id)
-        if document is None:
-            raise HTTPException(status_code=404, detail="Document not found.")
-        source_path = active_settings.upload_dir / document.stored_filename
+        with session_factory() as session:
+            document = session.get(DocumentRecord, document_id)
+            if document is None:
+                raise HTTPException(status_code=404, detail="Document not found.")
+            stored_filename = document.stored_filename
+            media_type = document.media_type
+            filename = document.original_filename
+        source_path = active_settings.upload_dir / stored_filename
         if not source_path.is_file():
             raise HTTPException(status_code=404, detail="Stored source document not found.")
-        return FileResponse(source_path, media_type=document.media_type, filename=document.original_filename)
+        return FileResponse(source_path, media_type=media_type, filename=filename)
 
     # --- Section 6: Real-Time Event Bus & SSE Streaming ---
 
@@ -439,12 +443,12 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
     async def stream_document_events(
         document_id: str,
         request: Request,
-        session: SessionDep,
         after_id: int = 0,
     ):
         """Stream real-time processing events via Server-Sent Events (SSE)."""
-        if session.get(DocumentRecord, document_id) is None:
-            raise HTTPException(status_code=404, detail="Document not found.")
+        with session_factory() as check_session:
+            if check_session.get(DocumentRecord, document_id) is None:
+                raise HTTPException(status_code=404, detail="Document not found.")
         last_event_id = request.headers.get("Last-Event-ID")
         if last_event_id and after_id == 0:
             try:
