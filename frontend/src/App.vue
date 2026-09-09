@@ -266,11 +266,18 @@ function isExtractionOngoing(doc: DocumentResponse | null): boolean {
     const stageLower = (latest.stage || "").toLowerCase();
     if (phaseLower === "complete" || stageLower.endsWith("_completed") || ["image_extractions_ready_for_comparison", "image_extraction_opened_for_review"].includes(stageLower)) return false;
     if (phaseLower === "needs attention" || stageLower.endsWith("_failed")) return false;
+    if (phaseLower === "waiting" || stageLower.includes("_awaiting_")) return false;
     return true;
   }
   if (["failed", "rejected"].includes(doc.status)) return false;
   if (["processing", "queued", "needs_semantic_extraction"].includes(doc.status)) return true;
   return false;
+}
+
+function isExtractionWaiting(doc: DocumentResponse | null): boolean {
+  const latest = currentExtractionEvent(doc);
+  if (!latest) return false;
+  return (latest.phase || "").toLowerCase() === "waiting" || (latest.stage || "").toLowerCase().includes("_awaiting_");
 }
 
 // --- Section 5: Human Review & Peer Extractions ---
@@ -543,6 +550,22 @@ onBeforeUnmount(() => {
             </svg>
             <span>In progress</span>
           </div>
+        </div>
+
+        <!-- Configuration wait state: terminal until the service is configured or re-run. -->
+        <div
+          v-else-if="isExtractionWaiting(selectedDocument)"
+          class="flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-xs shadow-2xs"
+          role="status"
+        >
+          <div class="flex items-center gap-2.5 min-w-0">
+            <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-amber-300 bg-amber-100 text-[11px] font-bold text-amber-800">i</span>
+            <div class="min-w-0">
+              <span class="font-bold text-amber-950">Waiting for configuration:</span>
+              <span class="ml-1.5 text-amber-900">{{ currentExtractionEvent(selectedDocument)?.message }}</span>
+            </div>
+          </div>
+          <span class="shrink-0 text-[11px] font-semibold text-amber-800">No extraction is running</span>
         </div>
 
         <!-- Extracted Products Table -->

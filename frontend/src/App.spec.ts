@@ -107,7 +107,7 @@ describe("App", () => {
             commercial_terms: {},
             line_items: [],
             revision: 2,
-            system_decision: "rejected",
+            system_decision: "pending_review",
             review_status: "rejected",
             review_issues: [],
           },
@@ -519,6 +519,27 @@ describe("App", () => {
     await flushPromises();
 
     expect(wrapper.text()).not.toContain("Image extraction result opened for human review.");
+    expect(wrapper.text()).not.toContain("In progress:");
+  });
+
+  it("explains when extraction is waiting for service configuration", async () => {
+    api.fetchDocuments.mockResolvedValue([{
+      id: "awaiting-pdf", filename: "andina.pdf", status: "needs_semantic_extraction", source_system: "pdf",
+      quotation: null, reviews: [],
+    }]);
+    api.fetchEvents.mockResolvedValue([{
+      id: 10, document_id: "awaiting-pdf", stage: "pdf_extraction_awaiting_model_configuration",
+      phase: "Waiting", message: "Waiting for the extraction service to be configured.", metadata: {},
+    }]);
+
+    const wrapper = mount(App);
+    await flushPromises();
+    await wrapper.get("button.group").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Waiting for configuration:");
+    expect(wrapper.text()).toContain("Waiting for the extraction service to be configured.");
+    expect(wrapper.text()).toContain("No extraction is running");
     expect(wrapper.text()).not.toContain("In progress:");
   });
 
