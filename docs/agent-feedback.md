@@ -192,3 +192,7 @@
 ## 2026-09-09 — Keep recovery confidence independent from product yield
 
 - A completed OCR attempt can recover readable source material even when semantic extraction finds no products. Compute and export extraction confidence from recovery evidence independently of line-item count.
+
+## 2026-09-09 — Keep submission narratives aligned with the live system
+
+- Treat worksheets as historical evidence, then verify every submission-facing claim against the current code and tests. Mark retired approaches as historical rather than presenting them as active architecture.

@@ -29,23 +29,34 @@
 
 - 2026-09-09: Read `AGENTS.md`, `AGENT_WORKFLOW.md`, task queue, coding conventions, architecture, testing guidance, and worksheet template.
 - 2026-09-09: Inspected public API routes in `backend/app/api.py`, backend test suite, current source tree, and recent commits. Confirmed `POST /api/v1/documents` supports multi-file uploads; API-owned background processing, SSE, CSV export, source deletion, re-extraction, image-attempt review, and human review endpoints are current.
-- 2026-09-09: Research review command reported that no independent provider is configured; isolated systems, security, and quality persona passes will be recorded before handoff.
+- 2026-09-09: Research and plan review commands reported that no independent provider is configured; isolated systems, security, and quality persona passes will be recorded before handoff.
+- 2026-09-09: Read the historical DI-01 through DI-10 and DI-17/orchestration worksheets. They establish that schema mapping reuse, Huey, persisted batches, and model-selected agent loops were historical slices later superseded by the current application-controlled design.
+- 2026-09-09: Replaced `AGENT_CONVERSATION.md` with a submission-facing, agent-generated summary grounded in the current code and the worksheet trail. It distinguishes historical experiments from the implementation that remains.
+- 2026-09-09: Replaced the simplified submission pipeline with the complete code-backed architecture and investigation-loop diagrams: source-specific preparation, `EvidenceWorkspace`, primary extraction, deterministic validation, full grounding, claim validation, the three-run/no-progress evidence loop, persistence, and human review.
+- 2026-09-09: Corrected the submission summary to state that the candidate wrote and integrated the application code, using the agent for planning, research, debugging, and review. It now credits the candidate's active manual course corrections when agent-assisted approaches drifted or overcomplicated the architecture.
+- 2026-09-09: Updated the README to replace stale LangChain-agent/OpenRouter/batch wording with the active FastAPI and Vue architecture: API-owned background work, source-specific preparation, application-controlled extraction/grounding/investigation, evidence validation, dual confidence, human review, and Google-only provider configuration.
+- 2026-09-09: Added code-backed README confidence methodology from `backend/app/extraction/confidence.py`: weighted extraction-recovery formula, OCR legibility calculation, deterministic per-field mapping tiers, commercial-consistency bonus, aggregate mapping formula, issue semantics, score bands, and review routing.
+- 2026-09-09: Added the same code-backed confidence methodology to `AGENT_CONVERSATION.md` so the required agent-generated submission summary explains the calculations and the candidate's requirement for evidence-derived confidence.
+- 2026-09-09: Removed `WRITEUP.md` at the user's request and removed its README link/tree entry. No code or runtime behavior changed.
 
 ## Tests, app run, and validation
 
-- Pending after document edits.
+- `bin/agent-validate targeted` passed: frontend ESLint and 38 Vitest tests, backend Ruff, Mypy, and 129 Pytest tests passed.
+- The FastAPI application started with `uv run uvicorn main:app --host 127.0.0.1 --port 8020` from `backend/`; `GET /health` returned `{"status":"ok","service":"axmed-document-intelligence"}`. The temporary server was stopped after the check.
+- `bin/agent-validate full` passed lint, frontend tests/build, backend Ruff/Mypy/Pytest (129 passed), and evaluation tests (3 passed). Its five Playwright journeys could not launch because the local Playwright Chromium executable is absent; this is an environment prerequisite, not a documentation-change failure.
 
 ## Review findings and resolutions
 
-- Pending after document edits.
+- Research, plan, and wrap-up review dispatchers found no configured independent provider.
+- Isolated systems review confirmed the replacement describes current code and labels retired worksheet behavior as historical. Security review confirmed no source/provider behavior changed. Quality review confirmed `WRITEUP.md` references were removed from active README, task-queue, plan, and PRD documentation; historical worksheets retain their factual delivery record.
 
 ## Docs updated
 
-- Pending after document edits.
+- `AGENT_CONVERSATION.md`, `README.md`, `TODOS.md`, the implementation plan, the PRD tree, and this worksheet. Removed `WRITEUP.md`.
 
 ## Handoff / remaining work
 
-- Pending after document edits.
+- The only outstanding validation prerequisite is `npx playwright install` (or an equivalent managed browser installation) before browser E2E can run. No code change is required for this documentation cleanup.
 
 ## Final commit and tag
 
