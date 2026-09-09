@@ -32,7 +32,7 @@ Add a red regression test for an unvalidated final candidate, then validate the 
 - PDF processing regression scope: `env PYTHONPATH=backend uv run --project backend pytest backend/tests/test_pdf_parser.py -q` passed, 8 tests.
 - App: started FastAPI on port 8017 and verified `/openapi.json` contains `/api/v1/documents`; then stopped the local server.
 - `bin/agent-validate targeted` passed: frontend lint/tests, Ruff, mypy, and 123 backend tests.
-- `bin/agent-validate full` passed frontend lint/tests/build, Ruff, mypy, 123 backend tests, and recorded evaluations (5 tests); its five Playwright E2E tests could not start because the pinned Chromium executable is absent. Added the environment repair to `TODOS.md`; this is unrelated to the change.
+- `bin/agent-validate full` passed frontend lint/tests/build, Ruff, mypy, 123 backend tests, and recorded evaluations (5 tests); its five Playwright E2E tests could not start because the pinned Chromium executable is absent. Playwright work is deferred at the user's request; this is unrelated to the change.
 
 ## Review findings and resolutions
 
@@ -49,7 +49,7 @@ Add a red regression test for an unvalidated final candidate, then validate the 
 
 The supplied document can be explicitly re-extracted after deployment. It will now proceed through deterministic validation rather than fail solely because the model omitted the tool call; ordinary provider or parsing failures remain surfaced normally.
 
-`bin/agent-sweep` inspected the recent extraction-agent commits and completed without reporting a repository-specific warning. The only validation limitation is the separately queued missing Playwright browser runtime.
+`bin/agent-sweep` inspected the recent extraction-agent commits and completed without reporting a repository-specific warning. Playwright E2E work is deferred at the user's request.
 
 ## Final commit and tag
 
