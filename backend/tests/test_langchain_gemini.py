@@ -437,14 +437,19 @@ def test_ocr_worker_executes_langchain_when_gemini_configured(tmp_path):
     assert low_extractor.call_count == 2
     assert low_extractor.call_args_list[1].kwargs["source_media"] == source_bytes
     with session_factory() as session:
-        rejected = session.get(DocumentRecord, low_doc_id)
-        rejected_attempts = list(session.scalars(select(ImageExtractionAttemptRecord).where(
+        low_confidence_document = session.get(DocumentRecord, low_doc_id)
+        low_confidence_attempts = list(session.scalars(select(ImageExtractionAttemptRecord).where(
             ImageExtractionAttemptRecord.document_id == low_doc_id
         )))
-        assert rejected.status == "auto_rejected"
-        assert "not readable enough" in rejected.failure_reason
-        assert len(rejected_attempts) == 2
-        assert all(attempt.status == "completed" for attempt in rejected_attempts)
+        assert low_confidence_document.status == "pending_review"
+        assert low_confidence_document.failure_reason is None
+        assert len(low_confidence_attempts) == 2
+        assert all(attempt.status == "completed" for attempt in low_confidence_attempts)
+
+    with session_factory() as session:
+        reviewed = begin_image_extraction_review(session, low_doc_id, "ocr_assisted")
+        assert reviewed.status == "pending_review"
+        assert reviewed.quotation is not None
 
 
 def test_langchain_offline_fallback_when_unconfigured(tmp_path):

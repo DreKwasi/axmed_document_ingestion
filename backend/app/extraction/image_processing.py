@@ -240,7 +240,7 @@ def consume_ocr(session: Session, job_id: str, settings: Config) -> None:
     )
     session.commit()
     if settings.semantic_extraction_configured:
-        from app.documents import _apply_confidence_decision, _upsert_quotation
+        from app.documents import _upsert_quotation
 
         low_legibility = not _ocr_quality_gate(
             result,
@@ -304,33 +304,15 @@ def consume_ocr(session: Session, job_id: str, settings: Config) -> None:
         if document.media_type.startswith("image/"):
             attempts.append(vision_quotation)
         if not any(attempt is not None and attempt.line_items for attempt in attempts):
-            decision = _apply_confidence_decision(
-                session,
-                document,
-                None,
-                None,
-                has_extracted_result=True,
-            )
-            if decision == "auto_rejected":
-                record_event(session, document_id=document.id, stage="ocr_quality_gate_failed")
-            else:
-                document.status = "failed"
-                document.failure_reason = "No products could be extracted from this source."
-                record_event(session, document_id=document.id, stage="image_extraction_failed")
+            document.status = "failed"
+            document.failure_reason = "No products could be extracted from this source."
+            record_event(session, document_id=document.id, stage="image_extraction_failed")
         elif document.media_type.startswith("image/"):
             # Both paths are peers. A human explicitly chooses a result to begin
             # reviewing; never promote one because it has more products or happens
             # to complete first.
-            decision = _apply_confidence_decision(
-                session,
-                document,
-                None,
-                None,
-                has_extracted_result=True,
-            )
-            if decision != "auto_rejected":
-                document.status = "pending_review"
-                document.failure_reason = None
+            document.status = "pending_review"
+            document.failure_reason = None
             record_event(
                 session,
                 document_id=document.id,

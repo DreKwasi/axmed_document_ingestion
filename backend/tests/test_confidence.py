@@ -4,7 +4,6 @@ from app.extraction.confidence import (
     ConfidenceSignals,
     assess_extraction_confidence,
     assess_mapping_confidence,
-    is_unusable_image_material,
 )
 from app.extraction.contracts import (
     CanonicalQuotation,
@@ -114,11 +113,10 @@ def test_mostly_illegible_ocr_lines_materially_reduce_image_extraction_confidenc
     assert any(factor.key == "ocr_quality" and factor.score < 45 for factor in result.factors)
 
 
-def test_unusable_image_material_is_auto_rejection_eligible_but_still_scoreable():
+def test_low_quality_image_material_remains_scoreable():
     signals = ConfidenceSignals(source_type="image", ocr_used=True, parser_quality="poor", ocr_scores=(0.35,))
 
     assert assess_extraction_confidence(signals).score < 50
-    assert is_unusable_image_material(signals)
 
 
 def test_consistently_legible_ocr_lines_preserve_image_extraction_confidence():

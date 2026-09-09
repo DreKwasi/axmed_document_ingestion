@@ -8,7 +8,6 @@ from typing import Any
 from app.extraction.contracts import CanonicalQuotation, Evidence, LineItem
 
 STRONG_MAPPING_METHODS = {"human_corrected", "direct_json"}
-UNUSABLE_IMAGE_EXTRACTION_SCORE = 50
 
 # --- Section 1: Data Contracts & Factor Models ---
 
@@ -474,17 +473,6 @@ def assess_extraction_confidence(signals: ConfidenceSignals) -> ExtractionConfid
     )
     score = round(sum(factor.weight * factor.score for factor in factors) / 100)
     return ExtractionConfidence(score, _band(score), factors)
-
-
-def is_unusable_image_material(signals: ConfidenceSignals) -> bool:
-    """Return whether image quality is too poor for a user to safely use the result."""
-
-    confidence = assess_extraction_confidence(signals)
-    return bool(
-        confidence
-        and (signals.source_type or "").casefold() == "image"
-        and confidence.score < UNUSABLE_IMAGE_EXTRACTION_SCORE
-    )
 
 
 def assess_mapping_confidence(quotation: CanonicalQuotation) -> MappingAssessment:

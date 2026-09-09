@@ -20,7 +20,6 @@ from app.extraction.confidence import (
     MappingAssessment,
     assess_extraction_confidence,
     assess_mapping_confidence,
-    is_unusable_image_material,
     mapping_confidence_for_path,
 )
 from app.extraction.contracts import CanonicalQuotation
@@ -399,17 +398,6 @@ def _apply_confidence_decision(
         session, document, has_extracted_result=has_extracted_result
     )
     extraction = assess_extraction_confidence(signals)
-    if is_unusable_image_material(signals):
-        document.status = "auto_rejected"
-        document.failure_reason = (
-            "Material is not readable enough to use safely. The extraction is retained for inspection, "
-            "but this source cannot be approved."
-        )
-        if quotation:
-            quotation.system_decision = "auto_rejected"
-            quotation.review_status = "rejected"
-            _set_field_review_status(session, quotation.id, "rejected")
-        return "auto_rejected"
     if (
         quotation
         and extraction is not None
@@ -456,8 +444,7 @@ def begin_image_extraction_review(session: Session, document_id: str, approach: 
 
     quotation = CanonicalQuotation.model_validate_json(attempt.result_json)
     if not quotation.line_items:
-        # A material-unusable image has no reviewable candidate. Keep its existing
-        # terminal material state instead of turning an attempted view into an error.
+        # Empty candidates are not reviewable quotations.
         session.commit()
         return document
     stored = _upsert_quotation(session, document, quotation)
