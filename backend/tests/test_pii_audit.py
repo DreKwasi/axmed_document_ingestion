@@ -60,7 +60,6 @@ def test_processing_events_and_invocations_do_not_leak_raw_text_or_pii(tmp_path:
     settings = Config(
         database_url=f"sqlite:///{tmp_path / 'audit.db'}",
         upload_dir=tmp_path / "uploads",
-        recorded_json_extraction_dir=PROJECT_ROOT / "backend/evals/recorded_json_extractions",
         golden_dataset_path=PROJECT_ROOT / "backend/evals/golden_dataset.json",
         background_processing_enabled=False,
     )

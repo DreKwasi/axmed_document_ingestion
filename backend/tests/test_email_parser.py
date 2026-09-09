@@ -55,7 +55,7 @@ def test_email_worker_uses_redacted_context_and_persists_reviewable_quotation(cl
     def fake_extract(_settings, context, *, source_type, **_kwargs):
         assert source_type == "email"
         submitted.append(context)
-        from app.extraction.semantic_agent import SemanticExtractionResult
+        from app.extraction.semantic import SemanticExtractionResult
 
         return SemanticExtractionResult(
                 quotation=CanonicalQuotation.model_validate(
@@ -95,7 +95,6 @@ def test_email_worker_uses_redacted_context_and_persists_reviewable_quotation(cl
             Config(
                 database_url=base_settings.database_url,
                 gemini_api_key="test-key",
-                gemini_model="test-model",
             ),
         )
 

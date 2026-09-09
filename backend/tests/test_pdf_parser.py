@@ -10,7 +10,7 @@ from app.database import create_sqlite_engine
 from app.extraction.contracts import CanonicalQuotation
 from app.extraction.pdf_parser import ParsedPdf, ParsedPdfPage, PdfParseError, parse_native_pdf
 from app.extraction.pdf_processing import consume_pdf_extraction
-from app.extraction.semantic_agent import SemanticExtractionResult
+from app.extraction.semantic import SemanticExtractionResult
 from app.models import (
     ModelInvocationRecord,
     PdfExtractionRecord,
@@ -151,7 +151,6 @@ def test_pdf_worker_uses_redacted_page_context_and_persists_reviewable_quotation
             Config(
                 database_url=base_settings.database_url,
                 gemini_api_key="test-key",
-                gemini_model="test-model",
             ),
         )
 
