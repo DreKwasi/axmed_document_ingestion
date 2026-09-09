@@ -295,25 +295,22 @@ Business rules and mathematical validations are strictly isolated from LLM reaso
 
 The LLM is invoked strictly for semantic synthesis, entity resolution, and discourse reasoning.
 
-```mermaid
-sequenceDiagram
-    participant Parser as LiteParse v2 (Rust In-Process)
-    participant Extractor as LangChainSemanticExtractor
-    participant Gemini as Google Gemini
-    participant Norm as Normalization Engine
-
-    Parser->>Extractor: Pass In-Memory Layout & Reading-Order Text
-    Extractor->>Extractor: Build stable evidence chunks and source atlas
-    Extractor->>Gemini: One bounded extraction/investigation loop
-    Gemini-->>Extractor: Candidate + evidence references
-    Extractor->>Extractor: Search/inspect evidence and validate candidate as needed
-    Norm->>Norm: Run Deterministic Math Validation
+```text
+Prepared source
+  -> extraction model (canonical values + narrative, no evidence)
+  -> deterministic extraction validation
+  -> grounding model (field-specific evidence claims)
+  -> deterministic reference/value validation
+  -> while fields remain ungrounded and run count < 3:
+       targeted investigation model (all remaining fields together)
+       deterministic reference/value validation
+  -> deterministic normalization, confidence, persistence, and review routing
 ```
 
 ### Engine Configuration ([`backend/app/extraction/llm.py`](file:///Users/andrewsboateng/Projects/axmed-takehome/backend/app/extraction/llm.py))
-- **Framework**: LangChain with `ChatGoogleGenerativeAI`.
-- **Model**: `gemini-3.1-flash-lite` (or `gemini-2.5-flash`), with `temperature=0.0`.
-- **Pydantic Structured Output**: The bounded agent returns a typed canonical candidate; application tools validate it before it can be persisted.
+- **Framework**: LangChain structured model calls; no LangChain agent or model-selected tools.
+- **Model**: Direct Google Gemini `gemini-3.5-flash-lite` only. The model name is code-owned and no alternate provider is configured.
+- **Pydantic structured output**: Extraction, grounding, and investigation have separate strict response contracts. Python owns every transition and validates evidence claims before persistence.
 
 ### Domain Extraction Rules
 1. **Chronological Supersession**: When email correspondence or notes revise earlier quotes (e.g., *"quoted EUR 0.128, corrected in P.S. to EUR 0.134"*), the model extracts the final price and records `supersedes_source_path` in evidence.
@@ -323,7 +320,7 @@ sequenceDiagram
    - Preserves complete clinical dosage forms (*"film-coated tablet"*, *"solution for injection"*), never stripping route into packaging.
 3. **Incoterms vs. Origin Boundary**: An Incoterm named place (e.g., *"FOB Paris"*) is extracted as **commercial delivery context**, and is **never** inferred as `country_of_origin`.
 4. **Transit vs. Lead Time**: Shipping transit duration is never conflated with manufacturer lead time unless explicitly stated as lead time.
-5. **Single PDF Investigation**: Native layout and reading-order text are retained together. The agent may inspect table context, footnotes, and narrative in the same bounded investigation; no separate narrative request runs afterward.
+5. **Single PDF Investigation**: Native layout and reading-order text are retained together. The targeted investigation call receives table context, footnotes, narrative, and every remaining ungrounded field together; no separate narrative request runs afterward.
 
 ---
 

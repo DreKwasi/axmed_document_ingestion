@@ -14,8 +14,10 @@
 | 2026-09-07 | confidence-policy-no-critical-fields | Carrying forward a fixed required-field list contradicted the source-fact confidence model and created review issues for values a supplier simply did not provide. | Never infer criticality from a universal field list; route review only from observed extraction evidence, explicit failures, conflicts, or validation outcomes. | applied |
 | 2026-09-07 | prd-v9-mandatory-review | A supplier-specific regex proposal for PDF metadata would have passed one fixture while failing different layouts, languages, and supplier phrasing. | Keep document meaning at the semantic-extraction boundary: give the LLM generic cross-section instructions, retain parsed source context/evidence, and add a regression check for the resulting canonical fields. | applied |
 | 2026-09-07 | semantic-pdf-enrichment | Removing PDF geometry to save tokens caused the model to misassociate table quantities and prices, even though it recovered narrative shelf-life terms. | Keep layout-aware context for the table pass; reduce context only in a bounded, source-keyed narrative enrichment pass that cannot replace structured facts. | applied |
-| 2026-09-09 | langchain-semantic-agent | A separate narrative pass and JSON audit duplicated semantic responsibility and made the call count fixed by source type. | Give one bounded agent the complete prepared source, require deterministic validation, and continue only while feedback changes. | applied |
+| 2026-09-09 | application-controlled-semantics | A separate narrative pass and JSON audit duplicated semantic responsibility, while a model-controlled tool loop made completion unreliable. | Keep narrative in evidence-free extraction, ground separately, and let Python validate claims and control the bounded investigation loop. | applied |
 | 2026-09-09 | robust-semantic-investigation | Sending an entire large prepared representation or only its text strips either cost control or table/layout provenance from the investigation. | Chunk every prepared representation behind stable source references; keep native layout addressable, cap discovery metadata, and make retrieval rankers interchangeable without changing validation. | applied |
+| 2026-09-09 | field-anchored-mapping-issues | Displaying generic mapping issue lists forced reviewers to hunt through drawers to locate which field had missing evidence or ungrounded claims. | Anchor mapping issue badges and plain-language warnings directly beneath their corresponding field labels with explicit extracted values, and inherit provenance for mathematically derived fields. | applied |
+| 2026-09-09 | csv-export-review-status-and-supersession | CSV exports lacked the document review status and rendered strings of empty semicolons for non-superseded evidence paths. | Include a user-facing review_status column (matching UI status labels) and omit delimiter chains in _aligned when all list items are empty. | applied |
 | 2026-09-07 | native-pdf-confidence-provenance | Missing leaf-level evidence in a clean native PDF expanded into repeated Low-confidence chips despite successful extraction. | Treat clean native PDF content without a saved leaf location as Medium and reserve review exceptions for Low-confidence or deterministic failures. | applied |
 | 2026-09-07 | extraction-status-indicator | Displaying an ongoing extraction history card with all past states (1, 2, 3) simultaneously after completion caused visual clutter and confusion. | Display a single active progress state only while extraction is in flight, updating dynamically per event and completely dismissing once extraction completes. | applied |
 | 2026-09-07 | frontend-overhaul | Rendering metadata (confidence, format, review status) in identical rounded pills alongside action buttons confused users and tests on interactive affordances. | Place informational metadata inline with document descriptors using text and status indicators, reserving high-contrast pills and borders strictly for interactive buttons. | applied |
@@ -36,7 +38,7 @@
 | 2026-09-08 | user-facing-csv-export | A typed multi-entity CSV exposed persistence concepts and created sparse rows that required users to understand internal record types. | Design exports around the user's analysis grain—one product per row—with related issues, reviews, confidence context, and repeated source context consolidated onto that row. | applied |
 | 2026-09-08 | boxes-uom-normalization | Removing a trailing `s` singularized regular units but truncated `boxes` to `boxe`, and fixing only new validation would leave existing exports incorrect. | Cover irregular unit forms at the canonical contract seam and pair normalization fixes with a narrow migration for persisted projections and snapshots. | applied |
 | 2026-09-08 | backend-csv-export | Maintaining a separate browser CSV projection caused image-attempt rows and their confidence values to diverge from persisted backend results. | Keep export flattening at the persistence-owning backend seam and make clients download that canonical projection directly. | applied |
-| 2026-09-08 | source-preview-and-review-states | Download-first source links interrupted review context, while generic badges obscured the difference between machine-clean and human-approved records. | Preview source bytes inside the review UI and keep pre-approval, review need, human approval, and extraction failure as distinct flat-color states. | applied |
+| 2026-09-09 | orchestrated-semantic-extraction | An unguided autonomous agent loop with a grab bag of tools (search, inspect, validate) got trapped in repetitive validation cycles without knowing when or how to conclude, exhausting model turn limits and failing extraction. | Use an explicit orchestrator: the application controls the pipeline stages (context preparation -> single-turn structured model extraction with failover -> deterministic Python commercial/provenance validation -> review routing), eliminating chaotic multi-tool loops while providing transparent progress and robust execution. | applied |
 | --- | --- | --- | --- | --- |
 | 2026-09-05 | bootstrap-agent-os | Empty repository has no runnable app or selected toolchain. | Add stack bootstrap task; validation scripts report this explicitly. | queued |
 | 2026-09-06 | plan-document-intelligence | Infrastructure-first sequencing delayed the product’s schema-memory differentiator. | Require plans to demonstrate the riskiest product thesis in the earliest viable vertical slice. | adopted |
@@ -123,3 +125,63 @@
 ## 2026-09-09 — Validate the returned structured candidate
 
 - A model tool call does not prove that its final structured response is the same candidate. Track the exact validated candidate and run deterministic validation on a skipped or changed final response before returning it to a source processor.
+
+## 2026-09-09 — Keep semantic loops application-owned
+
+- A model can investigate ambiguous evidence and propose a focused revision, but application code must own validation, issue state, no-progress detection, and the finite repair-run limit. Do not make models decide workflow termination.
+
+## 2026-09-09 — Separate unusable source material from extraction failure
+
+- Poor OCR should lower source-recovery confidence and remain inspectable; do not discard it before extraction. Route materially unreadable images to an automatic non-approvable decision, while reserving `failed` for technical or zero-result extraction failure.
+
+## 2026-09-09 — Make missing provenance repairable
+
+- A non-null mapping score is not enough if it silently excludes populated fields. Score every populated field, expose absent provenance as a mapping issue, and feed it back into semantic repair with an addressable-source requirement.
+
+## 2026-09-09 — Keep frontend displays source-of-truth-only
+
+- Do not turn absent confidence into “No issues,” promote a review state from a frontend heuristic, or reuse a document confidence for a product. Render unavailable values plainly and let persisted backend decisions and field-level evidence speak for themselves.
+
+## 2026-09-09 — Do not retain source identity metadata without a product need
+
+- A content digest, recorded source-response lookup, or schema fingerprint is retained source identity even when it is described as test support. Keep source evaluation live or mocked, and remove nonessential identity metadata across every intake format rather than making JSON a special case.
+
+## 2026-09-09 — Collapse repeated diagnostic copy
+
+- When field-level mapping issues repeat the same explanation, show an issue count first and use a native disclosure for the exact messages. The detail remains reachable without making the primary product view unreadable.
+
+## 2026-09-09 — Keep unusable material inspectable, not erroneous
+
+- An empty image result is not a review candidate. Preserve its material-unusable state, suppress a failed review promotion, and place the original source material beside the explanation so the user can inspect why it cannot be used.
+
+## 2026-09-09 — Treat broad provenance gaps as a grounding concern
+
+- A primary candidate without field evidence is not necessarily wrong. Keep extraction validation separate from grounding, use one full grounding pass, then give the evidence investigator the complete unresolved set once rather than batching model calls or rewriting the candidate.
+
+## 2026-09-09 — Match structured output to the stage's responsibility
+
+- Do not tell a model to omit fields that its response schema still exposes. Give extraction a values-and-narrative-only schema, and reserve provenance types exclusively for grounding and investigation.
+
+## 2026-09-09 — Do not leave an agent inside an application-controlled pipeline
+
+- If application code already prepares the source and chooses every transition, tools add an unnecessary model-controlled branch. Use direct structured evidence requests inside an application-owned bounded loop instead.
+
+## 2026-09-09 — Make grounding claims executable assertions
+
+- A grounding response is only useful when code can check it. Require the canonical destination, claimed source value, and addressable source reference together; reject the claim before persistence when any side fails validation.
+
+## 2026-09-09 — Keep provider policy literal
+
+- When the intended provider policy is Google-only, remove alternate providers from configuration, dependency manifests, tests, and documentation; an inactive fallback is still a future behavior path.
+
+## 2026-09-09 — One disclosure per mapping concern
+
+- When mapping issues already have an expandable detail row, do not repeat the same state as a permanent list of field-confidence explanations. Preserve the disclosure and remove the duplicate presentation and its unused UI state.
+
+## 2026-09-09 — Separate uncertainty from actionable mapping issues
+
+- A valid source link can produce less than 100% mapping confidence without being an issue. Count only missing, contradictory, or explicitly validated problems; otherwise the issue count becomes a duplicate of confidence and obscures the investigation result.
+
+## 2026-09-09 — Anchor explicit mapping issues directly to affected fields
+
+- When schema leaves (such as combination drug potencies or companion units) are flattened into detached scalar paths without context, reviewers are forced to decode cryptic messages like `Strength 1 · Unit` or generic section alerts. Structuring mapping issues around their human-readable composite field and value (e.g. `Tenofovir disoproxil fumarate strength 300 mg / 1 tablet`, `Quoted price (EUR 3.15 / tablet)`), suppressing duplicate companion unit issues, and anchoring warning indicators and explicit messages directly to every affected field card makes review immediate, unambiguous, and easy for the reviewer.
