@@ -196,3 +196,6 @@
 ## 2026-09-09 — Keep submission narratives aligned with the live system
 
 - Treat worksheets as historical evidence, then verify every submission-facing claim against the current code and tests. Mark retired approaches as historical rather than presenting them as active architecture.
+# 2026-09-09 — Test pruning
+
+- Keep one owner per behavior seam: parser-worker suites own source-specific worker lifecycle checks, while shared-provider and privacy suites own provider selection and redaction checks.
