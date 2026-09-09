@@ -7,7 +7,12 @@ from fastapi.testclient import TestClient
 from app.api import create_app
 from app.config import Config
 from app.extraction.contracts import CanonicalQuotation, LineItem, Product
-from app.extraction.json import JsonExtractionProposal, JsonSemanticExtraction, JsonSourceFact
+from app.extraction.json import (
+    JsonExtractionProposal,
+    JsonSemanticExtraction,
+    JsonSourceFact,
+    profile_json,
+)
 
 
 class ScriptedExtractor:
@@ -212,3 +217,52 @@ def test_json_can_be_explicitly_reextracted_without_any_mapping_confirmation(
         refreshed = wait_for_json_extraction(client, uploaded["id"])
         assert refreshed.json()["status"] == "pending_review"
         assert client.post(f"/api/v1/documents/{uploaded['id']}/mapping/confirm").status_code == 404
+
+
+def test_profile_json_deep_nesting_avoids_recursion_error():
+    # Construct a nested dictionary 1,200 levels deep, exceeding Python's recursion limit
+    deep_payload: dict = {}
+    current = deep_payload
+    for _ in range(1200):
+        current["child"] = {}
+        current = current["child"]
+    current["leaf"] = "deep_value"
+
+    profile = profile_json(deep_payload, max_depth=15)
+    assert len(profile["paths"]) <= 16
+    # Verify no path exceeds the configured max_depth
+    for path_entry in profile["paths"]:
+        depth = path_entry["path"].count(".")
+        assert depth <= 15
+
+
+def test_profile_json_large_array_sampling_and_collection_detection():
+    # 2,000 line items
+    items = [{"id": i, "sku": f"SKU-{i}", "price": 12.5} for i in range(2000)]
+    payload = {"quotation": {"currency": "USD", "items": items}}
+
+    profile = profile_json(payload, max_array_samples=3)
+
+    # Candidate collections should recognize $.quotation.items as a collection
+    collections = profile["candidate_collections"]
+    assert len(collections) == 1
+    assert collections[0]["path"] == "$.quotation.items"
+    assert collections[0]["length"] == 2000
+    assert collections[0]["item_keys"] == ["id", "price", "sku"]
+    assert collections[0]["sampled_elements"] == 3
+
+    # Paths list should not contain all 2,000 items
+    all_paths = [p["path"] for p in profile["paths"]]
+    assert "$.quotation.items[0].sku" in all_paths
+    assert "$.quotation.items[1].sku" in all_paths
+    assert "$.quotation.items[2].sku" in all_paths
+    assert "$.quotation.items[3].sku" not in all_paths
+    assert "$.quotation.items[1999].sku" not in all_paths
+    assert len(profile["paths"]) < 30
+
+
+def test_profile_json_max_paths_budget_cap():
+    wide_payload = {f"key_{i}": {"nested": i} for i in range(100)}
+    profile = profile_json(wide_payload, max_paths=20)
+    assert len(profile["paths"]) == 20
+

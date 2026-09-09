@@ -95,16 +95,36 @@ def _json_type(value: Any) -> str:
     return "string"
 
 
-def profile_json(payload: Any) -> dict[str, Any]:
-    """Create a lossless structural inventory without assigning source meaning.
+DEFAULT_MAX_DEPTH = 20
+DEFAULT_MAX_PATHS = 500
+DEFAULT_MAX_ARRAY_SAMPLES = 3
+DEFAULT_MAX_KEYS_PER_OBJECT = 100
 
-    Traverses the JSON tree to build:
-    1. `paths`: List of all paths with type descriptions and key summaries.
-    2. `candidate_collections`: Array paths containing uniform object dictionaries
-       (identifying potential quotation line-item tables).
+
+def profile_json(
+    payload: Any,
+    *,
+    max_depth: int = DEFAULT_MAX_DEPTH,
+    max_paths: int = DEFAULT_MAX_PATHS,
+    max_array_samples: int = DEFAULT_MAX_ARRAY_SAMPLES,
+    max_keys_per_object: int = DEFAULT_MAX_KEYS_PER_OBJECT,
+) -> dict[str, Any]:
+    """Create a bounded structural inventory without assigning source meaning.
+
+    Iteratively traverses the JSON tree with depth, path-count, and array-sample bounds to:
+    1. Prevent RecursionError on deeply nested payloads.
+    2. Prevent O(N) path and token blowouts on large arrays/collections by sampling items.
+    3. Build:
+       - `paths`: List of paths with type descriptions and key summaries.
+       - `candidate_collections`: Array paths containing uniform object dictionaries
+         (identifying potential quotation line-item tables).
 
     Args:
         payload: Parsed JSON root object or array.
+        max_depth: Maximum depth to traverse before truncating child expansion.
+        max_paths: Maximum number of path entries to collect before stopping.
+        max_array_samples: Maximum number of array elements to traverse for schema inspection.
+        max_keys_per_object: Maximum number of keys per dictionary to inspect.
 
     Returns:
         Dictionary with 'paths' and 'candidate_collections' metadata.
@@ -112,33 +132,62 @@ def profile_json(payload: Any) -> dict[str, Any]:
     paths: list[dict[str, Any]] = []
     collections: list[dict[str, Any]] = []
 
-    def walk(value: Any, path: str) -> None:
-        # Traverse dictionary objects and record key lists
-        if isinstance(value, dict):
-            paths.append({"path": path, "type": "object", "keys": sorted(map(str, value.keys()))})
-            for key, child in value.items():
-                escaped = str(key).replace("\\", "\\\\").replace("'", "\\'")
-                child_path = f"{path}.{key}" if str(key).replace("_", "").isalnum() else f"{path}['{escaped}']"
-                walk(child, child_path)
-            return
+    # Iterative DFS stack storing: (value, path, depth)
+    stack: list[tuple[Any, str, int]] = [(payload, "$", 0)]
 
-        # Traverse arrays and check if elements are candidate uniform object tables
-        if isinstance(value, list):
-            element_keys = sorted(
-                {str(key) for item in value if isinstance(item, dict) for key in item.keys()}
-            )
-            entry = {"path": path, "type": "array", "length": len(value), "item_keys": element_keys}
+    while stack and len(paths) < max_paths:
+        value, path, depth = stack.pop()
+
+        if isinstance(value, dict):
+            sorted_items = sorted(value.items(), key=lambda item: str(item[0]))
+            raw_keys = [str(k) for k, _ in sorted_items]
+            truncated_keys = raw_keys[:max_keys_per_object]
+
+            entry: dict[str, Any] = {"path": path, "type": "object", "keys": truncated_keys}
+            if len(raw_keys) > max_keys_per_object:
+                entry["total_keys"] = len(raw_keys)
             paths.append(entry)
-            if value and all(isinstance(item, dict) for item in value):
-                collections.append(entry)
-            for index, child in enumerate(value):
-                walk(child, f"{path}[{index}]")
-            return
+
+            if depth < max_depth and len(paths) < max_paths:
+                # Push children in reverse order so first keys are popped first (DFS pre-order)
+                for key, child in reversed(sorted_items[:max_keys_per_object]):
+                    escaped = str(key).replace("\\", "\\\\").replace("'", "\\'")
+                    child_path = f"{path}.{key}" if str(key).replace("_", "").isalnum() else f"{path}['{escaped}']"
+                    stack.append((child, child_path, depth + 1))
+            continue
+
+        if isinstance(value, list):
+            sample_for_keys = value[: min(len(value), 50)]
+            element_keys = sorted(
+                {str(key) for item in sample_for_keys if isinstance(item, dict) for key in item.keys()}
+            )
+            sampled_count = min(len(value), max_array_samples)
+            arr_entry: dict[str, Any] = {
+                "path": path,
+                "type": "array",
+                "length": len(value),
+                "item_keys": element_keys,
+            }
+            if len(value) > max_array_samples:
+                arr_entry["sampled_elements"] = sampled_count
+
+            paths.append(arr_entry)
+
+            # Uniform object candidate collection check
+            if value and all(isinstance(item, dict) for item in sample_for_keys):
+                coll_entry = dict(arr_entry)
+                coll_entry["element_path_pattern"] = f"{path}[*]"
+                collections.append(coll_entry)
+
+            if depth < max_depth and len(paths) < max_paths:
+                # Push sampled array items in reverse order
+                for index in reversed(range(sampled_count)):
+                    stack.append((value[index], f"{path}[{index}]", depth + 1))
+            continue
 
         # Terminal primitive leaf node
         paths.append({"path": path, "type": _json_type(value), "sample": value})
 
-    walk(payload, "$")
     return {"paths": paths, "candidate_collections": collections}
 
 
