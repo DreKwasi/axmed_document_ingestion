@@ -369,20 +369,20 @@ onUnmounted(() => window.removeEventListener("keydown", handleKeyDown));
                 </ul>
               </div>
 
-              <!-- Material unusable -->
-              <div class="rounded-2xl border border-rose-200 bg-rose-50/40 p-5">
+              <!-- Low-confidence image handling -->
+              <div class="rounded-2xl border border-amber-200 bg-amber-50/40 p-5">
                 <div class="flex items-center justify-between">
-                  <span class="inline-flex items-center gap-1.5 rounded-full bg-rose-100 px-3 py-1 text-xs font-bold text-rose-800">
-                    <span class="h-2 w-2 rounded-full bg-rose-600"></span>
-                    Material unusable (Auto-rejected)
+                  <span class="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-800">
+                    <span class="h-2 w-2 rounded-full bg-amber-600"></span>
+                    Low-confidence image
                   </span>
-                  <span class="text-xs font-mono font-semibold text-rose-900">Non-Approvable Policy Lock</span>
+                  <span class="text-xs font-mono font-semibold text-amber-900">Routed to Review Desk</span>
                 </div>
-                <ul class="mt-3 list-disc list-inside space-y-1.5 text-xs text-rose-950">
+                <ul class="mt-3 list-disc list-inside space-y-1.5 text-xs text-amber-950">
                   <li><strong>Continuous Quality Signal (No Pre-Gate):</strong> OCR legibility is a continuous quality score, not a pre-extraction rejection gate. Both OCR-assisted and direct-vision extraction run as peers even on degraded or glare-affected scans.</li>
-                  <li><strong>Deterministic 50% Threshold:</strong> When source extraction confidence drops below <strong>50%</strong> for an image, the post-extraction policy marks the document as <code class="font-mono text-[11px] bg-rose-100 px-1 py-0.5 rounded text-rose-900">auto_rejected</code>.</li>
-                  <li><strong>Approval Strictly Blocked:</strong> Neither peer attempt can become canonical or be approved, preventing unverified or hallucinated values from entering procurement.</li>
-                  <li><strong>Retained Inline for Audit:</strong> Original source media, extracted candidates, and provenance evidence are preserved inline for human review and inspection.</li>
+                  <li><strong>Confidence Is Evidence:</strong> A low score explains source-recovery risk; it does not stop the normal review process.</li>
+                  <li><strong>Human Decision Required:</strong> Neither peer attempt becomes canonical automatically. A reviewer selects an attempt, inspects its evidence, and then approves or rejects it.</li>
+                  <li><strong>Retained for Audit:</strong> Original source media, extracted candidates, and provenance evidence stay available for inspection.</li>
                 </ul>
               </div>
             </div>
