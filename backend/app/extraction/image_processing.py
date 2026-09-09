@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.config import Config
 from app.events import record_event
+from app.extraction.confidence import ConfidenceSignals, assess_extraction_confidence
 from app.extraction.commercial import apply_commercial_rules
 from app.extraction.contracts import CanonicalQuotation
 from app.extraction.llm import (
@@ -303,7 +304,27 @@ def consume_ocr(session: Session, job_id: str, settings: Config) -> None:
         attempts = [ocr_quotation]
         if document.media_type.startswith("image/"):
             attempts.append(vision_quotation)
-        if not any(attempt is not None and attempt.line_items for attempt in attempts):
+
+        image_confidence = assess_extraction_confidence(
+            ConfidenceSignals(
+                source_type="image",
+                ocr_used=True,
+                parser_quality="mixed",
+                ocr_scores=tuple(line.confidence for page in result.pages for line in page.lines),
+            )
+        )
+        if document.media_type.startswith("image/") and image_confidence is not None and image_confidence.score < 50:
+            # Recovery below 50% does not provide reliable material for human
+            # product review, even if a model inferred one or more line items.
+            document.status = "auto_rejected"
+            document.failure_reason = "Material is not readable enough to use safely."
+            record_event(
+                session,
+                document_id=document.id,
+                stage="image_material_unusable",
+                metadata={"extraction_confidence": image_confidence.score},
+            )
+        elif not any(attempt is not None and attempt.line_items for attempt in attempts):
             document.status = "failed"
             document.failure_reason = "No products could be extracted from this source."
             record_event(session, document_id=document.id, stage="image_extraction_failed")

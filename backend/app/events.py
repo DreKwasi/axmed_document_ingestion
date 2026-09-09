@@ -58,6 +58,7 @@ _EVENT_MESSAGES = {
     "image_vision_extraction_failed": "Direct visual quotation extraction could not complete.",
     "image_extractions_ready_for_comparison": "Both image extraction results are ready to compare.",
     "image_extraction_opened_for_review": "Image extraction result opened for human review.",
+    "image_material_unusable": "The image material is too unclear to use safely.",
     "image_extraction_completed": "Image quotation extraction completed.",
     "image_extraction_failed": "No reviewable products could be extracted from the image.",
     "json_profiling_started": "Inspecting the JSON structure and repeated records.",
@@ -125,7 +126,11 @@ def serialize_event(event: ProcessingEventRecord) -> dict[str, Any]:
     """
     metadata = json.loads(event.metadata_json)
     message = metadata.get("message") or _EVENT_MESSAGES.get(event.stage, event.stage.replace("_", " ").capitalize())
-    terminal_stages = {"image_extractions_ready_for_comparison", "image_extraction_opened_for_review"}
+    terminal_stages = {
+        "image_extractions_ready_for_comparison",
+        "image_extraction_opened_for_review",
+        "image_material_unusable",
+    }
     phase = "Complete" if event.stage in terminal_stages else next(
         (
             label

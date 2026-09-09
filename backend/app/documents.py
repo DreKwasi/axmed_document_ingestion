@@ -431,6 +431,8 @@ def begin_image_extraction_review(session: Session, document_id: str, approach: 
     document = session.get(DocumentRecord, document_id)
     if document is None:
         raise LookupError("Document not found.")
+    if document.status == "auto_rejected":
+        raise ValueError(document.failure_reason or "Material is not readable enough to use safely.")
     attempt = session.scalar(
         select(ImageExtractionAttemptRecord).where(
             ImageExtractionAttemptRecord.document_id == document_id,
