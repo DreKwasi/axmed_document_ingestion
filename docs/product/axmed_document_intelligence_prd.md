@@ -1738,7 +1738,6 @@ axmed-document-intelligence/
 ├── output/
 │
 ├── README.md
-├── WRITEUP.md
 └── AGENT_CONVERSATION.md
 ```
 

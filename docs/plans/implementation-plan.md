@@ -251,13 +251,13 @@ Acceptance checks:
 **Blocked by:** The selected submission slices  
 **Covers:** all delivered stories
 
-Polish accessibility and operational safety; add CI, visual baselines, complete system docs, README/WRITEUP, and the required agent planning/execution summary.
+Polish accessibility and operational safety; add CI, visual baselines, complete system docs, README, and the required agent planning/execution summary.
 
 Acceptance checks:
 
 - CI runs lint, types, unit/integration tests, deterministic evaluation, frontend build, and Playwright smoke tests.
 - Visual baselines cover every delivered UI state; logs and artifacts pass the seeded-PII audit.
-- README has a reliable evaluator path; WRITEUP explains architecture, cost/latency, privacy, limitations, and production evolution.
+- README has a reliable evaluator path; the system docs and worksheets record architecture, privacy, limitations, and production evolution.
 - Full validation, running-app exercise, reviews, sweep, and false-confidence audit are evidenced in the final worksheet.
 
 ## 4. Dependency and delivery view
