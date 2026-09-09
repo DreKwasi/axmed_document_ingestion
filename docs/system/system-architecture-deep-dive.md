@@ -50,9 +50,10 @@
        │              │              │     └────┬────┘
        ▼              ▼              ▼          ▼
 ┌──────────────────────────────────────────────────────────┐
-│      LLM SEMANTIC REASONING (LangChain + Gemini)         │
-│  • Structured Pydantic Output: CanonicalQuotation        │
-│  • Two-Pass PDF: 1. Table Geometry -> 2. Text Narrative  │
+│  SEMANTIC INVESTIGATION (LangChain + Gemini)              │
+│  • Typed candidate + deterministic validation tool       │
+│  • One PDF investigation: layout + reading-order text    │
+│  • Search/inspect stable source evidence chunks           │
 │  • Entity Resolution: Trade name vs INN array            │
 │  • Rules: Incoterm != Origin; Transit duration != Lead   │
 │  • Discourse: Chronological supersession & corrections   │
@@ -109,16 +110,15 @@ flowchart TD
         J --> O["Contact PII Redaction: Phone, Email, Names"]
     end
 
-    subgraph LLM ["LLM Semantic Reasoning (LangChain + Gemini)"]
-        H --> P["LLM Structured Extraction: Pydantic Schema"]
-        I --> Q["Two-Pass PDF Extraction: Table Pass + Narrative Pass"]
+    subgraph LLM ["Semantic Investigation (LangChain + Gemini)"]
+        H --> P["Bounded agent: candidate + evidence tools"]
+        I --> P
         O --> P
         N --> P
     end
 
     subgraph Validation ["Deterministic Validation & Scoring"]
         P --> R["Commercial Math Engine: qty &times; unit_price = extended"]
-        Q --> R
         R --> S["Extraction Confidence Engine: Source Recovery Quality"]
         R --> T["Mapping Confidence Engine: 5-Tier Provenance Hierarchy"]
         R --> U["Normalized Unit Price Derivation"]
@@ -302,23 +302,18 @@ sequenceDiagram
     participant Gemini as Google Gemini
     participant Norm as Normalization Engine
 
-    Parser->>Extractor: Pass In-Memory Table Layout & Text
-    Note over Extractor: Pass 1: Primary Tabular Extraction
-    Extractor->>Gemini: Prompt and Table Layout Geometry
-    Gemini-->>Extractor: Line Items and Commercial Terms
-    
-    Note over Extractor: Pass 2: Text Narrative Enrichment
-    Extractor->>Gemini: Prompt and Reading Order Text
-    Gemini-->>Extractor: Footnotes and Supply Terms
-    
-    Extractor->>Norm: Merge Narrative into Line Items
+    Parser->>Extractor: Pass In-Memory Layout & Reading-Order Text
+    Extractor->>Extractor: Build stable evidence chunks and source atlas
+    Extractor->>Gemini: One bounded extraction/investigation loop
+    Gemini-->>Extractor: Candidate + evidence references
+    Extractor->>Extractor: Search/inspect evidence and validate candidate as needed
     Norm->>Norm: Run Deterministic Math Validation
 ```
 
 ### Engine Configuration ([`backend/app/extraction/llm.py`](file:///Users/andrewsboateng/Projects/axmed-takehome/backend/app/extraction/llm.py))
 - **Framework**: LangChain with `ChatGoogleGenerativeAI`.
 - **Model**: `gemini-3.1-flash-lite` (or `gemini-2.5-flash`), with `temperature=0.0`.
-- **Pydantic Structured Output**: Extraction calls use `.with_structured_output(CanonicalQuotation)` ensuring valid typing and schema conformance.
+- **Pydantic Structured Output**: The bounded agent returns a typed canonical candidate; application tools validate it before it can be persisted.
 
 ### Domain Extraction Rules
 1. **Chronological Supersession**: When email correspondence or notes revise earlier quotes (e.g., *"quoted EUR 0.128, corrected in P.S. to EUR 0.134"*), the model extracts the final price and records `supersedes_source_path` in evidence.
@@ -328,9 +323,7 @@ sequenceDiagram
    - Preserves complete clinical dosage forms (*"film-coated tablet"*, *"solution for injection"*), never stripping route into packaging.
 3. **Incoterms vs. Origin Boundary**: An Incoterm named place (e.g., *"FOB Paris"*) is extracted as **commercial delivery context**, and is **never** inferred as `country_of_origin`.
 4. **Transit vs. Lead Time**: Shipping transit duration is never conflated with manufacturer lead time unless explicitly stated as lead time.
-5. **Two-Pass PDF Extraction**:
-   - **Pass 1 (Table Geometry Pass)**: Extracts line items, quantities, unit prices, and packaging configurations from table layout coordinates.
-   - **Pass 2 (Narrative Enrichment Pass)**: Reads sequential narrative text and footnotes to populate missing supply (`shelf_life_months`, `storage_conditions`, `lead_time_days`) and regulatory fields without overriding table facts.
+5. **Single PDF Investigation**: Native layout and reading-order text are retained together. The agent may inspect table context, footnotes, and narrative in the same bounded investigation; no separate narrative request runs afterward.
 
 ---
 
