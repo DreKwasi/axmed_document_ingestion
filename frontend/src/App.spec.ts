@@ -26,26 +26,30 @@ vi.mock("@/api", () => ({
 describe("App", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.history.replaceState({}, "", "/");
     api.fetchDocuments.mockResolvedValue([]);
     api.fetchEvents.mockResolvedValue([]);
   });
 
   afterEach(() => vi.unstubAllGlobals());
 
-  it("keeps one Home title and places the ingest action in the main page", async () => {
+  it("uses the source table as the Home surface with its actions in the table header", async () => {
     const wrapper = mount(App);
     await flushPromises();
 
-    expect(wrapper.findAll("h1").filter((heading) => heading.text() === "Home")).toHaveLength(1);
+    expect(wrapper.findAll("h1").filter((heading) => heading.text() === "Home")).toHaveLength(0);
+    expect(wrapper.text()).not.toContain("Review uploaded supplier sources and open any source for its product breakdown.");
     expect(wrapper.text()).not.toContain("Your sources, at a glance.");
     expect(wrapper.text()).not.toContain("Evaluation Lab");
     expect(wrapper.text()).not.toContain("Review desk");
     expect(wrapper.text()).not.toContain("Supplier intelligence");
     expect(wrapper.find("nav").exists()).toBe(false);
+    expect(wrapper.get('select[aria-label="Filter by status"]').classes()).toContain("app-select");
     const ingestButton = wrapper.findAll("button").find((button) => button.text() === "Ingest source");
     expect(ingestButton?.classes()).toContain("bg-[#261c7a]");
     expect(ingestButton?.classes()).toContain("text-white");
     expect(ingestButton?.element.closest("header")).toBeNull();
+    expect(ingestButton?.element.closest(".rounded-2xl")).not.toBeNull();
     expect(api.fetchDocuments).toHaveBeenCalledOnce();
   });
 
@@ -107,7 +111,7 @@ describe("App", () => {
     });
 
     expect(wrapper.text()).toContain("PDF");
-    expect(wrapper.text()).toContain("andina.pdf");
+    expect(wrapper.text()).not.toContain("andina.pdf");
     expect(wrapper.text()).toContain("2 pages");
     expect(wrapper.text()).not.toContain("Source Schema / System");
     expect(wrapper.text()).not.toContain("pdf · 2 pages");
@@ -180,8 +184,9 @@ describe("App", () => {
           packaging: {},
           quantity: {},
           pricing: {
-            currency: "USD",
+            currency: null,
             quoted_price: { amount: "0.05", uom: "capsule" },
+            pack_price: "0.899",
             normalized_price: { amount: "0.05", uom: "capsule" },
             price_tiers: [],
             adjustments: [],
@@ -202,6 +207,7 @@ describe("App", () => {
           quotation: {
             supplier: { name: "MedSupply Ltd" },
             commercial_terms: {
+              currency: "USD",
               transit_time_min_days: 26,
               transit_time_max_days: 32,
             },
@@ -221,6 +227,8 @@ describe("App", () => {
     expect(wrapper.text()).toContain("Shipping Transit");
     expect(wrapper.text()).toContain("26–32 days");
     expect(wrapper.text()).toContain("Below 25 C, dry");
+    expect(wrapper.text()).toContain("USD 0.899");
+    expect(wrapper.text()).not.toContain("null 0.899");
   });
 
   it("lists sources at a high level and opens a product breakdown with quoted quantity", async () => {
@@ -275,7 +283,7 @@ describe("App", () => {
     expect(wrapper.text()).not.toContain("File source");
     expect(wrapper.text()).not.toContain("Source name");
     expect(wrapper.text()).toContain("andina.pdf");
-    expect(wrapper.findAll("a").filter((link) => link.text() === "andina.pdf" && link.attributes("download") === "andina.pdf")).toHaveLength(1);
+    expect(wrapper.findAll("button").filter((button) => button.text() === "andina.pdf" && button.attributes("title") === "Preview andina.pdf")).toHaveLength(1);
     expect(wrapper.text()).toContain("Products");
     expect(wrapper.text()).toContain("1 extracted");
     expect(wrapper.text()).toContain("Quantity extracted from the source table.");
@@ -527,7 +535,7 @@ describe("App", () => {
       }
     });
 
-    await wrapper.get("button").trigger("click");
+    await wrapper.get("button:nth-of-type(2)").trigger("click");
     expect(wrapper.emitted("reextract")).toHaveLength(1);
     expect(wrapper.text()).not.toContain("Confirm mapping");
   });
@@ -660,7 +668,97 @@ describe("App", () => {
     expect(api.uploadDocuments).toHaveBeenCalledOnce();
     expect(wrapper.text()).toContain("First");
     expect(wrapper.text()).toContain("Second");
-    expect(wrapper.findAll("a").filter((link) => ["first.json", "second.json"].includes(link.text()))).toHaveLength(2);
+    expect(wrapper.findAll("button").filter((button) => ["first.json", "second.json"].includes(button.text()))).toHaveLength(2);
+  });
+
+  it("previews JSON source files inside the platform from the Home filename", async () => {
+    api.fetchDocuments.mockResolvedValue([{
+      id: "preview-json",
+      filename: "offer.json",
+      source_name: "Preview supplier",
+      status: "pending_review",
+      mapping_confidence: { score: 100, band: "High", issue_count: 0 },
+      quotation: null,
+      reviews: [],
+    }]);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      text: vi.fn().mockResolvedValue('{"supplier":"Preview supplier"}'),
+    }));
+
+    const wrapper = mount(App);
+    await flushPromises();
+    await wrapper.get('button[title="Preview offer.json"]').trigger("click");
+    await flushPromises();
+
+    const dialog = document.body.querySelector('[role="dialog"]');
+    expect(dialog?.textContent).toContain("Source preview");
+    expect(dialog?.textContent).toContain('"supplier": "Preview supplier"');
+    expect(dialog?.getAttribute("aria-modal")).toBe("true");
+    expect(api.sourceDocumentUrl).toHaveBeenCalledWith("preview-json");
+  });
+
+  it("uses the four review states and flat status colors", async () => {
+    api.fetchDocuments.mockResolvedValue([
+      { id: "pre", filename: "pre.json", status: "pending_review", mapping_confidence: { score: 100, band: "High", issue_count: 0 }, quotation: null, reviews: [] },
+      { id: "review", filename: "review.pdf", status: "pending_review", mapping_confidence: { score: 82, band: "Medium", issue_count: 2 }, quotation: null, reviews: [] },
+      { id: "approved", filename: "approved.eml", status: "approved", quotation: null, reviews: [] },
+      { id: "failed", filename: "failed.jpg", status: "failed", quotation: null, reviews: [] },
+    ]);
+
+    const wrapper = mount(App);
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Pre-approved");
+    expect(wrapper.text()).toContain("Needs review");
+    expect(wrapper.text()).toContain("Approved");
+    expect(wrapper.text()).toContain("Extraction failed");
+    expect(wrapper.html()).not.toContain("gradient");
+  });
+
+  it("filters source results by their displayed status", async () => {
+    api.fetchDocuments.mockResolvedValue([
+      { id: "pre", filename: "pre.json", source_name: "Pre-approved supplier", status: "pending_review", mapping_confidence: { score: 100, band: "High", issue_count: 0 }, quotation: null, reviews: [] },
+      { id: "review", filename: "review.pdf", source_name: "Review supplier", status: "pending_review", mapping_confidence: { score: 82, band: "Medium", issue_count: 2 }, quotation: null, reviews: [] },
+      { id: "approved", filename: "approved.eml", source_name: "Approved supplier", status: "approved", quotation: null, reviews: [] },
+      { id: "failed", filename: "failed.jpg", source_name: "Failed supplier", status: "failed", quotation: null, reviews: [] },
+    ]);
+    const wrapper = mount(App);
+    await flushPromises();
+
+    await wrapper.get('select[aria-label="Filter by status"]').setValue("approved");
+
+    expect(wrapper.text()).toContain("Approved supplier");
+    expect(wrapper.text()).not.toContain("Review supplier");
+    expect(wrapper.text()).toContain("1 of 5 extraction results");
+  });
+
+  it("persists an opened source in the URL and restores it after refresh", async () => {
+    const document = {
+      id: "persistent-source",
+      filename: "persistent.json",
+      source_name: "Persistent supplier",
+      status: "pending_review",
+      mapping_confidence: { score: 100, band: "High", issue_count: 0 },
+      quotation: { supplier: {}, commercial_terms: {}, line_items: [], revision: 1, system_decision: "pending_review", review_status: "pending_review", review_issues: [] },
+      reviews: [],
+    };
+    api.fetchDocuments.mockResolvedValue([document]);
+
+    const firstMount = mount(App);
+    await flushPromises();
+    await firstMount.get("button.group").trigger("click");
+    await flushPromises();
+
+    expect(window.location.search).toBe("?source=persistent-source");
+    expect(firstMount.text()).toContain("Back to sources");
+    firstMount.unmount();
+
+    const refreshedMount = mount(App);
+    await flushPromises();
+
+    expect(refreshedMount.text()).toContain("Back to sources");
+    expect(refreshedMount.text()).toContain("Persistent supplier");
   });
 
   it("displays isolated failures from a multi-file upload cleanly", async () => {
@@ -849,6 +947,76 @@ describe("App", () => {
         note: "Pricing confirmed against supplier catalog."
       })
     );
+    expect(wrapper.text()).toContain("Source Approved");
+    expect(wrapper.text()).toContain("Quotation approved and marked ready for commercial export.");
+    expect(wrapper.text()).toContain("Approved");
+    expect(wrapper.text()).toContain("Uploaded sources");
+    expect(wrapper.text()).not.toContain("Back to sources");
+  });
+
+  it("displays 'Rejected' status and triggers an info toast notification when human review is rejected", async () => {
+    const document = {
+      id: "document-reject",
+      filename: "offer-reject.json",
+      source_system: "SupplierERP",
+      status: "pending_review",
+      quotation: {
+        supplier: { name: "Supplier Reject" },
+        quotation_reference: "REJ-1",
+        commercial_terms: {},
+        line_items: [
+          {
+            product: { trade_name: "Amoxicillin 250mg", inn: ["Amoxicillin"] },
+            pricing: { quoted_price: { amount: "0.05" } },
+            quantity: { quoted_quantity: 100 },
+          }
+        ],
+        revision: 1,
+        review_status: "pending_review",
+        review_issues: []
+      },
+      reviews: []
+    };
+    api.fetchDocuments.mockResolvedValue([document]);
+    api.reviewDocument.mockResolvedValue({
+      ...document,
+      status: "rejected",
+      quotation: { ...document.quotation, review_status: "rejected", revision: 2 }
+    });
+    const wrapper = mount(App);
+    await flushPromises();
+
+    // Open the source
+    await wrapper.get("button.group").trigger("click");
+    await flushPromises();
+
+    // Open review dialog
+    const reviewBtn = wrapper.findAll("button").find((b) => b.text().includes("Review source"));
+    expect(reviewBtn).toBeDefined();
+    await reviewBtn?.trigger("click");
+    await flushPromises();
+
+    // Select a rejection reason
+    const reasonSelect = wrapper.get("select#rejection-reason");
+    expect(reasonSelect.classes()).toContain("app-select");
+    await reasonSelect.setValue("unreadable_source");
+
+    // Click Reject source
+    const rejectBtn = wrapper.findAll("button").find((b) => b.text() === "Reject");
+    expect(rejectBtn).toBeDefined();
+    await rejectBtn?.trigger("click");
+    await flushPromises();
+
+    expect(api.reviewDocument).toHaveBeenCalledWith(
+      "document-reject",
+      "reject",
+      expect.objectContaining({
+        expected_revision: 1,
+        rejection_reason: "unreadable_source",
+      })
+    );
+    expect(wrapper.text()).toContain("Source Rejected");
+    expect(wrapper.text()).toContain("Rejected");
   });
 
   it("displays confidence and identifies low-confidence extracted fields as review issues", async () => {
@@ -921,13 +1089,13 @@ describe("App", () => {
     expect(wrapper.text()).toContain("HighConfidenceItem");
     expect(wrapper.text()).toContain("LowerConfidenceItem");
     expect(wrapper.text()).toContain("Mapping confidence");
-    expect(wrapper.text()).toContain("Mapping issues");
+    expect(wrapper.text()).not.toContain("Mapping issues");
     const mappingDefinitionHelp = wrapper.get('button[aria-label="How mapping confidence is calculated"]');
     await mappingDefinitionHelp.trigger("click");
     expect(wrapper.text()).toContain("How mapping confidence is built");
     expect(wrapper.text()).toContain("The product score is the average of those field scores.");
     expect(wrapper.text()).toContain("Low");
-    expect(wrapper.findAll("tbody tr")[1].findAll("td")[5].text().trim()).toBe("1");
+    expect(wrapper.findAll("tbody tr")[1].findAll("td")[4].text()).toContain("1 mapping issue");
     expect(wrapper.findAll("tbody tr")[1].findAll("td")[4].find("button").attributes("title")).toContain("Average of 1 mapped field score");
     expect(wrapper.findAll("tbody tr")[1].findAll("td")[4].find("button").attributes("title")).toContain("Mapping issues are counted separately: 1");
 
@@ -983,8 +1151,24 @@ describe("App", () => {
             pricing: { currency: "USD", quoted_price: { amount: 5 } },
             source_provenance: {},
           },
+          {
+            product: { trade_name: "Item 2", inn: ["Ingredient 2"], dosage_form: "tablet" },
+            quantity: { quoted_quantity: 100 },
+            pricing: { currency: "USD", quoted_price: { amount: 10 } },
+            source_provenance: {},
+          },
         ],
-        field_reviews: [],
+        field_reviews: [{
+          field_path: "line_items[0].source_key",
+          mapping_confidence_band: "High",
+          mapping_confidence_score: 100,
+          mapping_confidence_reason: "the source explicitly identifies this value as this field",
+        }, {
+          field_path: "line_items[0].product.trade_name",
+          mapping_confidence_band: null,
+          mapping_confidence_score: null,
+          mapping_confidence_reason: "the value was mapped, but its precise source provenance was not recorded",
+        }],
       },
       extraction_confidence: { score: 88, band: "High", factors: [] },
       mapping_confidence: { score: 92, band: "High", issue_count: 0 },
@@ -1018,6 +1202,11 @@ describe("App", () => {
     await wrapper.get("button.group").trigger("click");
     await flushPromises();
 
+    const productRows = wrapper.findAll("tbody tr");
+    expect(productRows).toHaveLength(2);
+    expect(productRows[0].findAll("td")[4].text()).toContain("92%");
+    expect(productRows[1].findAll("td")[4].text()).toContain("92%");
+
     // 2. ProductTable tooltip dismisses on Escape and outside click
     const tableMappingHelp = wrapper.get('button[aria-label="How mapping confidence is calculated"]');
     await tableMappingHelp.trigger("click");
@@ -1037,5 +1226,50 @@ describe("App", () => {
     window.document.body.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await flushPromises();
     expect(rowMappingBtn.attributes("aria-expanded")).toBe("false");
+  });
+
+  it("does not call openImageExtractionForReview or display error banner when image attempts are failed", async () => {
+    const failedDoc = {
+      id: "failed-glare-doc",
+      filename: "scan_03_glare.jpg",
+      source_name: "Glare quotation",
+      status: "failed",
+      failure_reason: "Image scan failed OCR quality checks due to low text clarity or severe glare.",
+      source_system: "image",
+      reviews: [],
+      quotation: null,
+      image_extraction_attempts: [
+        {
+          approach: "ocr_assisted",
+          status: "failed",
+          failure_reason: "Image scan failed OCR quality checks due to low text clarity or severe glare.",
+          product_count: 0,
+        },
+        {
+          approach: "vision_direct",
+          status: "failed",
+          failure_reason: "Direct vision extraction failed to detect quotation table.",
+          product_count: 0,
+        },
+      ],
+    };
+    api.fetchDocuments.mockResolvedValue([failedDoc]);
+
+    const wrapper = mount(App);
+    await flushPromises();
+
+    // Click into source detail
+    await wrapper.get("button.group").trigger("click");
+    await flushPromises();
+
+    // It should NOT call openImageExtractionForReview because attempts are failed
+    expect(api.openImageExtractionForReview).not.toHaveBeenCalled();
+    // It should NOT display the false-positive 409 error banner
+    expect(wrapper.text()).not.toContain("This image extraction result is not available for review.");
+    // It should display the calm Unclear notice and tags
+    expect(wrapper.text()).toContain("Extraction failed");
+    expect(wrapper.text()).toContain("Image scan failed OCR quality checks");
+    expect(wrapper.text()).toContain("Unclear");
+    expect(wrapper.text()).not.toContain("1 failed");
   });
 });

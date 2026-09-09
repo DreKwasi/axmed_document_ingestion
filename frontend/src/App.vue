@@ -13,6 +13,7 @@ import {
   openImageExtractionForReview,
   reviewDocument,
   reextractDocument,
+  sourceDocumentUrl,
   uploadDocuments,
 } from "@/api";
 import type { DocumentResponse, ProcessingEvent } from "@/types";
@@ -22,9 +23,17 @@ import ProductDetailDrawer from "./components/ProductDetailDrawer.vue";
 import ProductTable from "./components/ProductTable.vue";
 import ReviewModal from "./components/ReviewModal.vue";
 import SourceDetailHeader from "./components/SourceDetailHeader.vue";
+import SourcePreviewModal from "./components/SourcePreviewModal.vue";
 import SourceTable from "./components/SourceTable.vue";
 
 // --- Section 1: Reactive State & Selection ---
+
+interface ToastNotification {
+  show: boolean;
+  title: string;
+  message: string;
+  type: "success" | "info" | "error";
+}
 
 const documents = ref<DocumentResponse[]>([]);
 const selectedDocumentId = ref<string | null>(null);
@@ -37,6 +46,34 @@ const fileInput = ref<HTMLInputElement | null>(null);
 const extractionActivity = ref<Record<string, ProcessingEvent[]>>({});
 const eventSources = new Map<string, EventSource>();
 const selectedApproach = ref<string | null>(null);
+const previewDocument = ref<DocumentResponse | null>(null);
+
+const toast = ref<ToastNotification>({
+  show: false,
+  title: "",
+  message: "",
+  type: "success",
+});
+let toastTimer: ReturnType<typeof setTimeout> | null = null;
+
+function showToast(title: string, message: string, type: "success" | "info" | "error" = "success") {
+  if (toastTimer) {
+    clearTimeout(toastTimer);
+    toastTimer = null;
+  }
+  toast.value = { show: true, title, message, type };
+  toastTimer = setTimeout(() => {
+    toast.value.show = false;
+  }, 4000);
+}
+
+function dismissToast() {
+  if (toastTimer) {
+    clearTimeout(toastTimer);
+    toastTimer = null;
+  }
+  toast.value.show = false;
+}
 
 // --- Section 2: Computed Getters ---
 
@@ -61,19 +98,51 @@ function exportAllData() {
   link.click();
 }
 
-function openDocument(document: DocumentResponse & { source_result?: string }) {
+type HistoryMode = "push" | "replace" | "none";
+
+function writeSourceUrl(document: (DocumentResponse & { source_result?: string }) | null, mode: Exclude<HistoryMode, "none">) {
+  const url = new URL(window.location.href);
+  if (document) {
+    url.searchParams.set("source", document.id);
+    if (document.source_result) url.searchParams.set("approach", document.source_result);
+    else url.searchParams.delete("approach");
+  } else {
+    url.searchParams.delete("source");
+    url.searchParams.delete("approach");
+  }
+  window.history[`${mode}State`]({}, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+function openDocument(document: DocumentResponse & { source_result?: string }, historyMode: HistoryMode = "push") {
   selectedDocumentId.value = document.id;
   selectedApproach.value = document.source_result ?? null;
   selectedLineIndex.value = 0;
   isDrawerOpen.value = false;
+  if (historyMode !== "none") writeSourceUrl(document, historyMode);
   void loadActivity(document.id);
 }
 
-function closeDocument() {
+function closeDocument(historyMode: HistoryMode = "push") {
   selectedDocumentId.value = null;
   selectedApproach.value = null;
   isDrawerOpen.value = false;
   isReviewModalOpen.value = false;
+  if (historyMode !== "none") writeSourceUrl(null, historyMode);
+}
+
+function restoreViewFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const documentId = params.get("source");
+  const document = documents.value.find((item) => item.id === documentId);
+  if (!document) {
+    closeDocument("none");
+    return;
+  }
+  openDocument({ ...document, source_result: params.get("approach") ?? undefined }, "none");
+}
+
+function openSourcePreview(document: DocumentResponse) {
+  previewDocument.value = document;
 }
 
 async function removeDocument(document: DocumentResponse) {
@@ -210,6 +279,14 @@ async function openCandidateForReview(approach: string) {
   const doc = selectedDocument.value;
   if (!doc) return;
   selectedApproach.value = approach;
+  writeSourceUrl({ ...doc, source_result: approach }, "replace");
+
+  const attempt = doc.image_extraction_attempts?.find((a) => a.approach === approach);
+  if (attempt && attempt.status !== "completed") {
+    // If the attempt is failed or not completed, do not make the review promotion API request.
+    return;
+  }
+
   busy.value = true;
   errorMessage.value = "";
   try {
@@ -230,12 +307,12 @@ watch(
   ([, attemptsLength, quotation]) => {
     const doc = selectedDocument.value;
     if (doc && !quotation && (attemptsLength ?? 0) > 0) {
-      const approach =
-        selectedApproach.value ||
-        doc.image_extraction_attempts?.find((a) => a.status === "completed")?.approach ||
-        doc.image_extraction_attempts?.[0]?.approach;
-      if (approach) {
-        void openCandidateForReview(approach);
+      const completedAttempt =
+        (selectedApproach.value && doc.image_extraction_attempts?.find((a) => a.approach === selectedApproach.value)?.status === "completed")
+          ? selectedApproach.value
+          : doc.image_extraction_attempts?.find((a) => a.status === "completed")?.approach;
+      if (completedAttempt) {
+        void openCandidateForReview(completedAttempt);
       }
     }
   }
@@ -254,6 +331,7 @@ async function handleSaveCorrection(payload: { fieldPath: string; value: unknown
         patches: [{ path: payload.fieldPath, value: payload.value }],
       })
     );
+    showToast("Correction Saved", "Field updated successfully.", "success");
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : "Correction failed.";
   } finally {
@@ -275,6 +353,8 @@ async function handleApprove(note?: string) {
       })
     );
     isReviewModalOpen.value = false;
+    showToast("Source Approved", "Quotation approved and marked ready for commercial export.", "success");
+    closeDocument();
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : "Approval failed.";
   } finally {
@@ -297,6 +377,7 @@ async function handleReject(payload: { reason: string; note?: string }) {
       })
     );
     isReviewModalOpen.value = false;
+    showToast("Source Rejected", `Quotation marked as rejected (${payload.reason}).`, "info");
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : "Rejection failed.";
   } finally {
@@ -306,17 +387,78 @@ async function handleReject(payload: { reason: string; note?: string }) {
 
 // --- Section 6: Lifecycle Hooks ---
 
-onMounted(() => loadDocuments().catch(() => undefined));
-onBeforeUnmount(() => eventSources.forEach((source) => source.close()));
+onMounted(async () => {
+  await loadDocuments().catch(() => undefined);
+  restoreViewFromUrl();
+  window.addEventListener("popstate", restoreViewFromUrl);
+});
+onBeforeUnmount(() => {
+  if (toastTimer) clearTimeout(toastTimer);
+  window.removeEventListener("popstate", restoreViewFromUrl);
+  eventSources.forEach((source) => source.close());
+});
 </script>
 
 <template>
   <div class="min-h-screen bg-slate-50 text-slate-800 font-sans antialiased">
+    <!-- Toast Notification (Fixed Position, Smooth Floating Pill) -->
+    <Transition
+      enter-active-class="transition duration-300 ease-out"
+      enter-from-class="transform -translate-y-2 opacity-0 sm:translate-y-0 sm:translate-x-4"
+      enter-to-class="transform translate-y-0 opacity-100 sm:translate-x-0"
+      leave-active-class="transition duration-200 ease-in"
+      leave-from-class="transform opacity-100"
+      leave-to-class="transform opacity-0 scale-95"
+    >
+      <div
+        v-if="toast.show"
+        class="fixed top-5 right-5 z-50 flex max-w-sm w-full items-start gap-3 rounded-2xl border p-4 shadow-xl backdrop-blur-md transition-all sm:max-w-md"
+        :class="{
+          'border-emerald-200 bg-white/95 text-emerald-950 shadow-emerald-900/10': toast.type === 'success',
+          'border-blue-200 bg-white/95 text-blue-950 shadow-blue-900/10': toast.type === 'info',
+          'border-rose-200 bg-white/95 text-rose-950 shadow-rose-900/10': toast.type === 'error',
+        }"
+        role="status"
+        aria-live="polite"
+      >
+        <div
+          class="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-sm font-bold shadow-2xs"
+          :class="{
+            'bg-emerald-100 text-emerald-700': toast.type === 'success',
+            'bg-blue-100 text-blue-700': toast.type === 'info',
+            'bg-rose-100 text-rose-700': toast.type === 'error',
+          }"
+        >
+          <span v-if="toast.type === 'success'">✓</span>
+          <span v-else-if="toast.type === 'info'">ℹ</span>
+          <span v-else>⚠</span>
+        </div>
+        <div class="flex-1 min-w-0 pt-0.5">
+          <p class="text-xs font-bold tracking-tight text-slate-900">
+            {{ toast.title }}
+          </p>
+          <p class="mt-0.5 text-xs text-slate-600 leading-relaxed">
+            {{ toast.message }}
+          </p>
+        </div>
+        <button
+          type="button"
+          class="text-slate-400 hover:text-slate-700 rounded-lg p-1 transition cursor-pointer"
+          aria-label="Dismiss notification"
+          @click="dismissToast"
+        >
+          <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+    </Transition>
+
     <!-- Clean Minimal Header -->
     <header class="border-b border-rule bg-surface sticky top-0 z-30 shadow-xs">
       <div class="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
         <div class="flex items-center gap-3">
-          <a href="#" class="flex items-center text-[#261c7a] hover:opacity-90 transition" @click.prevent="closeDocument">
+          <a href="#" class="flex items-center text-[#261c7a] hover:opacity-90 transition" @click.prevent="closeDocument()">
             <AxmedLogo class="h-8 w-auto" />
           </a>
           <span class="h-4 w-px bg-rule"></span>
@@ -347,35 +489,7 @@ onBeforeUnmount(() => eventSources.forEach((source) => source.close()));
       </p>
 
       <!-- VIEW 1: HOME PAGE (No source selected) -->
-      <div v-if="!selectedDocument" class="space-y-6">
-        <!-- Home Header -->
-        <section class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-slate-200 pb-6">
-          <div>
-            <h1 class="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-4xl">Home</h1>
-            <p class="mt-1 text-xs text-slate-500">
-              Review uploaded supplier sources and open any source for its product breakdown.
-            </p>
-          </div>
-          <div class="flex w-full shrink-0 gap-2 sm:w-auto">
-            <button
-              type="button"
-              class="flex-1 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-xs font-bold text-slate-700 shadow-xs hover:bg-slate-50 transition focus:outline-none disabled:opacity-50 sm:flex-none"
-              :disabled="!documents.length"
-              @click="exportAllData"
-            >
-              Export CSV
-            </button>
-            <button
-              type="button"
-              class="flex-1 rounded-xl bg-[#261c7a] px-4 py-2.5 text-xs font-bold text-white shadow-xs hover:bg-[#1e155c] active:bg-[#150f42] transition focus:outline-none sm:flex-none disabled:opacity-50 cursor-pointer"
-              :disabled="busy"
-              @click="openIngest"
-            >
-              {{ busy ? "Ingesting…" : "Ingest source" }}
-            </button>
-          </div>
-        </section>
-
+      <div v-if="!selectedDocument">
         <!-- Uploaded Sources Table -->
         <SourceTable
           :documents="documents"
@@ -383,6 +497,8 @@ onBeforeUnmount(() => eventSources.forEach((source) => source.close()));
           @select="openDocument"
           @ingest="openIngest"
           @delete="removeDocument"
+          @preview="openSourcePreview"
+          @export="exportAllData"
         />
       </div>
 
@@ -397,6 +513,7 @@ onBeforeUnmount(() => eventSources.forEach((source) => source.close()));
           @switch-approach="openCandidateForReview"
           @open-review="isReviewModalOpen = true"
           @reextract="reextract(selectedDocument)"
+          @preview="openSourcePreview(selectedDocument)"
         />
 
         <!-- Active Extraction Status (only shown while extraction is actively ongoing) -->
@@ -431,6 +548,7 @@ onBeforeUnmount(() => eventSources.forEach((source) => source.close()));
         <section v-if="selectedDocument.quotation">
           <ProductTable
             :line-items="selectedDocument.quotation.line_items"
+            :document-mapping-confidence="selectedDocument.mapping_confidence?.score"
             :mapping-issues="selectedDocument.mapping_issues ?? []"
             :field-reviews="selectedDocument.quotation.field_reviews"
             :selected-index="selectedLineIndex"
@@ -438,14 +556,14 @@ onBeforeUnmount(() => eventSources.forEach((source) => source.close()));
           />
         </section>
 
-        <!-- Failed State Display -->
+        <!-- Empty state placeholder when no product lines were extracted -->
         <div
           v-else-if="selectedDocument.status === 'failed'"
-          class="rounded-2xl border border-rose-200 bg-rose-50 p-6 text-center"
+          class="rounded-2xl border border-dashed border-rule bg-surface-alt/40 p-10 text-center"
         >
-          <p class="text-sm font-bold text-rose-900">Extraction failed</p>
-          <p class="mt-1 text-xs text-rose-700">
-            {{ selectedDocument.failure_reason || "No products could be extracted from this source." }}
+          <p class="text-xs font-semibold text-ink-2">No product lines extracted from this document.</p>
+          <p class="mt-1 text-[11px] text-ink-3">
+            Preview the source above to inspect it, or upload a clearer version and try again.
           </p>
         </div>
 
@@ -471,5 +589,11 @@ onBeforeUnmount(() => eventSources.forEach((source) => source.close()));
         />
       </div>
     </main>
+
+    <SourcePreviewModal
+      :document="previewDocument"
+      :source-url="previewDocument ? sourceDocumentUrl(previewDocument.id) : ''"
+      @close="previewDocument = null"
+    />
   </div>
 </template>

@@ -71,3 +71,41 @@ body {
 .tabular-nums {
   font-variant-numeric: tabular-nums;
 }
+
+.app-select {
+  appearance: none;
+  min-height: 2.5rem;
+  border: 1px solid var(--color-rule-dark);
+  border-radius: 0.625rem;
+  padding: 0.625rem 2.5rem 0.625rem 0.875rem;
+  background-color: var(--color-surface);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23475467' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m7 10 5 5 5-5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+  background-size: 1rem;
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-weight: 600;
+  line-height: 1.25rem;
+  box-shadow: 0 1px 2px rgb(16 24 40 / 0.04);
+  cursor: pointer;
+  transition: border-color 150ms ease, box-shadow 150ms ease, background-color 150ms ease;
+}
+
+.app-select:hover {
+  border-color: #98a2b3;
+  background-color: #fcfcfd;
+}
+
+.app-select:focus {
+  border-color: var(--color-axmed-primary);
+  box-shadow: 0 0 0 3px rgb(38 28 122 / 0.12);
+  outline: none;
+}
+
+.app-select:disabled {
+  background-color: var(--color-surface-alt);
+  color: var(--color-ink-3);
+  cursor: not-allowed;
+  opacity: 0.7;
+}
