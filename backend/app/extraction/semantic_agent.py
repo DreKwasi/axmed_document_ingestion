@@ -93,48 +93,6 @@ class InvestigationLimits:
 DEFAULT_INVESTIGATION_LIMITS = InvestigationLimits()
 
 
-def inspect_semantic_candidate(
-    candidate: SemanticCandidate, _request: SemanticExtractionRequest
-) -> tuple[SemanticIssue, ...]:
-    """Run deterministic schema, commercial, and candidate-consistency checks."""
-
-    issues = [
-        SemanticIssue(
-            category="candidate_reported",
-            severity=issue.severity,
-            code=issue.code,
-            field_path=issue.field_path,
-            message=issue.message,
-            affected_fields=[issue.field_path],
-        )
-        for issue in candidate.quotation.review_issues
-    ]
-    commercial = apply_commercial_rules(candidate.quotation.model_copy(deep=True))
-    issues.extend(
-        SemanticIssue(
-            category="commercial",
-            severity=issue.severity,
-            code=issue.code,
-            field_path=issue.field_path,
-            message=issue.message,
-            affected_fields=[issue.field_path],
-        )
-        for issue in commercial.review_issues
-    )
-    if not candidate.quotation.line_items:
-        issues.append(
-            SemanticIssue(
-                category="completeness",
-                severity="error",
-                code="no_products_extracted",
-                field_path="line_items",
-                message="No product line was recovered from the prepared source.",
-                affected_fields=["line_items"],
-            )
-        )
-    return _deduplicate_issues(issues)
-
-
 @dataclass
 class _InvestigationState:
     """Mutable facts for one run; never exposed to source processors."""
@@ -151,64 +109,23 @@ class _InvestigationState:
     repeated_issue_set: bool = False
 
 
-def _agent_middleware(limits: InvestigationLimits, fallback_models: tuple[Any, ...]) -> list[Any]:
-    middleware: list[Any] = [
-        ModelCallLimitMiddleware(run_limit=limits.model_calls, exit_behavior="end"),
-        ToolCallLimitMiddleware(tool_name="search_evidence", run_limit=limits.search_calls, exit_behavior="continue"),
-        ToolCallLimitMiddleware(
-            tool_name="inspect_evidence", run_limit=limits.inspection_calls, exit_behavior="continue"
-        ),
-        ToolCallLimitMiddleware(
-            tool_name="validate_candidate", run_limit=limits.validation_calls, exit_behavior="continue"
-        ),
-    ]
-    if fallback_models:
-        middleware.insert(0, ModelFallbackMiddleware(*fallback_models))
-    return middleware
+# --- Section 2: Budgeting, Telemetry & Formatting Helpers ---
 
 
-def _validate_candidate(state: _InvestigationState, candidate: SemanticCandidate) -> dict[str, Any]:
-    state.validation_count += 1
-    issues = list(_issues_for(state, candidate))
-    issue_ids = {issue.id for issue in issues if issue.id}
-    persistent = sorted(issue_ids & state.previous_issue_ids)
-    resolved = sorted(state.previous_issue_ids - issue_ids)
-    new = sorted(issue_ids - state.previous_issue_ids)
-    state.repeated_issue_set = bool(issue_ids) and issue_ids == state.previous_issue_ids
-    state.previous_issue_ids = issue_ids
+def _wall_clock_expired(state: _InvestigationState) -> bool:
+    return time.perf_counter() - state.started_at >= state.limits.wall_clock_seconds
+
+
+def _duration_ms(state: _InvestigationState) -> int:
+    return max(1, int((time.perf_counter() - state.started_at) * 1000))
+
+
+def _budget_state(state: _InvestigationState) -> dict[str, int | bool]:
     return {
-        "valid": not issues,
-        "issues": [issue.model_dump(mode="json") for issue in issues],
-        "resolved_issue_ids": resolved,
-        "persistent_issue_ids": persistent,
-        "new_issue_ids": new,
-        "progress": "stalled" if state.repeated_issue_set else "continue",
-        "budget": _budget_state(state),
-        "instruction": (
-            "Return the best supported result with these unresolved issues."
-            if state.repeated_issue_set or _wall_clock_expired(state)
-            else "Use search_evidence or inspect_evidence to obtain only the evidence needed to revise the candidate."
-        ),
+        "evidence_characters_used": state.evidence_characters,
+        "evidence_characters_remaining": max(0, state.limits.evidence_characters - state.evidence_characters),
+        "wall_clock_expired": _wall_clock_expired(state),
     }
-
-
-def _issues_for(state: _InvestigationState, candidate: SemanticCandidate) -> tuple[SemanticIssue, ...]:
-    """Evaluate a candidate without changing progress-tracking state."""
-
-    issues = [*state.inspector(candidate, state.request), *_evidence_issues(candidate, state.workspace)]
-    if state.workspace.mode == "retrieval" and not state.inspected_references:
-        issues.append(
-            SemanticIssue(
-                category="coverage",
-                severity="warning",
-                code="source_not_investigated",
-                field_path="source",
-                message="The source is indexed for retrieval; inspect relevant evidence before finalizing.",
-                affected_fields=["source"],
-                evidence_targets=list(state.workspace.references()[:6]),
-            )
-        )
-    return _deduplicate_issues(issues)
 
 
 def _inspect_chunks(state: _InvestigationState, chunks: tuple[EvidenceChunk, ...]) -> tuple[bool, str | None]:
@@ -222,22 +139,6 @@ def _inspect_chunks(state: _InvestigationState, chunks: tuple[EvidenceChunk, ...
     return True, None
 
 
-def _wall_clock_expired(state: _InvestigationState) -> bool:
-    return time.perf_counter() - state.started_at >= state.limits.wall_clock_seconds
-
-
-def _budget_state(state: _InvestigationState) -> dict[str, int | bool]:
-    return {
-        "evidence_characters_used": state.evidence_characters,
-        "evidence_characters_remaining": max(0, state.limits.evidence_characters - state.evidence_characters),
-        "wall_clock_expired": _wall_clock_expired(state),
-    }
-
-
-def _duration_ms(state: _InvestigationState) -> int:
-    return max(1, int((time.perf_counter() - state.started_at) * 1000))
-
-
 def _termination_reason(state: _InvestigationState, unresolved: tuple[SemanticIssue, ...]) -> str:
     if not unresolved:
         return "validated"
@@ -246,41 +147,6 @@ def _termination_reason(state: _InvestigationState, unresolved: tuple[SemanticIs
     if state.repeated_issue_set:
         return "no_progress"
     return "completed_with_issues"
-
-
-def _evidence_issues(candidate: SemanticCandidate, workspace: EvidenceWorkspace) -> tuple[SemanticIssue, ...]:
-    issues: list[SemanticIssue] = []
-    for evidence in _all_evidence(candidate.quotation):
-        primary_reference = _workspace_reference(evidence.source_location or evidence.source_path, workspace)
-        superseded_reference = _workspace_reference(evidence.supersedes_source_path, workspace)
-        for reference, code, message in (
-            (
-                primary_reference,
-                "invalid_evidence_reference",
-                "The evidence reference does not resolve in the prepared source workspace.",
-            ),
-            (
-                superseded_reference,
-                "invalid_superseded_evidence_reference",
-                "The earlier evidence reference does not resolve in the prepared source workspace.",
-            ),
-        ):
-            if reference is None or not reference.startswith(("pdf:", "email:", "ocr:", "json:")):
-                continue
-            if workspace.has_reference(reference):
-                continue
-            issues.append(
-                SemanticIssue(
-                    category="provenance",
-                    severity="error",
-                    code=code,
-                    field_path=evidence.canonical_field,
-                    message=message,
-                    affected_fields=[evidence.canonical_field],
-                    evidence_targets=[reference],
-                )
-            )
-    return _deduplicate_issues(issues)
 
 
 def _workspace_reference(reference: str | None, workspace: EvidenceWorkspace) -> str | None:
@@ -378,6 +244,149 @@ def _model_telemetry(
         calls.append({"provider": provider_name, "model": model_name})
     calls[0]["duration_ms"] = duration_ms
     return tuple(calls)
+
+
+def _agent_middleware(limits: InvestigationLimits, fallback_models: tuple[Any, ...]) -> list[Any]:
+    middleware: list[Any] = [
+        ModelCallLimitMiddleware(run_limit=limits.model_calls, exit_behavior="end"),
+        ToolCallLimitMiddleware(tool_name="search_evidence", run_limit=limits.search_calls, exit_behavior="continue"),
+        ToolCallLimitMiddleware(
+            tool_name="inspect_evidence", run_limit=limits.inspection_calls, exit_behavior="continue"
+        ),
+        ToolCallLimitMiddleware(
+            tool_name="validate_candidate", run_limit=limits.validation_calls, exit_behavior="continue"
+        ),
+    ]
+    if fallback_models:
+        middleware.insert(0, ModelFallbackMiddleware(*fallback_models))
+    return middleware
+
+
+# --- Section 3: Candidate Evaluation & Validation Pipeline ---
+
+
+def inspect_semantic_candidate(
+    candidate: SemanticCandidate, _request: SemanticExtractionRequest
+) -> tuple[SemanticIssue, ...]:
+    """Run deterministic schema, commercial, and candidate-consistency checks."""
+
+    issues = [
+        SemanticIssue(
+            category="candidate_reported",
+            severity=issue.severity,
+            code=issue.code,
+            field_path=issue.field_path,
+            message=issue.message,
+            affected_fields=[issue.field_path],
+        )
+        for issue in candidate.quotation.review_issues
+    ]
+    commercial = apply_commercial_rules(candidate.quotation.model_copy(deep=True))
+    issues.extend(
+        SemanticIssue(
+            category="commercial",
+            severity=issue.severity,
+            code=issue.code,
+            field_path=issue.field_path,
+            message=issue.message,
+            affected_fields=[issue.field_path],
+        )
+        for issue in commercial.review_issues
+    )
+    if not candidate.quotation.line_items:
+        issues.append(
+            SemanticIssue(
+                category="completeness",
+                severity="error",
+                code="no_products_extracted",
+                field_path="line_items",
+                message="No product line was recovered from the prepared source.",
+                affected_fields=["line_items"],
+            )
+        )
+    return _deduplicate_issues(issues)
+
+
+def _evidence_issues(candidate: SemanticCandidate, workspace: EvidenceWorkspace) -> tuple[SemanticIssue, ...]:
+    issues: list[SemanticIssue] = []
+    for evidence in _all_evidence(candidate.quotation):
+        primary_reference = _workspace_reference(evidence.source_location or evidence.source_path, workspace)
+        superseded_reference = _workspace_reference(evidence.supersedes_source_path, workspace)
+        for reference, code, message in (
+            (
+                primary_reference,
+                "invalid_evidence_reference",
+                "The evidence reference does not resolve in the prepared source workspace.",
+            ),
+            (
+                superseded_reference,
+                "invalid_superseded_evidence_reference",
+                "The earlier evidence reference does not resolve in the prepared source workspace.",
+            ),
+        ):
+            if reference is None or not reference.startswith(("pdf:", "email:", "ocr:", "json:")):
+                continue
+            if workspace.has_reference(reference):
+                continue
+            issues.append(
+                SemanticIssue(
+                    category="provenance",
+                    severity="error",
+                    code=code,
+                    field_path=evidence.canonical_field,
+                    message=message,
+                    affected_fields=[evidence.canonical_field],
+                    evidence_targets=[reference],
+                )
+            )
+    return _deduplicate_issues(issues)
+
+
+def _issues_for(state: _InvestigationState, candidate: SemanticCandidate) -> tuple[SemanticIssue, ...]:
+    """Evaluate a candidate without changing progress-tracking state."""
+
+    issues = [*state.inspector(candidate, state.request), *_evidence_issues(candidate, state.workspace)]
+    if state.workspace.mode == "retrieval" and not state.inspected_references:
+        issues.append(
+            SemanticIssue(
+                category="coverage",
+                severity="warning",
+                code="source_not_investigated",
+                field_path="source",
+                message="The source is indexed for retrieval; inspect relevant evidence before finalizing.",
+                affected_fields=["source"],
+                evidence_targets=list(state.workspace.references()[:6]),
+            )
+        )
+    return _deduplicate_issues(issues)
+
+
+def _validate_candidate(state: _InvestigationState, candidate: SemanticCandidate) -> dict[str, Any]:
+    state.validation_count += 1
+    issues = list(_issues_for(state, candidate))
+    issue_ids = {issue.id for issue in issues if issue.id}
+    persistent = sorted(issue_ids & state.previous_issue_ids)
+    resolved = sorted(state.previous_issue_ids - issue_ids)
+    new = sorted(issue_ids - state.previous_issue_ids)
+    state.repeated_issue_set = bool(issue_ids) and issue_ids == state.previous_issue_ids
+    state.previous_issue_ids = issue_ids
+    return {
+        "valid": not issues,
+        "issues": [issue.model_dump(mode="json") for issue in issues],
+        "resolved_issue_ids": resolved,
+        "persistent_issue_ids": persistent,
+        "new_issue_ids": new,
+        "progress": "stalled" if state.repeated_issue_set else "continue",
+        "budget": _budget_state(state),
+        "instruction": (
+            "Return the best supported result with these unresolved issues."
+            if state.repeated_issue_set or _wall_clock_expired(state)
+            else "Use search_evidence or inspect_evidence to obtain only the evidence needed to revise the candidate."
+        ),
+    }
+
+
+# --- Section 4: Semantic Investigation Orchestration Entry Point ---
 
 
 def run_semantic_investigation(

@@ -36,6 +36,102 @@ class EvidenceChunk:
         return " ".join(self.text.split())[:length]
 
 
+# --- Section 1: Data Chunking & Search Term Extraction Helpers ---
+
+
+def _terms(value: str) -> tuple[str, ...]:
+    return tuple(term for term in re.findall(r"[\w.-]+", value.casefold()) if len(term) > 1)
+
+
+def _json_chunks(payload: Any, path: str = "$") -> list[EvidenceChunk]:
+    encoded = json.dumps(payload, default=str, sort_keys=True)
+    if len(encoded) <= CHUNK_CHARACTER_LIMIT:
+        return [EvidenceChunk(reference=f"json:{path}", text=encoded, kind="json_node", metadata={"path": path})]
+    if isinstance(payload, list):
+        chunks: list[EvidenceChunk] = []
+        for index, item in enumerate(payload):
+            chunks.extend(_json_chunks(item, f"{path}[{index}]"))
+        return chunks
+    if isinstance(payload, dict):
+        chunks = []
+        for key, item in payload.items():
+            escaped = str(key).replace("\\", "\\\\").replace("'", "\\'")
+            child_path = f"{path}.{key}" if str(key).replace("_", "").isalnum() else f"{path}['{escaped}']"
+            chunks.extend(_json_chunks(item, child_path))
+        return chunks
+    return [EvidenceChunk(reference=f"json:{path}", text=encoded, kind="json_value", metadata={"path": path})]
+
+
+def _page_chunks(pages: Any, *, prefix: str) -> list[EvidenceChunk]:
+    chunks: list[EvidenceChunk] = []
+    for fallback_page, page in enumerate(pages if isinstance(pages, list) else [], start=1):
+        if not isinstance(page, dict):
+            continue
+        page_number = page.get("page_number", fallback_page)
+        text = str(page.get("text", ""))
+        layout = page.get("liteparse")
+        page_payload: dict[str, Any] = {"text": text}
+        if layout is not None:
+            page_payload["native_layout"] = layout
+        page_text = json.dumps(page_payload, default=str, sort_keys=True)
+        chunks.append(
+            EvidenceChunk(
+                reference=f"{prefix}:page:{page_number}",
+                text=page_text,
+                kind="page",
+                metadata={
+                    "page_number": page_number,
+                    "start_offset": 0,
+                    "end_offset": len(page_text),
+                    "atomic": True,
+                    "has_native_layout": layout is not None,
+                },
+            )
+        )
+    return chunks
+
+
+def _text_chunks(
+    text: str,
+    *,
+    prefix: str,
+    kind: str,
+    metadata: dict[str, Any] | None = None,
+) -> list[EvidenceChunk]:
+    if not text:
+        return []
+    base_metadata = metadata or {}
+    chunks = []
+    for document in TEXT_SPLITTER.create_documents([text]):
+        start = int(document.metadata["start_index"])
+        end = start + len(document.page_content)
+        chunks.append(
+            EvidenceChunk(
+                reference=f"{prefix}:{start}-{end}",
+                text=document.page_content,
+                kind=kind,
+                metadata={**base_metadata, "start_offset": start, "end_offset": end},
+            )
+        )
+    return chunks
+
+
+def _chunks_for(source_type: str, context: dict[str, Any]) -> list[EvidenceChunk]:
+    if source_type == "json" and isinstance(context.get("source_json"), dict):
+        return _json_chunks(context["source_json"])
+    if source_type == "pdf":
+        return _page_chunks(context.get("pages", []), prefix="pdf")
+    if source_type in {"ocr", "vision_direct", "ocr_assisted"}:
+        return _page_chunks(context.get("pages", []), prefix="ocr")
+    if source_type == "email":
+        body = str(context.get("body_text", ""))
+        return _text_chunks(body, prefix="email:body", kind="email_block")
+    return _text_chunks(json.dumps(context, default=str, sort_keys=True), prefix="source", kind="source_text")
+
+
+# --- Section 2: Unified Evidence Workspace ---
+
+
 class EvidenceWorkspace:
     """Source-specific chunks behind a uniform search and inspection interface."""
 
@@ -153,93 +249,3 @@ class EvidenceWorkspace:
             if isinstance(chunk.metadata.get("path"), str) and path.startswith(chunk.metadata["path"])
         ]
         return max(containing, key=lambda chunk: len(str(chunk.metadata["path"])), default=None)
-
-
-def _chunks_for(source_type: str, context: dict[str, Any]) -> list[EvidenceChunk]:
-    if source_type == "json" and isinstance(context.get("source_json"), dict):
-        return _json_chunks(context["source_json"])
-    if source_type == "pdf":
-        return _page_chunks(context.get("pages", []), prefix="pdf")
-    if source_type in {"ocr", "vision_direct", "ocr_assisted"}:
-        return _page_chunks(context.get("pages", []), prefix="ocr")
-    if source_type == "email":
-        body = str(context.get("body_text", ""))
-        return _text_chunks(body, prefix="email:body", kind="email_block")
-    return _text_chunks(json.dumps(context, default=str, sort_keys=True), prefix="source", kind="source_text")
-
-
-def _json_chunks(payload: Any, path: str = "$") -> list[EvidenceChunk]:
-    encoded = json.dumps(payload, default=str, sort_keys=True)
-    if len(encoded) <= CHUNK_CHARACTER_LIMIT:
-        return [EvidenceChunk(reference=f"json:{path}", text=encoded, kind="json_node", metadata={"path": path})]
-    if isinstance(payload, list):
-        chunks: list[EvidenceChunk] = []
-        for index, item in enumerate(payload):
-            chunks.extend(_json_chunks(item, f"{path}[{index}]"))
-        return chunks
-    if isinstance(payload, dict):
-        chunks = []
-        for key, item in payload.items():
-            escaped = str(key).replace("\\", "\\\\").replace("'", "\\'")
-            child_path = f"{path}.{key}" if str(key).replace("_", "").isalnum() else f"{path}['{escaped}']"
-            chunks.extend(_json_chunks(item, child_path))
-        return chunks
-    return [EvidenceChunk(reference=f"json:{path}", text=encoded, kind="json_value", metadata={"path": path})]
-
-
-def _page_chunks(pages: Any, *, prefix: str) -> list[EvidenceChunk]:
-    chunks: list[EvidenceChunk] = []
-    for fallback_page, page in enumerate(pages if isinstance(pages, list) else [], start=1):
-        if not isinstance(page, dict):
-            continue
-        page_number = page.get("page_number", fallback_page)
-        text = str(page.get("text", ""))
-        layout = page.get("liteparse")
-        page_payload: dict[str, Any] = {"text": text}
-        if layout is not None:
-            page_payload["native_layout"] = layout
-        page_text = json.dumps(page_payload, default=str, sort_keys=True)
-        chunks.append(
-            EvidenceChunk(
-                reference=f"{prefix}:page:{page_number}",
-                text=page_text,
-                kind="page",
-                metadata={
-                    "page_number": page_number,
-                    "start_offset": 0,
-                    "end_offset": len(page_text),
-                    "atomic": True,
-                    "has_native_layout": layout is not None,
-                },
-            )
-        )
-    return chunks
-
-
-def _text_chunks(
-    text: str,
-    *,
-    prefix: str,
-    kind: str,
-    metadata: dict[str, Any] | None = None,
-) -> list[EvidenceChunk]:
-    if not text:
-        return []
-    base_metadata = metadata or {}
-    chunks = []
-    for document in TEXT_SPLITTER.create_documents([text]):
-        start = int(document.metadata["start_index"])
-        end = start + len(document.page_content)
-        chunks.append(
-            EvidenceChunk(
-                reference=f"{prefix}:{start}-{end}",
-                text=document.page_content,
-                kind=kind,
-                metadata={**base_metadata, "start_offset": start, "end_offset": end},
-            )
-        )
-    return chunks
-
-
-def _terms(value: str) -> tuple[str, ...]:
-    return tuple(term for term in re.findall(r"[\w.-]+", value.casefold()) if len(term) > 1)

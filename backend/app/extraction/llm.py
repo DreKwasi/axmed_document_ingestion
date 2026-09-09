@@ -94,7 +94,130 @@ JSON_CANONICAL_FIELD_DICTIONARY = {
 }
 
 
-# --- Section 2: Semantic Extraction ---
+# --- Section 2: Candidate Inspection & Telemetry Helpers ---
+
+
+_MISSING = object()
+
+
+def _canonical_field_value(quotation: Any, field_path: str) -> Any:
+    """Resolve a canonical dotted/indexed field path against a quotation dump."""
+
+    current: Any = quotation.model_dump(mode="json")
+    for segment in field_path.split("."):
+        field_name, separator, index_text = segment.partition("[")
+        if not isinstance(current, dict) or field_name not in current:
+            return _MISSING
+        current = current[field_name]
+        if not separator:
+            continue
+        if not index_text.endswith("]") or not index_text[:-1].isdigit() or not isinstance(current, list):
+            return _MISSING
+        index = int(index_text[:-1])
+        if index >= len(current):
+            return _MISSING
+        current = current[index]
+    return current
+
+
+def _equivalent_value(candidate_value: Any, source_value: Any) -> bool:
+    """Compare direct JSON fact values without accepting a semantic transformation."""
+
+    if isinstance(candidate_value, bool) or isinstance(source_value, bool):
+        return candidate_value is source_value
+    if isinstance(candidate_value, (int, float, str)) and isinstance(source_value, (int, float, str)):
+        try:
+            return Decimal(str(candidate_value)) == Decimal(str(source_value))
+        except InvalidOperation:
+            return candidate_value == source_value
+    return candidate_value == source_value
+
+
+def inspect_candidate(candidate: SemanticCandidate, request: SemanticExtractionRequest) -> tuple[SemanticIssue, ...]:
+    """Apply the shared deterministic checks and JSON-specific grounding checks."""
+
+    issues = list(inspect_semantic_candidate(candidate, request))
+    if request.source_type != "json":
+        return tuple(issues)
+
+    from app.extraction.json import JsonSourceFact, validate_source_facts
+
+    facts = [JsonSourceFact.model_validate(fact) for fact in candidate.source_facts]
+    valid_facts, invalid_paths = validate_source_facts(request.context["source_json"], facts)
+    issues.extend(
+        SemanticIssue(
+            category="provenance",
+            severity="error",
+            code="invalid_source_claim",
+            field_path=path,
+            message="The claimed JSONPath does not resolve to the supplied source value.",
+            affected_fields=[path],
+        )
+        for path in invalid_paths
+    )
+    for fact in valid_facts:
+        if not fact.canonical_field or fact.extraction_method != "direct_json":
+            continue
+        candidate_value = _canonical_field_value(candidate.quotation, fact.canonical_field)
+        if candidate_value is _MISSING:
+            issues.append(
+                SemanticIssue(
+                    category="candidate_consistency",
+                    severity="error",
+                    code="mapped_source_fact_has_no_candidate_field",
+                    field_path=fact.canonical_field,
+                    message="A grounded source fact maps to a canonical field that the candidate did not populate.",
+                    affected_fields=[fact.canonical_field],
+                    evidence_targets=[f"json:{fact.source_path}"],
+                )
+            )
+        elif not _equivalent_value(candidate_value, fact.value):
+            issues.append(
+                SemanticIssue(
+                    category="candidate_consistency",
+                    severity="error",
+                    code="mapped_source_fact_value_mismatch",
+                    field_path=fact.canonical_field,
+                    message="The populated canonical field differs from its grounded source fact.",
+                    affected_fields=[fact.canonical_field],
+                    evidence_targets=[f"json:{fact.source_path}"],
+                )
+            )
+    return tuple(issues)
+
+
+def _sum_optional_counts(*values: int | None) -> int | None:
+    """Sum provider token counts while preserving an entirely unavailable measurement."""
+    present = [value for value in values if value is not None]
+    return sum(present) if present else None
+
+
+def _sum_optional_decimals(*values: Decimal | None) -> Decimal | None:
+    """Sum provider costs while preserving an entirely unavailable measurement."""
+    present = [value for value in values if value is not None]
+    return sum(present, start=Decimal("0")) if present else None
+
+
+def aggregate_agent_telemetry(result: Any) -> dict[str, Any]:
+    """Combine agent model-call telemetry for existing persistence records."""
+
+    calls = result.telemetry
+    return {
+        "provider": calls[0].get("provider", "google-gemini") if calls else "google-gemini",
+        "model": calls[0].get("model") if calls else None,
+        "prompt_version": CANONICAL_QUOTATION_PROMPT_VERSION,
+        "duration_ms": sum(int(call.get("duration_ms") or 0) for call in calls),
+        "input_tokens": _sum_optional_counts(*(call.get("input_tokens") for call in calls)),
+        "output_tokens": _sum_optional_counts(*(call.get("output_tokens") for call in calls)),
+        "estimated_cost_usd": _sum_optional_decimals(*(call.get("estimated_cost_usd") for call in calls)),
+        "model_call_count": len(calls),
+        "validation_count": result.validation_count,
+        "unresolved_issue_count": len(result.unresolved_issues),
+        "termination_reason": result.termination_reason,
+    }
+
+
+# --- Section 3: Semantic Extraction Orchestration Entry Point ---
 
 
 def extract_semantics(
@@ -176,125 +299,3 @@ def extract_semantics(
         provider_name=provider_name,
         fallback_models=fallback_models,
     )
-
-
-def inspect_candidate(candidate: SemanticCandidate, request: SemanticExtractionRequest) -> tuple[SemanticIssue, ...]:
-    """Apply the shared deterministic checks and JSON-specific grounding checks."""
-
-    issues = list(inspect_semantic_candidate(candidate, request))
-    if request.source_type != "json":
-        return tuple(issues)
-
-    from app.extraction.json import JsonSourceFact, validate_source_facts
-
-    facts = [JsonSourceFact.model_validate(fact) for fact in candidate.source_facts]
-    valid_facts, invalid_paths = validate_source_facts(request.context["source_json"], facts)
-    issues.extend(
-        SemanticIssue(
-            category="provenance",
-            severity="error",
-            code="invalid_source_claim",
-            field_path=path,
-            message="The claimed JSONPath does not resolve to the supplied source value.",
-            affected_fields=[path],
-        )
-        for path in invalid_paths
-    )
-    for fact in valid_facts:
-        if not fact.canonical_field or fact.extraction_method != "direct_json":
-            continue
-        candidate_value = _canonical_field_value(candidate.quotation, fact.canonical_field)
-        if candidate_value is _MISSING:
-            issues.append(
-                SemanticIssue(
-                    category="candidate_consistency",
-                    severity="error",
-                    code="mapped_source_fact_has_no_candidate_field",
-                    field_path=fact.canonical_field,
-                    message="A grounded source fact maps to a canonical field that the candidate did not populate.",
-                    affected_fields=[fact.canonical_field],
-                    evidence_targets=[f"json:{fact.source_path}"],
-                )
-            )
-        elif not _equivalent_value(candidate_value, fact.value):
-            issues.append(
-                SemanticIssue(
-                    category="candidate_consistency",
-                    severity="error",
-                    code="mapped_source_fact_value_mismatch",
-                    field_path=fact.canonical_field,
-                    message="The populated canonical field differs from its grounded source fact.",
-                    affected_fields=[fact.canonical_field],
-                    evidence_targets=[f"json:{fact.source_path}"],
-                )
-            )
-    return tuple(issues)
-
-
-def aggregate_agent_telemetry(result: Any) -> dict[str, Any]:
-    """Combine agent model-call telemetry for existing persistence records."""
-
-    calls = result.telemetry
-    return {
-        "provider": calls[0].get("provider", "google-gemini") if calls else "google-gemini",
-        "model": calls[0].get("model") if calls else None,
-        "prompt_version": CANONICAL_QUOTATION_PROMPT_VERSION,
-        "duration_ms": sum(int(call.get("duration_ms") or 0) for call in calls),
-        "input_tokens": _sum_optional_counts(*(call.get("input_tokens") for call in calls)),
-        "output_tokens": _sum_optional_counts(*(call.get("output_tokens") for call in calls)),
-        "estimated_cost_usd": _sum_optional_decimals(*(call.get("estimated_cost_usd") for call in calls)),
-        "model_call_count": len(calls),
-        "validation_count": result.validation_count,
-        "unresolved_issue_count": len(result.unresolved_issues),
-        "termination_reason": result.termination_reason,
-    }
-
-# --- Section 3: Agent Telemetry Aggregation ---
-
-
-_MISSING = object()
-
-
-def _canonical_field_value(quotation: Any, field_path: str) -> Any:
-    """Resolve a canonical dotted/indexed field path against a quotation dump."""
-
-    current: Any = quotation.model_dump(mode="json")
-    for segment in field_path.split("."):
-        field_name, separator, index_text = segment.partition("[")
-        if not isinstance(current, dict) or field_name not in current:
-            return _MISSING
-        current = current[field_name]
-        if not separator:
-            continue
-        if not index_text.endswith("]") or not index_text[:-1].isdigit() or not isinstance(current, list):
-            return _MISSING
-        index = int(index_text[:-1])
-        if index >= len(current):
-            return _MISSING
-        current = current[index]
-    return current
-
-
-def _equivalent_value(candidate_value: Any, source_value: Any) -> bool:
-    """Compare direct JSON fact values without accepting a semantic transformation."""
-
-    if isinstance(candidate_value, bool) or isinstance(source_value, bool):
-        return candidate_value is source_value
-    if isinstance(candidate_value, (int, float, str)) and isinstance(source_value, (int, float, str)):
-        try:
-            return Decimal(str(candidate_value)) == Decimal(str(source_value))
-        except InvalidOperation:
-            return candidate_value == source_value
-    return candidate_value == source_value
-
-
-def _sum_optional_counts(*values: int | None) -> int | None:
-    """Sum provider token counts while preserving an entirely unavailable measurement."""
-    present = [value for value in values if value is not None]
-    return sum(present) if present else None
-
-
-def _sum_optional_decimals(*values: Decimal | None) -> Decimal | None:
-    """Sum provider costs while preserving an entirely unavailable measurement."""
-    present = [value for value in values if value is not None]
-    return sum(present, start=Decimal("0")) if present else None

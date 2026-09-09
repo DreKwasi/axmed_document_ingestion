@@ -72,7 +72,179 @@ class MappingAssessment:
     issues: tuple[MappingIssue, ...]
 
 
-# --- Section 2: Extraction Quality Assessment Pipeline ---
+# --- Section 2: Primitive Scoring, Arithmetic & Path Analysis Helpers ---
+
+
+def _average_score(values: tuple[float, ...], *, default: int) -> int:
+    """Average normalized 0.0-1.0 OCR scores into an integer percentage."""
+    normalized = [max(0.0, min(1.0, float(value))) for value in values]
+    return round(sum(normalized) / len(normalized) * 100) if normalized else default
+
+
+def _band(score: int) -> str:
+    """Categorize numeric score into High (>=85), Medium (>=65), or Low (<65)."""
+    return "High" if score >= 85 else "Medium" if score >= 65 else "Low"
+
+
+def _approximately_equal(left: Decimal, right: Decimal) -> bool:
+    """Tolerate fractional cent differences due to rounding."""
+    return abs(left - right) <= max(Decimal("0.01"), abs(right) * Decimal("0.001"))
+
+
+def _issue_applies_to_field(issue_path: str, field_path: str) -> bool:
+    """Check if a review issue applies directly or to a parent/child of a field path."""
+    return (
+        issue_path == field_path or issue_path.startswith(f"{field_path}.") or field_path.startswith(f"{issue_path}.")
+    )
+
+
+def _is_mapping_issue(severity: str, code: str) -> bool:
+    """Determine whether an issue code signals mapping ambiguity rather than missing data."""
+    del severity
+    return any(token in code.casefold() for token in ("conflict", "ambiguous", "mapping", "misassigned"))
+
+
+def _source_path_contradicts_field(source_path: str | None, field_path: str) -> bool:
+    """Reject category mismatches such as a source quantity mapped as a price."""
+    if not source_path:
+        return False
+    categories = {
+        "price": ("price", "cost", "amount", "rate"),
+        "quantity": ("quantity", "qty", "moq", "minimum", "units"),
+        "currency": ("currency", "curr"),
+        "packaging": ("pack", "carton", "blister", "presentation"),
+    }
+    normalized_path = source_path.casefold().replace("_", " ").replace("-", " ")
+    normalized_field = field_path.casefold().replace("_", " ").replace("-", " ")
+    source_category = next(
+        (name for name, tokens in categories.items() if any(token in normalized_path for token in tokens)), None
+    )
+    field_category = next(
+        (name for name, tokens in categories.items() if any(token in normalized_field for token in tokens)), None
+    )
+    return source_category is not None and field_category is not None and source_category != field_category
+
+
+def _section_for_path(path: str) -> str:
+    """Derive functional UI section name from a canonical field path."""
+    if ".pricing." in path:
+        return "pricing"
+    if ".quantity." in path or ".packaging." in path:
+        return "quantity_packaging"
+    if ".supply." in path:
+        return "supply"
+    if ".regulatory." in path:
+        return "regulatory"
+    if ".product." in path:
+        return "product"
+    return "document"
+
+
+def _field_label(path: str) -> str:
+    """Convert dotted field identifier into human-readable field label."""
+    return path.rsplit(".", 1)[-1].replace("_", " ").replace("[", " ").replace("]", "").strip()
+
+
+# --- Section 3: Evidence Extraction & Field Classification Helpers ---
+
+
+def _flatten_source_values(value: object, path: str = "") -> list[tuple[str, object]]:
+    """Flatten nested dicts and lists into dotted JSONPath-like key-value pairs."""
+    excluded = {"evidence", "review_issues", "review_status", "system_decision", "revision", "schema_version"}
+    if isinstance(value, dict):
+        result: list[tuple[str, object]] = []
+        for key, child in value.items():
+            if key in excluded or key == "normalized_price":
+                continue
+            result.extend(_flatten_source_values(child, f"{path}.{key}" if path else key))
+        return result
+    if isinstance(value, list):
+        return [item for index, child in enumerate(value) for item in _flatten_source_values(child, f"{path}[{index}]")]
+    return [(path, value)] if value is not None else []
+
+
+def _matching_evidence(field_path: str, evidence: dict[str, Evidence]) -> Evidence | None:
+    """Find the most specific matching evidence record for a field path."""
+    candidates = (
+        (path, item)
+        for path, item in evidence.items()
+        if field_path == path or field_path.startswith(f"{path}.") or field_path.startswith(f"{path}[")
+    )
+    return max(candidates, key=lambda item: len(item[0]), default=("", None))[1]
+
+
+def _commercial_validation(line_item: LineItem) -> dict[str, str]:
+    """Perform mathematical cross-checks between quantity, unit price, and extended price."""
+    states: dict[str, str] = {}
+    quantity, unit_price, extended_price = (
+        line_item.quantity.quoted_quantity,
+        line_item.pricing.quoted_price.amount,
+        line_item.pricing.extended_price,
+    )
+    if quantity is not None and unit_price is not None and extended_price is not None:
+        calculated = (
+            quantity * unit_price * (Decimal("1") - (line_item.pricing.discount or Decimal("0")) / Decimal("100"))
+        )
+        state = "passed" if _approximately_equal(calculated, extended_price) else "conflicting"
+        for suffix in (
+            "quantity.quoted_quantity",
+            "pricing.quoted_price.amount",
+            "pricing.discount",
+            "pricing.extended_price",
+        ):
+            states[suffix] = state
+    units_per_pack, pack_price = line_item.packaging.units_per_pack, line_item.pricing.pack_price
+    if (
+        unit_price is not None
+        and units_per_pack is not None
+        and pack_price is not None
+        and line_item.pricing.quoted_price.uom == line_item.packaging.unit_label
+    ):
+        state = "passed" if _approximately_equal(unit_price * Decimal(units_per_pack), pack_price) else "conflicting"
+        for suffix in ("pricing.quoted_price.amount", "packaging.units_per_pack", "pricing.pack_price"):
+            if states.get(suffix) != "conflicting":
+                states[suffix] = state
+    return states
+
+
+def _classify_mapping(
+    field_path: str, evidence: Evidence | None, issues: tuple, validation: str = "unavailable"
+) -> FieldMappingConfidence:
+    """Classify confidence score and justification for a single mapped field."""
+    assert evidence is not None
+    matching = [issue for issue in issues if _issue_applies_to_field(issue.field_path, field_path)]
+    if validation == "conflicting" or any(
+        any(token in issue.code.casefold() for token in ("conflict", "ambiguous", "mapping", "misassigned"))
+        for issue in matching
+    ):
+        return FieldMappingConfidence(
+            30, "Low", "the source-to-schema association conflicts with another value or validation"
+        )
+    if _source_path_contradicts_field(evidence.source_path, field_path):
+        return FieldMappingConfidence(30, "Low", "the source key describes a different kind of value")
+    if evidence.extraction_method in STRONG_MAPPING_METHODS:
+        score, reason = 100, "the source explicitly identifies this value as this field"
+    elif evidence and any(token in (evidence.source_location or "").casefold() for token in ("row", "column", "cell")):
+        score, reason = (
+            92,
+            "the value is linked to a specific source row or cell, "
+            "but has no second value to confirm it",
+        )
+    elif evidence and (evidence.source_path or evidence.source_location):
+        score, reason = (
+            82,
+            "the value was found in the source, but the source did not "
+            "explicitly identify it as this field",
+        )
+    else:
+        score, reason = 70, "the value was extracted, but its exact source location was not recorded"
+    if validation == "passed":
+        score = min(100, score + 5)
+        reason += "; related values agree"
+    return FieldMappingConfidence(score, _band(score), reason)
+
+
+# --- Section 4: Extraction Quality & Schema Mapping Confidence Policies ---
 
 
 def assess_extraction_confidence(signals: ConfidenceSignals) -> ExtractionConfidence | None:
@@ -136,9 +308,6 @@ def assess_extraction_confidence(signals: ConfidenceSignals) -> ExtractionConfid
     )
     score = round(sum(factor.weight * factor.score for factor in factors) / 100)
     return ExtractionConfidence(score, _band(score), factors)
-
-
-# --- Section 3: Schema Mapping Confidence Assessment Pipeline ---
 
 
 def assess_mapping_confidence(quotation: CanonicalQuotation) -> MappingAssessment:
@@ -224,175 +393,3 @@ def mapping_confidence_for_path(field_path: str, assessment: MappingAssessment) 
         key=lambda item: len(item[0]),
         default=("", None),
     )[1]
-
-
-def _classify_mapping(
-    field_path: str, evidence: Evidence | None, issues: tuple, validation: str = "unavailable"
-) -> FieldMappingConfidence:
-    """Classify confidence score and justification for a single mapped field."""
-    assert evidence is not None
-    matching = [issue for issue in issues if _issue_applies_to_field(issue.field_path, field_path)]
-    if validation == "conflicting" or any(
-        any(token in issue.code.casefold() for token in ("conflict", "ambiguous", "mapping", "misassigned"))
-        for issue in matching
-    ):
-        return FieldMappingConfidence(
-            30, "Low", "the source-to-schema association conflicts with another value or validation"
-        )
-    if _source_path_contradicts_field(evidence.source_path, field_path):
-        return FieldMappingConfidence(30, "Low", "the source key describes a different kind of value")
-    if evidence.extraction_method in STRONG_MAPPING_METHODS:
-        score, reason = 100, "the source explicitly identifies this value as this field"
-    elif evidence and any(token in (evidence.source_location or "").casefold() for token in ("row", "column", "cell")):
-        score, reason = (
-            92,
-            "the value is linked to a specific source row or cell, "
-            "but has no second value to confirm it",
-        )
-    elif evidence and (evidence.source_path or evidence.source_location):
-        score, reason = (
-            82,
-            "the value was found in the source, but the source did not "
-            "explicitly identify it as this field",
-        )
-    else:
-        score, reason = 70, "the value was extracted, but its exact source location was not recorded"
-    if validation == "passed":
-        score = min(100, score + 5)
-        reason += "; related values agree"
-    return FieldMappingConfidence(score, _band(score), reason)
-
-
-# --- Section 4: Commercial Value Consistency & Math Cross-Checks ---
-
-
-def _flatten_source_values(value: object, path: str = "") -> list[tuple[str, object]]:
-    """Flatten nested dicts and lists into dotted JSONPath-like key-value pairs."""
-    excluded = {"evidence", "review_issues", "review_status", "system_decision", "revision", "schema_version"}
-    if isinstance(value, dict):
-        result: list[tuple[str, object]] = []
-        for key, child in value.items():
-            if key in excluded or key == "normalized_price":
-                continue
-            result.extend(_flatten_source_values(child, f"{path}.{key}" if path else key))
-        return result
-    if isinstance(value, list):
-        return [item for index, child in enumerate(value) for item in _flatten_source_values(child, f"{path}[{index}]")]
-    return [(path, value)] if value is not None else []
-
-
-def _matching_evidence(field_path: str, evidence: dict[str, Evidence]) -> Evidence | None:
-    """Find the most specific matching evidence record for a field path."""
-    candidates = (
-        (path, item)
-        for path, item in evidence.items()
-        if field_path == path or field_path.startswith(f"{path}.") or field_path.startswith(f"{path}[")
-    )
-    return max(candidates, key=lambda item: len(item[0]), default=("", None))[1]
-
-
-def _commercial_validation(line_item: LineItem) -> dict[str, str]:
-    """Perform mathematical cross-checks between quantity, unit price, and extended price."""
-    states: dict[str, str] = {}
-    quantity, unit_price, extended_price = (
-        line_item.quantity.quoted_quantity,
-        line_item.pricing.quoted_price.amount,
-        line_item.pricing.extended_price,
-    )
-    if quantity is not None and unit_price is not None and extended_price is not None:
-        calculated = (
-            quantity * unit_price * (Decimal("1") - (line_item.pricing.discount or Decimal("0")) / Decimal("100"))
-        )
-        state = "passed" if _approximately_equal(calculated, extended_price) else "conflicting"
-        for suffix in (
-            "quantity.quoted_quantity",
-            "pricing.quoted_price.amount",
-            "pricing.discount",
-            "pricing.extended_price",
-        ):
-            states[suffix] = state
-    units_per_pack, pack_price = line_item.packaging.units_per_pack, line_item.pricing.pack_price
-    if (
-        unit_price is not None
-        and units_per_pack is not None
-        and pack_price is not None
-        and line_item.pricing.quoted_price.uom == line_item.packaging.unit_label
-    ):
-        state = "passed" if _approximately_equal(unit_price * Decimal(units_per_pack), pack_price) else "conflicting"
-        for suffix in ("pricing.quoted_price.amount", "packaging.units_per_pack", "pricing.pack_price"):
-            if states.get(suffix) != "conflicting":
-                states[suffix] = state
-    return states
-
-
-def _approximately_equal(left: Decimal, right: Decimal) -> bool:
-    """Tolerate fractional cent differences due to rounding."""
-    return abs(left - right) <= max(Decimal("0.01"), abs(right) * Decimal("0.001"))
-
-
-def _average_score(values: tuple[float, ...], *, default: int) -> int:
-    """Average normalized 0.0-1.0 OCR scores into an integer percentage."""
-    normalized = [max(0.0, min(1.0, float(value))) for value in values]
-    return round(sum(normalized) / len(normalized) * 100) if normalized else default
-
-
-def _band(score: int) -> str:
-    """Categorize numeric score into High (>=85), Medium (>=65), or Low (<65)."""
-    return "High" if score >= 85 else "Medium" if score >= 65 else "Low"
-
-
-# --- Section 5: Path Parsing, Category Conflict & Labeling Utilities ---
-
-
-def _issue_applies_to_field(issue_path: str, field_path: str) -> bool:
-    """Check if a review issue applies directly or to a parent/child of a field path."""
-    return (
-        issue_path == field_path or issue_path.startswith(f"{field_path}.") or field_path.startswith(f"{issue_path}.")
-    )
-
-
-def _is_mapping_issue(severity: str, code: str) -> bool:
-    """Determine whether an issue code signals mapping ambiguity rather than missing data."""
-    del severity
-    return any(token in code.casefold() for token in ("conflict", "ambiguous", "mapping", "misassigned"))
-
-
-def _source_path_contradicts_field(source_path: str | None, field_path: str) -> bool:
-    """Reject category mismatches such as a source quantity mapped as a price."""
-    if not source_path:
-        return False
-    categories = {
-        "price": ("price", "cost", "amount", "rate"),
-        "quantity": ("quantity", "qty", "moq", "minimum", "units"),
-        "currency": ("currency", "curr"),
-        "packaging": ("pack", "carton", "blister", "presentation"),
-    }
-    normalized_path = source_path.casefold().replace("_", " ").replace("-", " ")
-    normalized_field = field_path.casefold().replace("_", " ").replace("-", " ")
-    source_category = next(
-        (name for name, tokens in categories.items() if any(token in normalized_path for token in tokens)), None
-    )
-    field_category = next(
-        (name for name, tokens in categories.items() if any(token in normalized_field for token in tokens)), None
-    )
-    return source_category is not None and field_category is not None and source_category != field_category
-
-
-def _section_for_path(path: str) -> str:
-    """Derive functional UI section name from a canonical field path."""
-    if ".pricing." in path:
-        return "pricing"
-    if ".quantity." in path or ".packaging." in path:
-        return "quantity_packaging"
-    if ".supply." in path:
-        return "supply"
-    if ".regulatory." in path:
-        return "regulatory"
-    if ".product." in path:
-        return "product"
-    return "document"
-
-
-def _field_label(path: str) -> str:
-    """Convert dotted field identifier into human-readable field label."""
-    return path.rsplit(".", 1)[-1].replace("_", " ").replace("[", " ").replace("]", "").strip()
