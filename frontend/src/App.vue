@@ -79,9 +79,19 @@ function dismissToast() {
 
 // --- Section 2: Computed Getters ---
 
-const selectedDocument = computed(() =>
-  documents.value.find((document) => document.id === selectedDocumentId.value) ?? null
-);
+const selectedDocument = computed(() => {
+  const document = documents.value.find((item) => item.id === selectedDocumentId.value);
+  if (!document || !selectedApproach.value) return document ?? null;
+  const attempt = document.image_extraction_attempts?.find((item) => item.approach === selectedApproach.value);
+  if (attempt?.product_count === 0 && (attempt.extraction_confidence?.score ?? 100) < 50) {
+    return {
+      ...document,
+      status: "auto_rejected",
+      failure_reason: document.failure_reason || "Material is not readable enough to use safely.",
+    };
+  }
+  return document;
+});
 
 const selectedLine = computed(() =>
   selectedDocument.value?.quotation?.line_items[selectedLineIndex.value] ?? null

@@ -33,7 +33,7 @@ const allSourceRows = computed(() => props.documents.flatMap((document) => {
         source_name: `${sourceName(document)} — ${attempt.approach === "ocr_assisted" ? "OCR-assisted" : "Direct vision"}`,
         extraction_confidence: attemptConfidence(attempt),
         mapping_confidence: attempt.mapping_confidence,
-        status: attempt.status === "failed" ? "failed" : document.status,
+        status: attemptStatus(document, attempt),
         product_counts: { extracted: attempt.product_count, failed: 0 },
       }));
     }
@@ -133,6 +133,17 @@ function productCounts(doc: DocumentResponse): { extracted: number; failed: numb
     extracted: doc.quotation?.line_items.length ?? 0,
     failed: 0,
   };
+}
+
+function attemptStatus(
+  document: DocumentResponse,
+  attempt: NonNullable<DocumentResponse["image_extraction_attempts"]>[number],
+): DocumentResponse["status"] {
+  if (attempt.status === "failed") return "failed";
+  if (attempt.product_count === 0 && (attempt.extraction_confidence?.score ?? 100) < 50) {
+    return "auto_rejected";
+  }
+  return document.status;
 }
 
 function isApproved(doc: DocumentResponse): boolean {
