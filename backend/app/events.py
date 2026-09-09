@@ -127,7 +127,12 @@ def serialize_event(event: ProcessingEventRecord) -> dict[str, Any]:
     message = metadata.get("message") or _EVENT_MESSAGES.get(event.stage, event.stage.replace("_", " ").capitalize())
     terminal_stages = {"image_extractions_ready_for_comparison", "image_extraction_opened_for_review"}
     phase = "Complete" if event.stage in terminal_stages else next(
-        (label for suffix, label in _EVENT_PHASES.items() if event.stage.endswith(f"_{suffix}")), "In progress"
+        (
+            label
+            for suffix, label in _EVENT_PHASES.items()
+            if event.stage.endswith(f"_{suffix}") or f"_{suffix}_" in event.stage
+        ),
+        "In progress",
     )
     return {
         "id": event.id,

@@ -1204,9 +1204,8 @@ def ingest_json(
     content_type: str | None,
     data: bytes,
     settings: Config,
-    extractor: JsonSemanticExtractor,
 ) -> DocumentRecord:
-    """Ingest a JSON quotation document, profile structure, and execute semantic extraction."""
+    """Validate and persist a JSON source before semantic work is scheduled."""
 
     validate_json_upload(filename, content_type, data, settings)
     payload = read_json(data)
@@ -1228,11 +1227,30 @@ def ingest_json(
         content_sha256=hashlib.sha256(data).hexdigest(),
         source_system=source_system,
         schema_version=str(source_schema_version) if source_schema_version is not None else None,
-        status="received",
+        status="pending_extraction",
     )
     session.add(document)
-    session.flush()
+    record_event(session, document_id=document.id, stage="json_extraction_queued")
+    session.commit()
+    session.refresh(document)
+    return document
 
+
+def consume_json_extraction(
+    session: Session,
+    document_id: str,
+    settings: Config,
+    extractor: JsonSemanticExtractor,
+) -> DocumentRecord:
+    """Run semantic JSON extraction after durable source persistence."""
+
+    document = session.get(DocumentRecord, document_id)
+    if document is None:
+        raise LookupError("Document not found.")
+    source_path = Path(settings.upload_dir) / Path(document.stored_filename).name
+    if not source_path.is_file():
+        raise LookupError("Stored source document not found.")
+    payload = read_json(source_path.read_bytes())
     return _extract_json_document(session, document, payload, extractor)
 
 
@@ -1337,7 +1355,7 @@ def _extract_json_document(
 
 
 def reextract_json_document(
-    session: Session, document_id: str, settings: Config, extractor: JsonSemanticExtractor
+    session: Session, document_id: str, settings: Config
 ) -> DocumentRecord:
     document = session.get(DocumentRecord, document_id)
     if document is None:
@@ -1347,13 +1365,14 @@ def reextract_json_document(
     source_path = Path(settings.upload_dir) / Path(document.stored_filename).name
     if not source_path.is_file():
         raise LookupError("Stored source document not found.")
-    payload = read_json(source_path.read_bytes())
     _clear_document_quotation(session, document.id)
     session.execute(delete(ExtractedSourceFactRecord).where(ExtractedSourceFactRecord.document_id == document.id))
     document.status = "pending_extraction"
     document.failure_reason = None
+    record_event(session, document_id=document.id, stage="json_extraction_queued")
     session.commit()
-    return _extract_json_document(session, document, payload, extractor)
+    session.refresh(document)
+    return document
 
 
 # --- Section 7: Document Lifecycle, Deletion & Serialization ---

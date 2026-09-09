@@ -4,12 +4,13 @@ import asyncio
 import json
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any
 from uuid import uuid4
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
@@ -24,6 +25,7 @@ from app.documents import (
     UploadValidationError,
     apply_review_action,
     begin_image_extraction_review,
+    consume_json_extraction,
     delete_document,
     ingest_email,
     ingest_failed_document,
@@ -97,31 +99,34 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
         autocommit=False,
         expire_on_commit=False,
     )
+    extraction_executor = ThreadPoolExecutor(
+        max_workers=active_settings.background_processing_max_workers,
+        thread_name_prefix="axmed-extraction",
+    )
     extractors: list[JsonSemanticExtractor] = [
         RecordedJsonSemanticExtractor(active_settings.recorded_json_extraction_dir)
     ]
-    if active_settings.gemini_api_key:
-        extractors.append(
-            LangChainJsonSemanticExtractor(
-                api_key=active_settings.gemini_api_key,
-                model=active_settings.gemini_model,
-                request_timeout_seconds=active_settings.gemini_request_timeout_seconds,
-            )
-        )
+    if active_settings.semantic_extraction_configured:
+        extractors.append(LangChainJsonSemanticExtractor(active_settings))
     extractor = json_extractor or (
         ChainedJsonSemanticExtractor(extractors) if len(extractors) > 1 else extractors[0]
     )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        # Uvicorn installs its logging configuration immediately before startup.
-        # Bind here as well so the dedicated lifecycle handler survives that setup.
+        # Migrations can initialize third-party logging after Uvicorn's setup.
+        # Bind the application namespace after that work so API, event, and
+        # extraction records all remain visible for the running service.
         global logger
-        logger = get_api_logger()
         active_settings.upload_dir.mkdir(parents=True, exist_ok=True)
         run_migrations(active_settings.database_url, PROJECT_ROOT)
+        logger = get_api_logger()
         logger.info("Axmed Document Intelligence API started")
-        yield
+        try:
+            yield
+        finally:
+            logger.info("Waiting for active extraction jobs to finish before shutdown")
+            extraction_executor.shutdown(wait=True, cancel_futures=False)
 
     app = FastAPI(title=active_settings.app_name, version="0.1.0", lifespan=lifespan)
     app.add_middleware(
@@ -163,7 +168,7 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
                 time.perf_counter() - started_at,
             )
         except Exception as error:
-            logger.error(
+            logger.exception(
                 "[Doc %s] !!! Background task FAILED: Email extraction (%s), error_type=%s",
                 document_id[:8],
                 extraction_id[:8],
@@ -183,7 +188,7 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
                 time.perf_counter() - started_at,
             )
         except Exception as error:
-            logger.error(
+            logger.exception(
                 "[Doc %s] !!! Background task FAILED: PDF extraction (%s), error_type=%s",
                 document_id[:8],
                 extraction_id[:8],
@@ -203,7 +208,7 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
                 time.perf_counter() - started_at,
             )
         except Exception as error:
-            logger.error(
+            logger.exception(
                 "[Doc %s] !!! Background task FAILED: OCR (%s), error_type=%s",
                 document_id[:8],
                 job_id[:8],
@@ -211,26 +216,47 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
             )
             _record_background_failure(document_id, "ocr_background_failed")
 
+    def _run_json_extraction(document_id: str) -> None:
+        started_at = time.perf_counter()
+        logger.info("[Doc %s] >>> Background task STARTED: JSON extraction", document_id[:8])
+        try:
+            with session_factory() as background_session:
+                consume_json_extraction(background_session, document_id, active_settings, extractor)
+            logger.info(
+                "[Doc %s] <<< Background task COMPLETED: JSON extraction in %.2fs",
+                document_id[:8],
+                time.perf_counter() - started_at,
+            )
+        except Exception as error:
+            logger.exception(
+                "[Doc %s] !!! Background task FAILED: JSON extraction, error_type=%s",
+                document_id[:8],
+                type(error).__name__,
+            )
+            _record_background_failure(document_id, "json_extraction_background_failed")
+
     def _schedule_document_processing(
-        background_tasks: BackgroundTasks,
         document: DocumentRecord,
         response: dict[str, Any],
     ) -> None:
         if not active_settings.background_processing_enabled:
             logger.warning("[Doc %s] Background processing disabled in settings.", document.id[:8])
             return
-        if document.source_system == "email" and response.get("email_extraction"):
+        if document.media_type == "application/json" and response.get("status") == "pending_extraction":
+            logger.info("[Doc %s] Submitting concurrent job: JSON extraction", document.id[:8])
+            extraction_executor.submit(_run_json_extraction, document.id)
+        elif document.source_system == "email" and response.get("email_extraction"):
             ext_id = response["email_extraction"]["id"]
-            logger.info("[Doc %s] Scheduling background task: email extraction (%s)", document.id[:8], ext_id[:8])
-            background_tasks.add_task(_run_email_extraction, ext_id, document.id)
+            logger.info("[Doc %s] Submitting concurrent job: email extraction (%s)", document.id[:8], ext_id[:8])
+            extraction_executor.submit(_run_email_extraction, ext_id, document.id)
         elif document.source_system == "pdf" and response.get("pdf_extraction"):
             ext_id = response["pdf_extraction"]["id"]
-            logger.info("[Doc %s] Scheduling background task: PDF extraction (%s)", document.id[:8], ext_id[:8])
-            background_tasks.add_task(_run_pdf_extraction, ext_id, document.id)
+            logger.info("[Doc %s] Submitting concurrent job: PDF extraction (%s)", document.id[:8], ext_id[:8])
+            extraction_executor.submit(_run_pdf_extraction, ext_id, document.id)
         elif document.status == "needs_ocr" and response.get("ocr"):
             job_id = response["ocr"]["id"]
-            logger.info("[Doc %s] Scheduling background task: OCR (%s)", document.id[:8], job_id[:8])
-            background_tasks.add_task(_run_ocr, job_id, document.id)
+            logger.info("[Doc %s] Submitting concurrent job: OCR (%s)", document.id[:8], job_id[:8])
+            extraction_executor.submit(_run_ocr, job_id, document.id)
         else:
             logger.info(
                 "[Doc %s] Synchronous processing finished (status=%s, source=%s)",
@@ -249,7 +275,6 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
     async def _process_upload_file(
         session: Session,
         file: UploadFile,
-        background_tasks: BackgroundTasks,
         isolate_failures: bool = False,
     ) -> dict[str, Any]:
         """Process one uploaded file, determine intake pipeline, and dispatch background tasks."""
@@ -289,13 +314,14 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
                     content_type=file.content_type,
                     data=data,
                     settings=active_settings,
-                    extractor=extractor,
                 )
+                if not active_settings.background_processing_enabled:
+                    document = consume_json_extraction(session, document.id, active_settings, extractor)
             else:
                 raise UploadValidationError(f"Unsupported file format: {filename}")
 
             response = serialize_document(session, document)
-            _schedule_document_processing(background_tasks, document, response)
+            _schedule_document_processing(document, response)
             return response
         except UploadValidationError as error:
             if isolate_failures:
@@ -324,7 +350,6 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
 
     @app.post("/api/v1/documents", status_code=201)
     async def upload_documents(
-        background_tasks: BackgroundTasks,
         request: Request,
         session: SessionDep,
         files: list[UploadFile] = File(...),  # noqa: B008
@@ -343,7 +368,6 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
                 await _process_upload_file(
                     session=session,
                     file=file,
-                    background_tasks=background_tasks,
                     isolate_failures=isolate_failures,
                 )
                 for file in files
@@ -463,8 +487,12 @@ def create_app(settings: Config | None = None, json_extractor: JsonSemanticExtra
     def reextract_document(document_id: str, session: SessionDep):
         """Trigger re-extraction of an already ingested JSON document."""
         try:
-            document = reextract_json_document(session, document_id, active_settings, extractor)
-            return serialize_document(session, document)
+            document = reextract_json_document(session, document_id, active_settings)
+            if not active_settings.background_processing_enabled:
+                document = consume_json_extraction(session, document.id, active_settings, extractor)
+            response = serialize_document(session, document)
+            _schedule_document_processing(document, response)
+            return response
         except LookupError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except ValueError as error:

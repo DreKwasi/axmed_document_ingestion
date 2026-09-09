@@ -169,8 +169,8 @@ def run_live_pdf_evaluation(
     settings: Config,
 ) -> EvaluationRunRecord:
     """Run source PDFs through the production extraction stages and score reviewed fields."""
-    if not settings.gemini_api_key:
-        raise ValueError("Live PDF evaluation requires configured Gemini credentials.")
+    if not settings.semantic_extraction_configured:
+        raise ValueError("Live PDF evaluation requires configured semantic-provider credentials.")
     dataset = json.loads(golden_dataset_path.read_text())
     run = EvaluationRunRecord(
         rubric_version=dataset["rubric_version"], execution_mode="live_pdf_pipeline", summary_json="{}"
@@ -197,14 +197,11 @@ def run_live_pdf_evaluation(
             }
         )
         started = perf_counter()
-        from app.extraction.llm import LangChainSemanticExtractor
+        from app.extraction.llm import aggregate_agent_telemetry, extract_semantics
 
-        extractor = LangChainSemanticExtractor(
-            settings.gemini_api_key,
-            settings.gemini_model,
-            settings.gemini_request_timeout_seconds,
-        )
-        actual, telemetry = extractor.extract_canonical_quotation(context, source_type="pdf")
+        agent_result = extract_semantics(settings, context, source_type="pdf")
+        actual = agent_result.quotation
+        telemetry = aggregate_agent_telemetry(agent_result)
         actual_payload = apply_commercial_rules(actual).model_dump(mode="json")
         errors = _subset_mismatches(expected, actual_payload)
         status = "passed" if not errors else "failed"
@@ -308,8 +305,8 @@ def run_live_email_evaluation(
     settings: Config,
 ) -> EvaluationRunRecord:
     """Run approved email cases through parse, redaction, structured extraction, and rules."""
-    if not settings.gemini_api_key:
-        raise ValueError("Live email evaluation requires configured Gemini credentials.")
+    if not settings.semantic_extraction_configured:
+        raise ValueError("Live email evaluation requires configured semantic-provider credentials.")
     dataset = json.loads(golden_dataset_path.read_text())
     email_cases = [case for case in dataset["cases"] if case.get("execution") == "live_email_pipeline"]
     run = EvaluationRunRecord(
@@ -318,13 +315,7 @@ def run_live_email_evaluation(
     session.add(run)
     session.flush()
     passed = 0
-    from app.extraction.llm import LangChainSemanticExtractor
-
-    extractor = LangChainSemanticExtractor(
-        settings.gemini_api_key,
-        settings.gemini_model,
-        settings.gemini_request_timeout_seconds,
-    )
+    from app.extraction.llm import extract_semantics
     for case in email_cases:
         fixture_path = _dataset_fixture_path(golden_dataset_path, case["input_fixture"])
         expected = json.loads(_dataset_fixture_path(golden_dataset_path, case["expected_output_fixture"]).read_text())
@@ -338,7 +329,11 @@ def run_live_email_evaluation(
             }
         )
         started = perf_counter()
-        actual, telemetry = extractor.extract_canonical_quotation(context, source_type="email")
+        from app.extraction.llm import aggregate_agent_telemetry
+
+        agent_result = extract_semantics(settings, context, source_type="email")
+        actual = agent_result.quotation
+        telemetry = aggregate_agent_telemetry(agent_result)
         reconciled = reconcile_email_price_uoms(actual, parsed.body_text)
         errors = _subset_mismatches(expected, apply_commercial_rules(reconciled).model_dump(mode="json"))
         status = "passed" if not errors else "failed"
