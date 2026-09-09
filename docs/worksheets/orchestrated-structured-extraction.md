@@ -181,3 +181,18 @@
 - Validation: `bin/agent-validate targeted` passed cleanly with 36 Vitest tests, 123 pytest tests, 0 ESLint warnings, and 0 Ruff/Mypy errors.
 - No commit was created, per user instruction.
 
+## 2026-09-09 — Global How It Works pipeline flowchart and confidence methodology guide
+
+- Implemented `HowItWorksModal.vue` providing a full interactive system guide:
+  1. **Pipeline Architecture Flowchart**: Crisp, responsive SVG flowchart detailing all 5 stages: multi-format ingestion, two-phase LLM semantic extraction (Gemini 3.5 Flash Lite), deterministic Python grounding loop with bounded investigation (max 3 runs), commercial normalization and pack price derivation, and dual confidence scoring & review routing.
+  2. **Confidence Calculations & Provenance**: Mathematical breakdown of document extraction confidence ($0.30 \times \text{Readability} + 0.25 \times \text{Parser} + 0.45 \times \text{OCR}$), the complete 5-Tier Deterministic Provenance Hierarchy table (Tiers 1 to 5, conditions, and reasons), the +5% commercial consistency bonus, and a dedicated explanation of why 82% confidence has 0 issues.
+  3. **Decision Gates & Review Routing**: Concrete criteria for Pre-approved, Needs review, and Material unusable states.
+- Connected the guide trigger across **every page**:
+  - Global persistent header (`#how-it-works-btn`).
+  - Home view: `SourceTable.vue` toolbar action button (`How it works`).
+  - Source Detail view: `SourceDetailHeader.vue` action button (`How it works`).
+  - Product breakdown: `ProductTable.vue` mapping confidence `(?)` popover link.
+- Added comprehensive Vitest component test asserting opening and closing from header, home table, and detail header, with tab navigation and provenance table assertions.
+- Validation: `bin/agent-validate targeted` passed cleanly with 37 Vitest tests, 123 pytest tests, 0 ESLint warnings, and 0 Ruff/Mypy errors.
+- No commit was created, per user instruction.
+
