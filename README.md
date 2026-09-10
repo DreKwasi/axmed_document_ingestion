@@ -136,6 +136,7 @@ uv sync --project backend --all-groups
 cp backend/.env.example backend/.env
 # Optional for live semantic extraction: add GEMINI_API_KEY in backend/.env.
 # Google Gemini 3.5 Flash Lite is the sole code-owned semantic provider.
+# The token for the OCR service (OCR_SERVICE_TOKEN) is available in the Google Docs appendix section of the architecture.
 
 # Frontend setup
 npm --prefix frontend install

@@ -28,6 +28,7 @@ uv sync --project backend --all-groups
 # 2. Configure environment
 cp backend/.env.example backend/.env
 # Edit backend/.env to configure your GEMINI_API_KEY if testing live LLM reasoning
+# The token for the OCR service (OCR_SERVICE_TOKEN) is available in the Google Docs appendix section of the architecture.
 ```
 
 ---
@@ -45,7 +46,7 @@ The backend configuration is managed by `app/config.py`. Variables can be define
 | `UPLOAD_DIR` | `data/uploads` | Local directory for storing original uploaded files; relative paths resolve from `backend/` |
 | `MAX_UPLOAD_BYTES` | `15728640` (15 MB) | Maximum permitted file upload size |
 | `OCR_SERVICE_URL` | `https://andrewsboateng137--axmed-paddle-ocr.modal.run/ocr` | Modal PaddleOCR microservice endpoint URL |
-| `OCR_SERVICE_TOKEN` | *(None)* | Bearer authentication token for Modal OCR service |
+| `OCR_SERVICE_TOKEN` | *(None)* | Bearer authentication token for Modal OCR service (available in the Google Docs appendix section of the architecture) |
 | `CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | Allowed CORS origins for the Vue frontend |
 
 ---
